@@ -22,31 +22,39 @@ const DOMAIN_PATTERNS = {
   security:  /\b(security|vulnerab|cve|audit|penetration|xss|injection|csrf|auth.?z|rbac|encrypt|secret|credential|sql.?inject|exploit|attack|threat|compliance)\b/i,
   data:      /\b(data|etl|pipeline|analytics|ml|model|train|dataset|schema|migration|seed)\b/i,
   research:  /\b(research|explore|understand|investigate|find|search|document|learn|study|analyze|compare)\b/i,
-  docs:      /\b(document|readme|changelog|wiki|guide|tutorial|explain|describe)\b/i,
+  testing:   /\b(tests?|spec|coverage|unit.?tests?|integration.?tests?|e2e.?tests?|jest|mocha|vitest|playwright)\b/i,
+  docs:      /\b(document|readme|changelog|wiki|guide|tutorial|explain|describe|architecture|adr|runbook|diagram)\b/i,
   performance: /\b(performance|optimize|benchmark|profil|latency|throughput|cache|memory.?leak|slow|bottleneck)\b/i,
   release:   /\b(release|publish|version|deploy|tag|changelog|npm.?publish|ship)\b/i,
 };
 
 const COMPLEXITY_SIGNALS = {
   high: [
-    /\b(architect|redesign|refactor.*(entire|whole|major)|migrate|rewrite|distributed|microservice)\b/i,
+    /\b(architect\w*|redesign|refactor.*(entire|whole|major)|migrate|rewrite|distributed|microservice)\b/i,
     /\b(specification|design.?doc|rfc|adr|cross.?cutting|breaking.?change)\b/i,
     /\b(complex|sophisticated|advanced|enterprise|production.?ready|scalab)\b/i,
     /\bmulti.?(repo|service|module|package|team)\b/i,
+    /\b(coordinat\w*|orchestrat\w*|end.?to.?end.?design)\b/i,
+    /\b(sparc|methodology)\b/i,
+    /\b(event.?sourc\w*|bounded.?context)\b/i,
+    /\b(domain.?driven|ddd|cqrs)\b/i,
+    /\b(system.?design|architecture.?doc\w*|decompos\w*|governance|end.?to.?end)\b/i,
   ],
   medium: [
-    /\b(feature|implement|create|build|add|integrate|connect|hook|extend)\b/i,
-    /\b(refactor|improve|enhance|update|upgrade|convert)\b/i,
+    /\b(feature|implement\w*|create|build|develop|add|integrate|connect|hook|extend)\b/i,
+    /\b(refactor\w*|improve|enhance|update|upgrade|convert)\b/i,
     /\b(test|coverage|spec|validation)\b/i,
     /\b(auth|jwt|oauth|rbac|role|permission|session|token)\b/i,
     /\b(crud|rest|graphql|websocket|queue|cache|search)\b/i,
     /\b(upload|download|file|image|avatar|media|storage)\b/i,
     /\b(page|screen|view|form|dashboard|panel|modal|wizard)\b/i,
+    /\b(webhook|notification|notify|workflow|swarm|agent|triage|intake)\b/i,
   ],
   low: [
     /\b(fix|bug|patch|typo|rename|move|delete|remove|clean)\b/i,
     /\b(tweak|adjust|config|env|setting|toggle|flag)\b/i,
     /\b(lint|format|style|indent|whitespace)\b/i,
+    /\b(comment|revert|bump|hotfix|sort|reorder|label)\b/i,
   ],
 };
 
@@ -58,8 +66,8 @@ const SCOPE_SIGNALS = {
 };
 
 const RISK_SIGNALS = {
-  high: /\b(production|live|customer|payment|auth|secret|credential|database.?migration|breaking|destructive|vulnerab|injection|exploit|xss|csrf|audit)\b/i,
-  medium: /\b(shared|team|integration|api.?change|schema.?change|dependency)\b/i,
+  high: /\b(production|live|customer|payment|auth|secret|credential|database.?migration|breaking|destructive|vulnerab|injection|exploit|xss|csrf|audit|pii|gdpr|hipaa|compliance|hotfix|data.?loss|downtime)\b/i,
+  medium: /\b(shared|team|integration|api.?change|schema.?change|dependency|breaking.?change|deprecat|public.?api|third.?party|vendor)\b/i,
   low: /\b(local|test|draft|prototype|experiment|poc|internal|dev)\b/i,
 };
 
@@ -114,6 +122,18 @@ const TEAM_TEMPLATES = {
       { role: 'architect', type: 'architecture', tier: 3, required: true },
       { role: 'implementer', type: 'sparc-coder', tier: 3, required: true },
       { role: 'validator', type: 'tester', tier: 2, required: true },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: false },
+    ],
+  },
+  'testing-sprint': {
+    name: 'Testing Sprint',
+    topology: 'hierarchical',
+    strategy: 'specialized',
+    maxAgents: 4,
+    consensus: 'raft',
+    agents: [
+      { role: 'lead', type: 'tester', tier: 3, required: true },
+      { role: 'implementer', type: 'coder', tier: 2, required: true },
       { role: 'reviewer', type: 'reviewer', tier: 2, required: false },
     ],
   },
@@ -436,7 +456,7 @@ function mergeAIClassification(regexDecision, aiResponse) {
 
 function classifyDomain(task) {
   // Priority domains that override general matches
-  const PRIORITY_DOMAINS = ['security', 'performance', 'release', 'research'];
+  const PRIORITY_DOMAINS = ['security', 'performance', 'release', 'testing', 'research'];
 
   const matches = [];
   for (const [domain, pattern] of Object.entries(DOMAIN_PATTERNS)) {
@@ -465,6 +485,11 @@ function classifyComplexity(task) {
   for (const pattern of COMPLEXITY_SIGNALS.low) {
     if (pattern.test(task)) { score -= 10; lowHits++; }
   }
+
+  // A single high signal is a strong indicator — boost toward high threshold
+  if (highHits >= 1) score += 30;
+  // High + medium co-occurrence compounds (e.g., "implement event sourcing")
+  if (highHits >= 1 && medHits >= 1) score += 10;
 
   // Multiple medium signals compound (e.g., "build API with auth and tests")
   if (medHits >= 2) score += 10 * (medHits - 1);
@@ -507,7 +532,12 @@ function selectTemplate(classification) {
   const { domain, complexity, scope, risk } = classification;
 
   // Direct domain matches
-  if (domain === 'research' || domain === 'docs') return 'research-sprint';
+  if (domain === 'testing') return 'testing-sprint';
+  if (domain === 'research' || domain === 'docs') {
+    if (complexity.level === 'high') return 'sparc-full-cycle';
+    if (complexity.level === 'low') return 'quick-fix';
+    return 'research-sprint';
+  }
   if (domain === 'security') return 'security-audit';
   if (domain === 'performance') return 'performance-sprint';
   if (domain === 'release') return 'release-pipeline';
@@ -540,6 +570,22 @@ function makeDecision(task) {
     risk: classifyRisk(task),
   };
 
+  const ambiguity = detectAmbiguity(task);
+
+  // Escalation: high ambiguity + low complexity = likely misclassification
+  // But only if there are no explicit low-complexity keyword hits (fix, typo, etc.)
+  const hasExplicitLowSignals = COMPLEXITY_SIGNALS.low.some(p => p.test(task));
+  if (ambiguity.level === 'high' && classification.complexity.level === 'low' && !hasExplicitLowSignals) {
+    classification.complexity = { level: 'medium', percentage: 35 };
+  }
+
+  // Explicit SPARC keyword override — always ensure high at >=65%
+  if (/\bsparc\b/i.test(task)) {
+    if (classification.complexity.level !== 'high' || classification.complexity.percentage < 65) {
+      classification.complexity = { level: 'high', percentage: Math.max(65, classification.complexity.percentage) };
+    }
+  }
+
   const templateKey = selectTemplate(classification);
   const template = TEAM_TEMPLATES[templateKey];
 
@@ -554,8 +600,6 @@ function makeDecision(task) {
     ...a,
     tier: classification.complexity.level === 'low' ? Math.min(a.tier, 2) : a.tier,
   }));
-
-  const ambiguity = detectAmbiguity(task);
 
   const result = {
     ambiguity,
@@ -594,69 +638,70 @@ function makeDecision(task) {
 
 // ── CLI Interface ───────────────────────────────────────────────────────────
 
-const args = process.argv.slice(2);
-const jsonFlag = args.includes('--json');
-const task = args.filter(a => a !== '--json').join(' ');
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  const jsonFlag = args.includes('--json');
+  const task = args.filter(a => a !== '--json').join(' ');
 
-if (!task) {
-  console.log('Tech Lead Router — Agent team composition engine');
-  console.log('');
-  console.log('Usage:');
-  console.log('  node tech-lead-router.cjs "task description"');
-  console.log('  node tech-lead-router.cjs --json "task description"');
-  console.log('');
-  console.log('Templates:', Object.keys(TEAM_TEMPLATES).join(', '));
-  process.exit(0);
-}
+  if (!task) {
+    console.log('Tech Lead Router — Agent team composition engine');
+    console.log('');
+    console.log('Usage:');
+    console.log('  node tech-lead-router.cjs "task description"');
+    console.log('  node tech-lead-router.cjs --json "task description"');
+    console.log('');
+    console.log('Templates:', Object.keys(TEAM_TEMPLATES).join(', '));
+    process.exit(0);
+  }
 
-const decision = makeDecision(task);
+  const decision = makeDecision(task);
 
-if (jsonFlag) {
-  console.log(JSON.stringify(decision, null, 2));
-} else {
-  // Show ambiguity warning if detected
-  if (decision.ambiguity.needsClarification) {
-    console.log('## CLARIFICATION NEEDED\n');
-    console.log(`Ambiguity score: ${decision.ambiguity.score}/100 (${decision.ambiguity.level})`);
-    console.log('The request is too vague to route confidently. Suggested questions:\n');
-    for (const q of decision.ambiguity.questions) {
-      console.log(`  [${q.dimension}] ${q.question}`);
-      console.log(`    Options: ${q.options.join(' | ')}`);
-      console.log(`    Default: ${q.default}`);
-      console.log('');
+  if (jsonFlag) {
+    console.log(JSON.stringify(decision, null, 2));
+  } else {
+    if (decision.ambiguity.needsClarification) {
+      console.log('## CLARIFICATION NEEDED\n');
+      console.log(`Ambiguity score: ${decision.ambiguity.score}/100 (${decision.ambiguity.level})`);
+      console.log('The request is too vague to route confidently. Suggested questions:\n');
+      for (const q of decision.ambiguity.questions) {
+        console.log(`  [${q.dimension}] ${q.question}`);
+        console.log(`    Options: ${q.options.join(' | ')}`);
+        console.log(`    Default: ${q.default}`);
+        console.log('');
+      }
+      console.log('---\n');
+      console.log('Proceeding with best-effort classification below:\n');
+    } else if (decision.ambiguity.recommended) {
+      console.log(`> Note: Ambiguity score ${decision.ambiguity.score}/100 (${decision.ambiguity.level}) — clarification recommended but not required.\n`);
     }
-    console.log('---\n');
-    console.log('Proceeding with best-effort classification below:\n');
-  } else if (decision.ambiguity.recommended) {
-    console.log(`> Note: Ambiguity score ${decision.ambiguity.score}/100 (${decision.ambiguity.level}) — clarification recommended but not required.\n`);
-  }
 
-  console.log('## Tech Lead Decision\n');
-  console.log('**Classification**');
-  console.log(`- Domain: ${decision.classification.domain}`);
-  console.log(`- Complexity: ${decision.classification.complexity.level} (${decision.classification.complexity.percentage}%)`);
-  console.log(`- Risk: ${decision.classification.risk}`);
-  console.log(`- Scope: ${decision.classification.scope}`);
-  console.log('');
-  console.log(`**Selected Template**: ${decision.templateName}`);
-  console.log('');
-  console.log('**Agent Team**');
-  console.log('| Role | Agent Type | Tier | Required |');
-  console.log('|------|-----------|------|----------|');
-  for (const a of decision.agents) {
-    console.log(`| ${a.role} | ${a.type} | ${a.tier} | ${a.required ? 'yes' : 'no'} |`);
-  }
-  console.log('');
-  console.log('**Swarm Config**');
-  console.log(`- Topology: ${decision.swarm.topology}`);
-  console.log(`- Strategy: ${decision.swarm.strategy}`);
-  console.log(`- Max Agents: ${decision.swarm.maxAgents}`);
-  console.log(`- Consensus: ${decision.swarm.consensus}`);
-  console.log('');
-  console.log('**Commands**');
-  console.log(`Init: ${decision.commands.init}`);
-  for (const cmd of decision.commands.spawn) {
-    console.log(`Spawn: ${cmd}`);
+    console.log('## Tech Lead Decision\n');
+    console.log('**Classification**');
+    console.log(`- Domain: ${decision.classification.domain}`);
+    console.log(`- Complexity: ${decision.classification.complexity.level} (${decision.classification.complexity.percentage}%)`);
+    console.log(`- Risk: ${decision.classification.risk}`);
+    console.log(`- Scope: ${decision.classification.scope}`);
+    console.log('');
+    console.log(`**Selected Template**: ${decision.templateName}`);
+    console.log('');
+    console.log('**Agent Team**');
+    console.log('| Role | Agent Type | Tier | Required |');
+    console.log('|------|-----------|------|----------|');
+    for (const a of decision.agents) {
+      console.log(`| ${a.role} | ${a.type} | ${a.tier} | ${a.required ? 'yes' : 'no'} |`);
+    }
+    console.log('');
+    console.log('**Swarm Config**');
+    console.log(`- Topology: ${decision.swarm.topology}`);
+    console.log(`- Strategy: ${decision.swarm.strategy}`);
+    console.log(`- Max Agents: ${decision.swarm.maxAgents}`);
+    console.log(`- Consensus: ${decision.swarm.consensus}`);
+    console.log('');
+    console.log('**Commands**');
+    console.log(`Init: ${decision.commands.init}`);
+    for (const cmd of decision.commands.spawn) {
+      console.log(`Spawn: ${cmd}`);
+    }
   }
 }
 
@@ -664,6 +709,7 @@ module.exports = {
   makeDecision,
   classifyDomain,
   classifyComplexity,
+  classifyRisk,
   selectTemplate,
   detectAmbiguity,
   buildAIClassificationPrompt,
