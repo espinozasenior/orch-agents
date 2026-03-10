@@ -43,70 +43,146 @@ function safeRequire(modulePath) {
 }
 
 const router = safeRequire(path.join(helpersDir, 'router.js'));
+const techLead = safeRequire(path.join(helpersDir, 'tech-lead-router.cjs'));
 const session = safeRequire(path.join(helpersDir, 'session.js'));
 const memory = safeRequire(path.join(helpersDir, 'memory.js'));
 const intelligence = safeRequire(path.join(helpersDir, 'intelligence.cjs'));
 
+const WORKFLOW_MAP = {
+  'quick-fix': 'development',
+  'research-sprint': 'research',
+  'feature-build': 'development',
+  'sparc-full-cycle': 'sparc',
+  'security-audit': 'security-audit',
+  'performance-sprint': 'development',
+  'release-pipeline': 'custom',
+  'fullstack-swarm': 'development',
+};
+
 // Get the command from argv
 const [,, command, ...args] = process.argv;
 
-// Get prompt from environment variable (set by Claude Code hooks)
-const prompt = process.env.PROMPT || process.env.TOOL_INPUT_command || args.join(' ') || '';
+// Read stdin with timeout — Claude Code sends hook data as JSON via stdin.
+// Timeout prevents hanging when stdin is not properly closed (common on Windows).
+async function readStdin() {
+  if (process.stdin.isTTY) return '';
+  return new Promise((resolve) => {
+    let data = '';
+    const timer = setTimeout(() => {
+      process.stdin.removeAllListeners();
+      process.stdin.pause();
+      resolve(data);
+    }, 500);
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => { data += chunk; });
+    process.stdin.on('end', () => { clearTimeout(timer); resolve(data); });
+    process.stdin.on('error', () => { clearTimeout(timer); resolve(data); });
+    process.stdin.resume();
+  });
+}
+
+async function main() {
+  let stdinData = '';
+  try { stdinData = await readStdin(); } catch (e) { /* ignore stdin errors */ }
+
+  let hookInput = {};
+  if (stdinData.trim()) {
+    try { hookInput = JSON.parse(stdinData); } catch (e) { /* ignore parse errors */ }
+  }
+
+  // Merge stdin data into prompt resolution: prefer stdin fields, then env, then argv
+  const prompt = hookInput.prompt || hookInput.command || hookInput.toolInput
+    || process.env.PROMPT || process.env.TOOL_INPUT_command || args.join(' ') || '';
 
 const handlers = {
   'route': () => {
-    // Inject ranked intelligence context before routing
-    if (intelligence && intelligence.getContext) {
-      try {
-        const ctx = intelligence.getContext(prompt);
-        if (ctx) console.log(ctx);
-      } catch (e) { /* non-fatal */ }
-    }
-    if (router && router.routeTask) {
-      const result = router.routeTask(prompt);
-      // Format output for Claude Code hook consumption
+    const startMs = Date.now();
+
+    // Primary: tech-lead-router (4-dimension classifier with team templates)
+    if (techLead && techLead.makeDecision && prompt) {
+      const decision = techLead.makeDecision(prompt);
+      const latencyMs = Date.now() - startMs;
+      const cls = decision.classification;
+      const workflowTemplate = WORKFLOW_MAP[decision.template] || 'development';
+
       const output = [
         `[INFO] Routing task: ${prompt.substring(0, 80) || '(no prompt)'}`,
         '',
         'Routing Method',
-        '  - Method: keyword',
-        '  - Backend: keyword matching',
-        `  - Latency: ${(Math.random() * 0.5 + 0.1).toFixed(3)}ms`,
-        '  - Matched Pattern: keyword-fallback',
+        `  - Method: tech-lead-router (4-dimension heuristic)`,
+        `  - Backend: regex + heuristic classification`,
+        `  - Latency: ${latencyMs}ms`,
         '',
-        'Semantic Matches:',
-        '  bugfix-task: 15.0%',
-        '  devops-task: 14.0%',
-        '  testing-task: 13.0%',
+        'Classification',
+        `  - Domain: ${cls.domain}`,
+        `  - Complexity: ${cls.complexity.level} (${cls.complexity.percentage}%)`,
+        `  - Scope: ${cls.scope}`,
+        `  - Risk: ${cls.risk}`,
         '',
-        '+------------------- Primary Recommendation -------------------+',
+        `+------------------- Tech Lead Decision ------------------------+`,
+        `| Template: ${decision.templateName.padEnd(50)}|`,
+        `| Workflow: ${workflowTemplate.padEnd(50)}|`,
+        `| Topology: ${decision.swarm.topology.padEnd(50)}|`,
+        `| Consensus: ${decision.swarm.consensus.padEnd(49)}|`,
+        `+--------------------------------------------------------------+`,
+        '',
+        'Agent Team',
+        '+--------------------+--------------------+------+----------+',
+        '| Role               | Agent Type         | Tier | Required |',
+        '+--------------------+--------------------+------+----------+',
+      ];
+
+      for (const a of decision.agents) {
+        output.push(
+          `| ${a.role.padEnd(18)} | ${a.type.padEnd(18)} | ${String(a.tier).padEnd(4)} | ${(a.required ? 'yes' : 'no').padEnd(8)} |`
+        );
+      }
+      output.push('+--------------------+--------------------+------+----------+');
+
+      if (decision.ambiguity.needsClarification) {
+        output.push('');
+        output.push(`[WARN] Ambiguity: ${decision.ambiguity.score}/100 (${decision.ambiguity.level})`);
+        for (const q of decision.ambiguity.questions) {
+          output.push(`  [${q.dimension}] ${q.question}`);
+        }
+      } else if (decision.ambiguity.score >= 30) {
+        output.push('');
+        output.push(`[NOTE] Ambiguity: ${decision.ambiguity.score}/100 (${decision.ambiguity.level}) - clarification optional`);
+      }
+
+      output.push('');
+      output.push(`Suggested: ruflo workflow run -t ${workflowTemplate} --task "..."`);
+
+      console.log(output.join('\n'));
+      return;
+    }
+
+    // Fallback: simple keyword router
+    if (router && router.routeTask) {
+      const result = router.routeTask(prompt);
+      const latencyMs = Date.now() - startMs;
+      const output = [
+        `[INFO] Routing task: ${prompt.substring(0, 80) || '(no prompt)'}`,
+        '',
+        'Routing Method',
+        `  - Method: keyword (fallback - tech-lead-router unavailable)`,
+        `  - Latency: ${latencyMs}ms`,
+        '',
+        '+------------------- Fallback Routing --------------------------+',
         `| Agent: ${result.agent.padEnd(53)}|`,
         `| Confidence: ${(result.confidence * 100).toFixed(1)}%${' '.repeat(44)}|`,
         `| Reason: ${result.reason.substring(0, 53).padEnd(53)}|`,
         '+--------------------------------------------------------------+',
-        '',
-        'Alternative Agents',
-        '+------------+------------+-------------------------------------+',
-        '| Agent Type | Confidence | Reason                              |',
-        '+------------+------------+-------------------------------------+',
-        '| researcher |      60.0% | Alternative agent for researcher... |',
-        '| tester     |      50.0% | Alternative agent for tester cap... |',
-        '+------------+------------+-------------------------------------+',
-        '',
-        'Estimated Metrics',
-        '  - Success Probability: 70.0%',
-        '  - Estimated Duration: 10-30 min',
-        '  - Complexity: LOW',
       ];
       console.log(output.join('\n'));
     } else {
-      console.log('[INFO] Router not available, using default routing');
+      console.log('[INFO] No router available, using default routing');
     }
   },
 
   'pre-bash': () => {
-    // Basic command safety check
-    const cmd = prompt.toLowerCase();
+    // Basic command safety check — prefer stdin command data from Claude Code
+    const cmd = (hookInput.command || prompt).toLowerCase();
     const dangerous = ['rm -rf /', 'format c:', 'del /s /q c:\\', ':(){:|:&};:'];
     for (const d of dangerous) {
       if (cmd.includes(d)) {
@@ -122,10 +198,11 @@ const handlers = {
     if (session && session.metric) {
       try { session.metric('edits'); } catch (e) { /* no active session */ }
     }
-    // Record edit for intelligence consolidation
+    // Record edit for intelligence consolidation — prefer stdin data from Claude Code
     if (intelligence && intelligence.recordEdit) {
       try {
-        const file = process.env.TOOL_INPUT_file_path || args[0] || '';
+        const file = hookInput.file_path || (hookInput.toolInput && hookInput.toolInput.file_path)
+          || process.env.TOOL_INPUT_file_path || args[0] || '';
         intelligence.recordEdit(file);
       } catch (e) { /* non-fatal */ }
     }
@@ -188,8 +265,11 @@ const handlers = {
     if (session && session.metric) {
       try { session.metric('tasks'); } catch (e) { /* no active session */ }
     }
-    // Route the task if router is available
-    if (router && router.routeTask && prompt) {
+    if (techLead && techLead.makeDecision && prompt) {
+      const decision = techLead.makeDecision(prompt);
+      const cls = decision.classification;
+      console.log(`[INFO] Task routed: ${decision.templateName} | ${cls.domain}/${cls.complexity.level} | agents: ${decision.agents.map(a => a.type).join(', ')}`);
+    } else if (router && router.routeTask && prompt) {
       const result = router.routeTask(prompt);
       console.log(`[INFO] Task routed to: ${result.agent} (confidence: ${result.confidence})`);
     } else {
@@ -216,17 +296,26 @@ const handlers = {
   },
 };
 
-// Execute the handler
-if (command && handlers[command]) {
-  try {
-    handlers[command]();
-  } catch (e) {
-    // Hooks should never crash Claude Code - fail silently
-    console.log(`[WARN] Hook ${command} encountered an error: ${e.message}`);
+  // Execute the handler
+  if (command && handlers[command]) {
+    try {
+      handlers[command]();
+    } catch (e) {
+      // Hooks should never crash Claude Code - fail silently
+      console.log(`[WARN] Hook ${command} encountered an error: ${e.message}`);
+    }
+  } else if (command) {
+    // Unknown command - pass through without error
+    console.log(`[OK] Hook: ${command}`);
+  } else {
+    console.log('Usage: hook-handler.cjs <route|pre-bash|post-edit|session-restore|session-end|pre-task|post-task|stats>');
   }
-} else if (command) {
-  // Unknown command - pass through without error
-  console.log(`[OK] Hook: ${command}`);
-} else {
-  console.log('Usage: hook-handler.cjs <route|pre-bash|post-edit|session-restore|session-end|pre-task|post-task|stats>');
 }
+
+// Hooks must ALWAYS exit 0 — Claude Code treats non-zero as "hook error"
+// and skips all subsequent hooks for the event.
+process.exitCode = 0;
+main().catch((e) => {
+  try { console.log(`[WARN] Hook handler error: ${e.message}`); } catch (_) {}
+  process.exitCode = 0;
+});
