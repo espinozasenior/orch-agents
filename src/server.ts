@@ -10,6 +10,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppConfig } from './shared/config';
 import type { Logger } from './shared/logger';
 import type { EventBus } from './shared/event-bus';
+import { webhookRouter } from './webhook-gateway/webhook-router';
 
 export interface ServerDependencies {
   config: AppConfig;
@@ -40,6 +41,9 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
       timestamp: new Date().toISOString(),
     };
   });
+
+  // ── Webhook gateway routes (Phase 1) ──────────────────────
+  await server.register(webhookRouter, deps);
 
   // ── Request logging hook ─────────────────────────────────────
   server.addHook('onRequest', async (request) => {
