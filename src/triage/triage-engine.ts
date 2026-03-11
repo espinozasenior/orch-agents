@@ -14,6 +14,7 @@ import type { EventBus } from '../shared/event-bus';
 import type { Logger } from '../shared/logger';
 import { createDomainEvent } from '../shared/event-bus';
 import { TriageError } from '../shared/errors';
+import { validateSPARCPhases } from '../shared/constants';
 
 // ---------------------------------------------------------------------------
 // Urgency rules types
@@ -115,7 +116,8 @@ function buildFastTriageResult(
   event: IntakeEvent,
   meta: Record<string, unknown>,
 ): TriageResult {
-  const phases = (meta.phases as string[] | undefined) ?? ['refinement'];
+  const rawPhases = (meta.phases as string[] | undefined) ?? ['refinement'];
+  const phases = validateSPARCPhases(rawPhases);
 
   return {
     intakeEventId: event.id,
@@ -123,7 +125,7 @@ function buildFastTriageResult(
     complexity: { level: 'low', percentage: 15 },
     impact: 'isolated',
     risk: 'low',
-    recommendedPhases: phases as SPARCPhase[],
+    recommendedPhases: (phases.length > 0 ? phases : ['refinement']) as SPARCPhase[],
     requiresApproval: false,
     skipTriage: true,
     estimatedEffort: 'small',
@@ -217,10 +219,11 @@ function determineSPARCPhases(
   meta: Record<string, unknown>,
   complexity: number,
 ): SPARCPhase[] {
-  // Use routing-provided phases as base if available
+  // Use routing-provided phases as base if available (validate them)
   const routingPhases = meta.phases as string[] | undefined;
   if (routingPhases && routingPhases.length > 0) {
-    return routingPhases as SPARCPhase[];
+    const validated = validateSPARCPhases(routingPhases);
+    if (validated.length > 0) return validated as SPARCPhase[];
   }
 
   // Otherwise derive from complexity
@@ -321,7 +324,15 @@ export function startTriageEngine(deps: TriageEngineDeps): () => void {
         { cause: err },
       );
       logger.error('Triage failed', { eventId: intakeEvent.id, error: triageErr.message });
-      throw triageErr;
+
+      // Publish failure event instead of throwing (event bus swallows thrown errors)
+      eventBus.publish(
+        createDomainEvent('WorkFailed', {
+          workItemId: intakeEvent.id,
+          failureReason: triageErr.message,
+          retryCount: 0,
+        }, event.correlationId),
+      );
     }
   });
 }

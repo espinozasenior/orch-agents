@@ -325,5 +325,89 @@ describe('Execution Engine', () => {
       unsub();
       eventBus.removeAllListeners();
     });
+
+    it('ignores duplicate PlanCreated with same plan ID', async () => {
+      const eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+      const phaseRunner = createPhaseRunner({ gateChecker: passingGate });
+      const unsub = startExecutionEngine({ eventBus, logger, phaseRunner });
+
+      const completedCount: number[] = [];
+      eventBus.subscribe('PhaseCompleted', () => {
+        completedCount.push(1);
+      });
+
+      const failures: string[] = [];
+      eventBus.subscribe('WorkFailed', (evt) => {
+        failures.push(evt.payload.failureReason);
+      });
+
+      const plan = makePlan({ id: 'dup-plan-001' });
+
+      // Fire the same plan twice
+      eventBus.publish(createDomainEvent('PlanCreated', { workflowPlan: plan }));
+      eventBus.publish(createDomainEvent('PlanCreated', { workflowPlan: plan }));
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Should only execute once — 2 phases from the single execution
+      assert.equal(completedCount.length, 2);
+      // No WorkFailed from "already tracked" error
+      assert.equal(failures.length, 0);
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+  });
+
+  describe('WorkCompleted event', () => {
+    it('publishes WorkCompleted on successful execution', async () => {
+      const eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+      const phaseRunner = createPhaseRunner({ gateChecker: passingGate });
+      const unsub = startExecutionEngine({ eventBus, logger, phaseRunner });
+
+      const workCompleted: { workItemId: string; planId: string; phaseCount: number }[] = [];
+      eventBus.subscribe('WorkCompleted', (evt) => {
+        workCompleted.push(evt.payload);
+      });
+
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: makePlan(),
+      }));
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      assert.equal(workCompleted.length, 1);
+      assert.equal(workCompleted[0].workItemId, 'work-exec-001');
+      assert.equal(workCompleted[0].planId, 'plan-exec-001');
+      assert.equal(workCompleted[0].phaseCount, 2);
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+
+    it('does NOT publish WorkCompleted on failure', async () => {
+      const eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+      const phaseRunner = createPhaseRunner({ gateChecker: failingGate });
+      const unsub = startExecutionEngine({ eventBus, logger, phaseRunner });
+
+      const workCompleted: unknown[] = [];
+      eventBus.subscribe('WorkCompleted', (evt) => {
+        workCompleted.push(evt);
+      });
+
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: makePlan(),
+      }));
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      assert.equal(workCompleted.length, 0);
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
   });
 });

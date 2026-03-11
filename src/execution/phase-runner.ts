@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { PlannedPhase, PhaseResult, WorkflowPlan } from '../types';
+import { TIER_COSTS, DEFAULT_AGENT_COST } from '../shared/constants';
 
 // ---------------------------------------------------------------------------
 // Gate checker interface (mock-friendly)
@@ -69,19 +70,11 @@ export function createPhaseRunner(deps: PhaseRunnerDeps): PhaseRunner {
       const totalAgents = plan.agentTeam.length;
       const agentUtilization = totalAgents > 0 ? agentsInPhase / totalAgents : 0;
 
-      // Estimate model cost based on agent tiers
+      // Estimate model cost based on agent tiers (shared constants)
       let modelCost = 0;
       for (const agentRole of phase.agents) {
         const agent = plan.agentTeam.find((a) => a.role === agentRole || a.type === agentRole);
-        if (agent) {
-          switch (agent.tier) {
-            case 1: modelCost += 0; break;       // WASM — free
-            case 2: modelCost += 0.0002; break;   // Haiku
-            case 3: modelCost += 0.005; break;     // Sonnet/Opus
-          }
-        } else {
-          modelCost += 0.001; // default cost for unmatched agent
-        }
+        modelCost += TIER_COSTS[agent?.tier ?? 0] ?? DEFAULT_AGENT_COST;
       }
 
       return {

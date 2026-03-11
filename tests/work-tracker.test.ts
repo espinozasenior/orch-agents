@@ -150,6 +150,33 @@ describe('WorkTracker', () => {
     });
   });
 
+  describe('unknown planId errors', () => {
+    it('recordPhaseResult throws for unknown plan', () => {
+      const tracker = createWorkTracker();
+      assert.throws(() => {
+        tracker.recordPhaseResult('nonexistent', {
+          phaseId: 'p1', planId: 'nonexistent', phaseType: 'refinement',
+          status: 'completed', artifacts: [],
+          metrics: { duration: 0, agentUtilization: 0, modelCost: 0 },
+        });
+      }, /not tracked/);
+    });
+
+    it('complete throws for unknown plan', () => {
+      const tracker = createWorkTracker();
+      assert.throws(() => {
+        tracker.complete('nonexistent');
+      }, /not tracked/);
+    });
+
+    it('fail throws for unknown plan', () => {
+      const tracker = createWorkTracker();
+      assert.throws(() => {
+        tracker.fail('nonexistent', 'reason');
+      }, /not tracked/);
+    });
+  });
+
   describe('cleanup()', () => {
     it('removes completed work items older than threshold', () => {
       const tracker = createWorkTracker();

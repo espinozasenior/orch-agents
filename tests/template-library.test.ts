@@ -8,6 +8,7 @@ import {
   getTemplate,
   listTemplateKeys,
   registerTemplate,
+  unregisterTemplate,
   getDefaultTemplate,
   type WorkflowTemplate,
 } from '../src/planning/template-library';
@@ -102,6 +103,10 @@ describe('Template Library', () => {
       const retrieved = getTemplate('custom-test');
       assert.ok(retrieved);
       assert.equal(retrieved.name, 'Custom Test');
+
+      // Cleanup: remove custom template to avoid contaminating other tests
+      unregisterTemplate('custom-test');
+      assert.equal(getTemplate('custom-test'), undefined);
     });
   });
 

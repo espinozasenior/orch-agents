@@ -128,6 +128,11 @@ export type WorkPausedEvent = DomainEvent<
   { workItemId: string; pauseReason: string; resumable: boolean }
 >;
 
+export type WorkCompletedEvent = DomainEvent<
+  'WorkCompleted',
+  { workItemId: string; planId: string; phaseCount: number; totalDuration: number }
+>;
+
 // ---------------------------------------------------------------------------
 // Union of all domain event types
 // ---------------------------------------------------------------------------
@@ -150,7 +155,8 @@ export type AnyDomainEvent =
   | WorkFailedEvent
   | WorkCancelledEvent
   | SwarmInitializedEvent
-  | WorkPausedEvent;
+  | WorkPausedEvent
+  | WorkCompletedEvent;
 
 // ---------------------------------------------------------------------------
 // Event type string literals for use with the event bus
@@ -181,4 +187,5 @@ export interface DomainEventMap {
   WorkCancelled: WorkCancelledEvent;
   SwarmInitialized: SwarmInitializedEvent;
   WorkPaused: WorkPausedEvent;
+  WorkCompleted: WorkCompletedEvent;
 }

@@ -16,6 +16,7 @@ import type { EventBus } from '../shared/event-bus';
 import type { Logger } from '../shared/logger';
 import { createDomainEvent } from '../shared/event-bus';
 import { PlanningError } from '../shared/errors';
+import { TIER_COSTS, DEFAULT_AGENT_COST } from '../shared/constants';
 import { createDecisionEngine, type DecisionOutput } from './decision-engine';
 import { decompose } from './sparc-decomposer';
 import { selectTopology } from './topology-selector';
@@ -103,7 +104,15 @@ export function startPlanningEngine(deps: PlanningEngineDeps): () => void {
         { cause: err },
       );
       logger.error('Planning failed', { eventId: intakeEvent.id, error: planErr.message });
-      throw planErr;
+
+      // Publish failure event instead of throwing (event bus swallows thrown errors)
+      eventBus.publish(
+        createDomainEvent('WorkFailed', {
+          workItemId: intakeEvent.id,
+          failureReason: planErr.message,
+          retryCount: 0,
+        }, event.correlationId),
+      );
     }
   });
 }
@@ -120,11 +129,7 @@ function estimateDuration(phaseCount: number): number {
 function estimateCost(agents: Array<{ tier: number }>): number {
   let cost = 0;
   for (const agent of agents) {
-    switch (agent.tier) {
-      case 1: cost += 0; break;       // WASM booster — free
-      case 2: cost += 0.001; break;    // Haiku
-      case 3: cost += 0.01; break;     // Sonnet/Opus
-    }
+    cost += TIER_COSTS[agent.tier] ?? DEFAULT_AGENT_COST;
   }
-  return Math.round(cost * 1000) / 1000;
+  return Math.round(cost * 10000) / 10000;
 }

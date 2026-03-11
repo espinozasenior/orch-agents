@@ -46,6 +46,12 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       methodology: plan.methodology,
     });
 
+    // Guard against duplicate PlanCreated events
+    if (tracker.getState(plan.id)) {
+      logger.warn('Duplicate PlanCreated ignored', { planId: plan.id });
+      return;
+    }
+
     // Track this work item
     tracker.start(plan.id, plan.workItemId);
 
@@ -105,7 +111,18 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
       // All phases completed successfully
       tracker.complete(plan.id);
+      const state = tracker.getState(plan.id);
       logger.info('Plan execution completed', { planId: plan.id });
+
+      // Publish WorkCompleted so downstream consumers can react
+      eventBus.publish(
+        createDomainEvent('WorkCompleted', {
+          workItemId: plan.workItemId,
+          planId: plan.id,
+          phaseCount: plan.phases.length,
+          totalDuration: state?.totalDuration ?? 0,
+        }, correlationId),
+      );
 
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

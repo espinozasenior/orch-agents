@@ -58,28 +58,31 @@ export function createWorkTracker(): WorkTracker {
 
     recordPhaseResult(planId: string, result: PhaseResult): void {
       const state = items.get(planId);
-      if (state) {
-        state.phaseResults.push(result);
+      if (!state) {
+        throw new Error(`Cannot record phase result: plan ${planId} not tracked`);
       }
+      state.phaseResults.push(result);
     },
 
     complete(planId: string): void {
       const state = items.get(planId);
-      if (state) {
-        state.status = 'completed';
-        state.completedAt = new Date().toISOString();
-        state.totalDuration = new Date(state.completedAt).getTime() - new Date(state.startedAt).getTime();
+      if (!state) {
+        throw new Error(`Cannot complete: plan ${planId} not tracked`);
       }
+      state.status = 'completed';
+      state.completedAt = new Date().toISOString();
+      state.totalDuration = new Date(state.completedAt).getTime() - new Date(state.startedAt).getTime();
     },
 
     fail(planId: string, reason: string): void {
       const state = items.get(planId);
-      if (state) {
-        state.status = 'failed';
-        state.completedAt = new Date().toISOString();
-        state.totalDuration = new Date(state.completedAt).getTime() - new Date(state.startedAt).getTime();
-        state.failureReason = reason;
+      if (!state) {
+        throw new Error(`Cannot fail: plan ${planId} not tracked`);
       }
+      state.status = 'failed';
+      state.completedAt = new Date().toISOString();
+      state.totalDuration = new Date(state.completedAt).getTime() - new Date(state.startedAt).getTime();
+      state.failureReason = reason;
     },
 
     getState(planId: string): WorkItemState | undefined {

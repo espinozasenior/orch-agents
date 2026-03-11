@@ -204,6 +204,13 @@ export function registerTemplate(template: WorkflowTemplate): void {
 }
 
 /**
+ * Unregister a custom template (for test cleanup).
+ */
+export function unregisterTemplate(key: string): void {
+  TEMPLATES.delete(key);
+}
+
+/**
  * Get the default template for a given methodology.
  */
 export function getDefaultTemplate(

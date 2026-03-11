@@ -60,8 +60,18 @@ export function createDecisionEngine(deps: DecisionEngineDeps) {
       const taskDescription = buildTaskDescription(intakeEvent);
       logger.debug('Decision engine input', { taskDescription, intent: intakeEvent.intent });
 
-      // Run through the tech-lead-router
-      const routerResult = routerBridge.makeDecision(taskDescription);
+      // Run through the tech-lead-router (catch CJS module errors)
+      let routerResult;
+      try {
+        routerResult = routerBridge.makeDecision(taskDescription);
+      } catch (routerErr) {
+        logger.error('Router bridge failed', {
+          error: routerErr instanceof Error ? routerErr.message : String(routerErr),
+        });
+        throw new Error(
+          `Tech-lead-router failed for "${taskDescription.slice(0, 80)}": ${routerErr instanceof Error ? routerErr.message : String(routerErr)}`,
+        );
+      }
 
       // Merge triage classification with router classification
       const classification = {
@@ -83,9 +93,10 @@ export function createDecisionEngine(deps: DecisionEngineDeps) {
       }));
 
       // Determine template key: prefer routing-provided, fall back to router
-      const templateKey =
-        (intakeEvent.sourceMetadata as Record<string, unknown>).template as string
-        ?? routerResult.template;
+      const meta = intakeEvent.sourceMetadata as Record<string, unknown>;
+      const templateKey = typeof meta.template === 'string'
+        ? meta.template
+        : routerResult.template;
 
       const planningInput: PlanningInput = {
         intakeEventId: intakeEvent.id,

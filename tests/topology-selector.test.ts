@@ -113,6 +113,20 @@ describe('Topology Selector', () => {
       assert.equal(result.topology, 'star');
       assert.equal(result.consensus, 'none');
     });
+
+    it('P0 takes precedence over high complexity + system-wide', () => {
+      const result = selectTopology(makeInput({
+        triageResult: makeTriage({
+          priority: 'P0-immediate',
+          complexity: { level: 'high', percentage: 80 },
+          impact: 'system-wide',
+        }),
+      }));
+      // P0 should always get star, even with high complexity
+      assert.equal(result.topology, 'star');
+      assert.equal(result.consensus, 'none');
+      assert.ok(result.reasoning.includes('P0'));
+    });
   });
 
   describe('Default case', () => {

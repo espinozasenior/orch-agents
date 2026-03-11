@@ -38,6 +38,17 @@ export function selectTopology(input: PlanningInput): TopologySelection {
   const complexity = triageResult.complexity.percentage;
   const agentCount = input.agentTeam.length;
 
+  // P0-immediate takes precedence — fast response over everything
+  if (triageResult.priority === 'P0-immediate') {
+    return {
+      topology: 'star',
+      consensus: 'none',
+      maxAgents: Math.min(agentCount, 4),
+      swarmStrategy: 'minimal',
+      reasoning: 'P0 incident response uses star for minimal latency',
+    };
+  }
+
   // High complexity + system-wide impact → hierarchical-mesh
   if (complexity >= 60 && triageResult.impact === 'system-wide') {
     return {
@@ -68,17 +79,6 @@ export function selectTopology(input: PlanningInput): TopologySelection {
       maxAgents: Math.min(agentCount, 4),
       swarmStrategy: 'minimal',
       reasoning: 'Low complexity isolated task uses minimal star topology',
-    };
-  }
-
-  // Incident response → star with fast consensus
-  if (triageResult.priority === 'P0-immediate') {
-    return {
-      topology: 'star',
-      consensus: 'none',
-      maxAgents: Math.min(agentCount, 4),
-      swarmStrategy: 'minimal',
-      reasoning: 'P0 incident response uses star for minimal latency',
     };
   }
 
