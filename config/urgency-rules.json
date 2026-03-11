@@ -1,0 +1,63 @@
+{
+  "priorityWeights": {
+    "severity": 0.35,
+    "impact": 0.25,
+    "skipTriage": 0.15,
+    "labelBoost": 0.15,
+    "recency": 0.10
+  },
+  "severityScores": {
+    "critical": 1.0,
+    "high": 0.75,
+    "medium": 0.5,
+    "low": 0.25
+  },
+  "impactScores": {
+    "system-wide": 1.0,
+    "cross-cutting": 0.75,
+    "module": 0.5,
+    "isolated": 0.25
+  },
+  "labelBoosts": {
+    "bug": 0.2,
+    "security": 0.4,
+    "hotfix": 0.3,
+    "enhancement": 0.0,
+    "documentation": -0.1,
+    "P0": 0.5,
+    "P1": 0.3,
+    "P2": 0.0,
+    "P3": -0.2
+  },
+  "priorityThresholds": {
+    "P0-immediate": 0.85,
+    "P1-high": 0.60,
+    "P2-standard": 0.35,
+    "P3-backlog": 0.0
+  },
+  "effortMapping": {
+    "trivial": { "maxComplexity": 10, "maxFiles": 1 },
+    "small": { "maxComplexity": 25, "maxFiles": 3 },
+    "medium": { "maxComplexity": 50, "maxFiles": 10 },
+    "large": { "maxComplexity": 75, "maxFiles": 25 },
+    "epic": { "maxComplexity": 100, "maxFiles": 999 }
+  },
+  "impactRules": [
+    {
+      "condition": "files_count > 20 || labels_include('system-wide')",
+      "impact": "system-wide"
+    },
+    {
+      "condition": "files_span_multiple_dirs || labels_include('cross-cutting')",
+      "impact": "cross-cutting"
+    },
+    {
+      "condition": "files_count > 3",
+      "impact": "module"
+    },
+    {
+      "condition": "default",
+      "impact": "isolated"
+    }
+  ]
+}
