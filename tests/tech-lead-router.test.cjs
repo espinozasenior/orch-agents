@@ -188,11 +188,21 @@ describe('selectTemplate', () => {
     assert.equal(result, 'testing-sprint');
   });
 
-  it('should select sparc-full-cycle for docs + high complexity', () => {
+  it('should select research-sprint for docs + high complexity (multi-file)', () => {
     const result = selectTemplate({
       domain: 'docs',
       complexity: { level: 'high', percentage: 70 },
       scope: 'multi-file',
+      risk: 'low',
+    });
+    assert.equal(result, 'research-sprint');
+  });
+
+  it('should select sparc-full-cycle for docs + high complexity + multi-service scope', () => {
+    const result = selectTemplate({
+      domain: 'docs',
+      complexity: { level: 'high', percentage: 70 },
+      scope: 'multi-service',
       risk: 'low',
     });
     assert.equal(result, 'sparc-full-cycle');
@@ -218,14 +228,14 @@ describe('selectTemplate', () => {
     assert.equal(result, 'research-sprint');
   });
 
-  it('should select sparc-full-cycle for research + high complexity', () => {
+  it('should select research-sprint for research + high complexity (multi-file)', () => {
     const result = selectTemplate({
       domain: 'research',
       complexity: { level: 'high', percentage: 70 },
       scope: 'multi-file',
       risk: 'low',
     });
-    assert.equal(result, 'sparc-full-cycle');
+    assert.equal(result, 'research-sprint');
   });
 
   it('should select quick-fix for research + low complexity', () => {
@@ -242,10 +252,10 @@ describe('selectTemplate', () => {
 // ── End-to-End Decision Tests (makeDecision) ────────────────────────────────
 
 describe('makeDecision', () => {
-  it('should route "coordinate sparc methodology to develop docs/architecture-orch-agents.md" to sparc-full-cycle', () => {
+  it('should route "coordinate sparc methodology to develop docs/architecture-orch-agents.md" to research-sprint (docs domain)', () => {
     const decision = makeDecision('coordinate sparc methodology to develop docs/architecture-orch-agents.md');
-    assert.equal(decision.template, 'sparc-full-cycle');
-    assert.equal(decision.classification.complexity.level, 'high');
+    assert.equal(decision.template, 'research-sprint');
+    assert.equal(decision.classification.domain, 'docs');
   });
 
   it('should route "fix typo in README" to quick-fix', () => {
@@ -253,10 +263,10 @@ describe('makeDecision', () => {
     assert.equal(decision.template, 'quick-fix');
   });
 
-  it('should route "write comprehensive architecture documentation" to sparc-full-cycle', () => {
+  it('should route "write comprehensive architecture documentation" to research-sprint (docs domain)', () => {
     const decision = makeDecision('write comprehensive architecture documentation');
-    assert.equal(decision.template, 'sparc-full-cycle');
-    assert.equal(decision.classification.complexity.level, 'high');
+    assert.equal(decision.template, 'research-sprint');
+    assert.equal(decision.classification.domain, 'docs');
   });
 
   it('should route "write unit tests for the auth module" to testing-sprint', () => {
@@ -268,6 +278,19 @@ describe('makeDecision', () => {
     const decision = makeDecision('sparc review the login flow');
     assert.equal(decision.classification.complexity.level, 'high');
     assert.ok(decision.classification.complexity.percentage >= 65);
+  });
+
+  it('should NOT trigger SPARC override for sparc file paths', () => {
+    // "sparc-review" in file paths should not boost complexity via the SPARC override.
+    const decision1 = makeDecision('fix typo in sparc-review-refinement.md');
+    assert.equal(decision1.classification.complexity.level, 'low', 'sparc-review file path should not inflate complexity');
+
+    const decision2 = makeDecision('fix typo in sparc-coord.cjs');
+    assert.equal(decision2.classification.complexity.level, 'low', 'sparc-*.cjs file path should not inflate complexity');
+
+    // Contrast: bare "sparc" without file extension SHOULD trigger the override
+    const decision3 = makeDecision('sparc review the login flow');
+    assert.equal(decision3.classification.complexity.level, 'high', 'bare sparc keyword should trigger override');
   });
 });
 

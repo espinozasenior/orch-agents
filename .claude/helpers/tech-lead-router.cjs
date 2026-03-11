@@ -23,7 +23,7 @@ const DOMAIN_PATTERNS = {
   data:      /\b(data|etl|pipeline|analytics|ml|model|train|dataset|schema|migration|seed)\b/i,
   research:  /\b(research|explore|understand|investigate|find|search|document|learn|study|analyze|compare)\b/i,
   testing:   /\b(tests?|spec|coverage|unit.?tests?|integration.?tests?|e2e.?tests?|jest|mocha|vitest|playwright)\b/i,
-  docs:      /\b(document|readme|changelog|wiki|guide|tutorial|explain|describe|architecture|adr|runbook|diagram)\b/i,
+  docs:      /\b(document|readme|changelog|wiki|guide|tutorial|explain|describe|architecture|adr|runbook|diagram)\b|\/docs?\//i,
   performance: /\b(performance|optimize|benchmark|profil|latency|throughput|cache|memory.?leak|slow|bottleneck)\b/i,
   release:   /\b(release|publish|version|deploy|tag|changelog|npm.?publish|ship)\b/i,
 };
@@ -35,7 +35,7 @@ const COMPLEXITY_SIGNALS = {
     /\b(complex|sophisticated|advanced|enterprise|production.?ready|scalab)\b/i,
     /\bmulti.?(repo|service|module|package|team)\b/i,
     /\b(coordinat\w*|orchestrat\w*|end.?to.?end.?design)\b/i,
-    /\b(sparc|methodology)\b/i,
+    /\b(sparc(?!-review|-\w+\.md|-\w+\.cjs)|methodology)\b/i,
     /\b(event.?sourc\w*|bounded.?context)\b/i,
     /\b(domain.?driven|ddd|cqrs)\b/i,
     /\b(system.?design|architecture.?doc\w*|decompos\w*|governance|end.?to.?end)\b/i,
@@ -534,7 +534,8 @@ function selectTemplate(classification) {
   // Direct domain matches
   if (domain === 'testing') return 'testing-sprint';
   if (domain === 'research' || domain === 'docs') {
-    if (complexity.level === 'high') return 'sparc-full-cycle';
+    if (complexity.level === 'high' && scope === 'multi-service') return 'sparc-full-cycle';
+    if (complexity.level === 'high') return 'research-sprint';
     if (complexity.level === 'low') return 'quick-fix';
     return 'research-sprint';
   }
@@ -580,7 +581,9 @@ function makeDecision(task) {
   }
 
   // Explicit SPARC keyword override — always ensure high at >=65%
-  if (/\bsparc\b/i.test(task)) {
+  // But only when SPARC is used as a methodology intent, not as part of a file path
+  const sparcAsMethodology = /\b(sparc(?!-review|-\w+\.md|-\w+\.cjs))\b/i.test(task);
+  if (sparcAsMethodology) {
     if (classification.complexity.level !== 'high' || classification.complexity.percentage < 65) {
       classification.complexity = { level: 'high', percentage: Math.max(65, classification.complexity.percentage) };
     }

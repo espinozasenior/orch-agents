@@ -2,16 +2,19 @@
 
 ## System Architecture Document
 
-**Version:** 1.0.0
-**Date:** 2026-03-09
-**Status:** Proposed
+**Version:** 1.1.0-accepted
+**Date:** 2026-03-10
+**Status:** Target Architecture (accepted with known gaps documented in sparc-review-architecture.md)
 **Authors:** System Architecture Designer
 **Supersedes:** ADR-052 (incorporated and extended)
+**Implementation Status:** Pre-build. See [Section 0: Current vs Target State](#0-current-vs-target-state) below.
+**SPARC Review:** Completed 2026-03-10. See `docs/sparc-review-*.md` for detailed findings.
 
 ---
 
 ## Table of Contents
 
+0. [Current vs Target State](#0-current-vs-target-state)
 1. [Executive Summary](#1-executive-summary)
 2. [System Overview and Goals](#2-system-overview-and-goals)
 3. [Architecture Principles](#3-architecture-principles)
@@ -29,11 +32,69 @@
 
 ---
 
+## 0. Current vs Target State
+
+> **This document describes the target architecture.** The table below shows what exists today versus what this document specifies. No application source code (`src/`) has been written yet. The current implementation is limited to the orchestration layer (tech-lead-router, hook-handler, RuFlo CLI/MCP tools).
+
+### What Exists Today (2026-03-10)
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Task classification (4-dimension) | **WORKING** | `.claude/helpers/tech-lead-router.cjs` |
+| Hook dispatch | **WORKING** | `.claude/helpers/hook-handler.cjs` |
+| 9 team templates | **WORKING** | Defined in `tech-lead-router.cjs` |
+| Workflow execution | **WORKING** | `ruflo workflow run -t <template>` |
+| Memory store/search | **WORKING** | MCP tools (SQLite-backed) |
+| Session save/restore | **WORKING** | MCP tools |
+| Swarm init/status | **WORKING** | MCP tools |
+| Agent spawn/status | **WORKING** | MCP tools |
+| Intelligence bootstrap | **WORKING** | `ruflo hooks pretrain` |
+| Guidance compiler | **WORKING** | `ruflo guidance compile` |
+| Q-Learning router | **WORKING** (untrained, Epsilon=1.0) | `ruflo route` | *Untrained (Q-Table=0, Epsilon=1.0). Functional but cold-start.* |
+| Embedding model | **WORKING** | all-MiniLM-L6-v2 (384-dim) |
+| 50 test cases | **WORKING** | `tests/tech-lead-router.test.cjs` |
+
+### What Does NOT Exist Yet
+
+| Component | Architecture Section | Blocked By |
+|-----------|---------------------|------------|
+| `src/` directory (all application code) | Section 9 | Phase 0 not started |
+| `package.json` / TypeScript toolchain | Section 7, 9 | Phase 0 not started |
+| Fastify HTTP server | Section 7.1 | Phase 0 not started |
+| NATS JetStream event bus | Section 7.1, 7.4 | Phase 0 not started |
+| Webhook gateway | Section 4, 8.1 | Phase 1 not started |
+| Client intake API | Section 4, 8.2 | Phase 5 not started |
+| 9 bounded contexts | Section 4 | Phases 1-6 not started |
+| HNSW vector search | Section 7.2 | `@ruvector/core` not installed |
+| AgentDB pattern store | Section 10.1 | Controller path broken |
+| Neural train/predict | Section 10 | `@ruvector/learning-wasm` not installed |
+| Docker / Docker Compose | Section 7.4 | Phase 0 not started |
+| 6 additional templates | Appendix B | Not yet added to router |
+
+### Bridge: How Current Components Map to Target Architecture
+
+| Target Component | Current Equivalent | Gap |
+|-----------------|-------------------|-----|
+| Decision Engine v2 (3-stage) | `tech-lead-router.cjs` (Stage 1 keyword classification only) | Missing: Haiku semantic stage, HNSW pattern stage |
+| Webhook Gateway | None | Full implementation needed |
+| Triage Context | `tech-lead-router.cjs` complexity/risk scoring | Needs formalization as bounded context |
+| Planning Context | `tech-lead-router.cjs` template selection | Needs SPARC decomposer, cost estimator |
+| Execution Context | `ruflo workflow run` | Needs custom coordinator, checkpoint manager |
+| Review Context | None | Full implementation needed |
+| Deployment Context | None | Full implementation needed |
+| Learning Context | Q-Learning router + memory MCP tools | Needs outcome tracker, weight adjuster, pattern store |
+| Event Bus | None (direct function calls via hooks) | NATS JetStream or in-process EventEmitter needed |
+| Observability | `ruflo hooks metrics` | Needs Pino logging, Prometheus export |
+
+---
+
 ## 1. Executive Summary
 
 Orch-Agents is an autonomous development agency system that transforms GitHub events and client requirements into completed software deliverables. It operates as a virtual development team led by a Tech Lead Agent (central orchestrator) that decomposes work using the SPARC methodology (Specification, Pseudocode, Architecture, Refinement, Completion), coordinates specialized agent swarms via RuFlo/Claude Flow, and manages the full software development lifecycle from intake through deployment.
 
-The system is an **event-driven modular monolith** deployed as a single Node.js process. It comprises nine bounded contexts communicating through a NATS message bus (JetStream) with event-sourced state. It leverages RuFlo's 215 MCP tools, 60+ agent types, 7-layer governance control plane, and AgentDB memory system.
+The target system is an **event-driven modular monolith** deployed as a single Node.js process. It comprises nine bounded contexts communicating through a NATS message bus (JetStream) with event-sourced state. It leverages RuFlo's MCP tools, 60+ agent types, 7-layer governance control plane, and AgentDB memory system.
+
+> **Implementation Note:** This document describes the target architecture. The current implementation state is limited to the orchestration layer (tech-lead-router, hook-handler, RuFlo CLI/MCP tools). No application source code (`src/`) has been written yet. See [Section 0](#0-current-vs-target-state) for the full current-vs-target breakdown.
 
 ### Key Capabilities
 
@@ -75,11 +136,11 @@ Development teams spend significant time on coordination overhead: triaging issu
 
 | # | Principle | Rationale |
 |---|-----------|-----------|
-| AP-1 | **Event-sourced state** | Every state transition is a domain event. State is reconstructable from the event log. Enables audit, replay, and debugging. |
+| AP-1 | **Event-sourced state** | Every state transition is a domain event. State is reconstructable from the event log. Enables audit, replay, and debugging. *Phase 0-2: in-process EventEmitter. NATS upgrade at Phase 3+.* |
 | AP-2 | **Bounded contexts with typed contracts** | Nine contexts communicate only through events on the internal bus. No cross-context direct imports. Prevents coupling. |
 | AP-3 | **Multi-input, single pipeline** | GitHub webhooks, client API, scheduled events, and system alerts all normalize into a canonical `IntakeEvent` before entering the pipeline. |
 | AP-4 | **SPARC-native phases** | All work decomposes into Specification, Pseudocode, Architecture, Refinement, Completion. Phases can be skipped when inapplicable. |
-| AP-5 | **3-tier cost optimization** | Every agent task is routed to the cheapest capable model tier: WASM booster, Haiku, or Sonnet/Opus. |
+| AP-5 | **3-tier cost optimization** | Every agent task is routed to the cheapest capable model tier: WASM booster, Haiku, or Sonnet/Opus. *Tier 1 (WASM booster) not available. Current default: Tier 2 (Haiku) minimum.* |
 | AP-6 | **Defense in depth** | GitHub webhook signature verification, input validation at boundaries, governance control plane enforcement, security scanning at review phase. |
 | AP-7 | **Files under 500 lines** | Each source file stays under 500 lines. Bounded contexts enforce this naturally through decomposition. |
 | AP-8 | **Fail-safe defaults** | On AgentDB unavailability, degrade to regex classification. On swarm exhaustion, queue work. On deploy failure, auto-rollback. |
@@ -284,7 +345,7 @@ C4Component
     Component(intakeCtx, "Intake Context", "TypeScript module", "Normalizes all sources into IntakeEvent")
     Component(triageCtx, "Triage Context", "TypeScript module", "Priority, complexity, impact, risk assessment")
     Component(planningCtx, "Planning Context", "TypeScript module", "SPARC decomposition, team selection, topology")
-    Component(decisionEngine, "Decision Engine v2", "TypeScript module", "3-stage classification: regex -> semantic -> pattern match")
+    Component(decisionEngine, "Decision Engine v2", "TypeScript module", "3-stage classification: regex -> semantic -> pattern match. Currently Stage 1 only. Stages 2-3 are Phase 6 milestones.")
     Component(executionCtx, "Execution Context", "TypeScript module", "Swarm lifecycle, agent orchestration, checkpoints")
     Component(reviewCtx, "Review Context", "TypeScript module", "Quality gates, security scan, code review")
     Component(deployCtx, "Deployment Context", "TypeScript module", "Deploy pipeline, health checks, rollback")
@@ -514,31 +575,67 @@ Phase gate failure -> retry with feedback (max 3 retries)
                    -> escalate to human after 3 failures
 ```
 
+**Phase Sequencing Algorithm:**
+
+```
+ALGORITHM: SequencePhases(plan, currentPhaseIndex)
+  phases <- plan.phases (ordered by plan definition)
+  current <- phases[currentPhaseIndex]
+
+  IF current.status = 'completed' AND current.gate.verdict = 'pass' THEN
+    nextIndex <- currentPhaseIndex + 1
+    WHILE nextIndex < phases.length AND phases[nextIndex].skippable AND plan.methodology != 'sparc-full' DO
+      phases[nextIndex].status <- 'skipped'
+      nextIndex <- nextIndex + 1
+    IF nextIndex >= phases.length THEN RETURN { action: 'DONE' }
+    RETURN { action: 'NEXT', phase: phases[nextIndex] }
+
+  ELSE IF current.status = 'completed' AND current.gate.verdict = 'conditional' THEN
+    RETURN { action: 'NEXT', phase: phases[currentPhaseIndex + 1], warnings: current.gate.findings }
+
+  ELSE IF current.status = 'failed' THEN
+    IF current.retryCount < (plan.maxRetries OR 3) THEN
+      current.retryCount <- current.retryCount + 1
+      current.status <- 'retrying'
+      EMIT PhaseRetried(current.id, current.retryCount, current.gate.feedback)
+      RETURN { action: 'RETRY', phase: current, feedback: current.gate.feedback }
+    ELSE
+      EMIT WorkFailed(plan.workItemId, 'max retries exceeded', current.retryCount)
+      RETURN { action: 'ESCALATE', reason: 'max retries exceeded' }
+```
+
 ---
 
 ## 7. Technology Stack
 
 ### 7.1 Runtime and Framework
 
-| Layer | Technology | Rationale |
-|-------|-----------|-----------|
-| **Runtime** | Node.js 22 LTS | Matches RuFlo ecosystem (TypeScript/JavaScript). Async I/O suited for webhook server and event processing. |
-| **Language** | TypeScript 5.x (strict mode) | Type safety for domain models and event contracts. Matches RuFlo codebase. |
-| **HTTP Server** | Fastify 5.x | Faster than Express (60K req/s vs 15K). Built-in schema validation via JSON Schema. Plugin architecture for clean separation of webhook and client API routes. |
-| **Event Bus** | NATS + JetStream | External message bus with durable streams. Provides backpressure, consumer groups, deduplication, and replay. nats.js client. Enables future multi-process scaling. |
-| **Scheduler** | node-cron | Lightweight cron scheduling for periodic workflows (nightly builds, scans). |
-| **Validation** | Zod | Runtime type validation at system boundaries (webhook payloads, API requests). Generates TypeScript types. |
-| **GitHub API** | Octokit | Official GitHub REST/GraphQL client. Webhook signature verification via `@octokit/webhooks`. |
+> **Implementation Note:** The technologies below are architectural selections, not installed dependencies. No `package.json` exists yet. The current runtime is RuFlo/Claude Flow v3.5.15 with CommonJS/ESM helpers in `.claude/helpers/`. These dependencies will be installed during Phase 0 of the Implementation Plan (Section 12).
+
+| Layer | Technology | Status | Rationale |
+|-------|-----------|--------|-----------|
+| **Runtime** | Node.js >= 20 | **Available** (v25.8.0) | Matches RuFlo ecosystem. Async I/O suited for webhook server and event processing. |
+| **Language** | TypeScript 5.x (strict mode) | **Not installed** | Type safety for domain models and event contracts. Current codebase is CJS/MJS; migration required. |
+| **HTTP Server** | Fastify 5.x | **Not installed** | Faster than Express (60K req/s vs 15K). Built-in schema validation via JSON Schema. |
+| **Event Bus** | NATS + JetStream | **Not installed** | External message bus with durable streams. Phase 0-2: Node.js EventEmitter (in-process). Phase 3+: NATS JetStream. |
+| **Scheduler** | node-cron | **Not installed** | Lightweight cron scheduling for periodic workflows (nightly builds, scans). |
+| **Validation** | Zod | **Not installed** | Runtime type validation at system boundaries (webhook payloads, API requests). |
+| **GitHub API** | Octokit | **Not installed** | Official GitHub REST/GraphQL client. Webhook signature verification via `@octokit/webhooks`. |
 
 ### 7.2 Data and Memory
 
-| Layer | Technology | Rationale |
-|-------|-----------|-----------|
-| **Primary Store** | AgentDB (via RuFlo MCP) | Already integrated. HNSW vector search for pattern matching. Namespace isolation per context. |
-| **Event Store** | AgentDB `events` namespace | Event sourcing storage. Append-only. Used for audit and replay. |
-| **Pattern Store** | AgentDB `patterns` namespace + HNSW | Sub-10ms similarity search for decision engine Stage 3. |
-| **Client Data** | AgentDB `clients` namespace | Client profiles, projects, requirements. Structured key-value. |
-| **Caching** | In-process LRU (lru-cache) | Cache template definitions, routing tables, frequently accessed patterns. |
+| Layer | Technology | Status | Rationale |
+|-------|-----------|--------|-----------|
+| **Primary Store** | MCP `memory_store`/`memory_search` | **Working** | SQLite-backed via RuFlo MCP. Namespace isolation per context. |
+| **Event Store** | AgentDB `events` namespace | **Planned** | Event sourcing storage. Append-only. Used for audit and replay. |
+| **Pattern Store** | AgentDB `patterns` namespace + HNSW | **Broken** (`@ruvector/core` not installed; falls back to non-vector scan) | Sub-10ms similarity search for decision engine Stage 3. |
+| **Client Data** | AgentDB `clients` namespace | **Planned** | Client profiles, projects, requirements. Structured key-value. |
+| **Caching** | In-process LRU (lru-cache) | **Not installed** | Cache template definitions, routing tables, frequently accessed patterns. |
+
+> **Fallback chain for broken WASM dependencies:**
+> - HNSW vector search -> linear scan via `memory_search` MCP tool
+> - Neural train/predict -> skip (deferred to Phase 6 when `@ruvector/learning-wasm` is available)
+> - Agent Booster (Tier 1 WASM) -> use Haiku (Tier 2) as minimum tier
 
 ### 7.3 Agent Orchestration
 
@@ -554,15 +651,15 @@ Phase gate failure -> retry with feedback (max 3 retries)
 
 ### 7.4 Infrastructure
 
-| Layer | Technology | Rationale |
-|-------|-----------|-----------|
-| **Process Manager** | PM2 or systemd | Keep the server running, restart on crash, log management. |
-| **Reverse Proxy** | Caddy or nginx | HTTPS termination, webhook endpoint exposure. Auto-TLS with Caddy. |
-| **CI/CD** | GitHub Actions | Already in use. Orch-Agents triggers and monitors GH Actions workflows. |
-| **Monitoring** | RuFlo MCP: `performance_metrics`, `system_health` | Built-in metrics. Optionally export to Prometheus/Grafana. |
-| **Message Bus** | NATS Server 2.10+ | Lightweight, high-performance message broker. JetStream for persistence. Single binary, ~15MB. Runs as container or systemd service. |
-| **Containerization** | Docker + Docker Compose | Multi-container development and deployment. Compose orchestrates orch-agents app + NATS server. |
-| **Secrets** | Environment variables (`.env`) | Webhook secret, GitHub token, API keys. Never committed. |
+| Layer | Technology | Status | Rationale |
+|-------|-----------|--------|-----------|
+| **Process Manager** | PM2 or systemd | **Not configured** | Keep the server running, restart on crash, log management. |
+| **Reverse Proxy** | Caddy or nginx | **Not configured** | HTTPS termination, webhook endpoint exposure. Auto-TLS with Caddy. |
+| **CI/CD** | GitHub Actions | **Available** | Orch-Agents triggers and monitors GH Actions workflows. |
+| **Monitoring** | RuFlo MCP: `performance_metrics`, `system_health` | **Working** | Built-in metrics. Optionally export to Prometheus/Grafana. |
+| **Message Bus** | NATS Server 2.10+ | **Not installed** | Lightweight message broker. Consider in-process EventEmitter for initial phases. |
+| **Containerization** | Docker + Docker Compose | **Not configured** (no Dockerfile or docker-compose.yml exists) | Multi-container dev/deploy. |
+| **Secrets** | Environment variables (`.env`) | **Not configured** (no `.env.example` exists) | Webhook secret, GitHub token, API keys. Never committed. |
 
 ### 7.5 Technology Evaluation Matrix
 
@@ -760,7 +857,7 @@ interface IntakeEvent {
   timestamp: string;
   source: 'github' | 'client' | 'schedule' | 'system';
   sourceMetadata: Record<string, unknown>;
-  intent: string;
+  intent: WorkIntent;
   entities: {
     repo?: string;
     branch?: string;
@@ -780,21 +877,25 @@ interface IntakeEvent {
 interface TriageResult {
   intakeEventId: string;
   priority: 'P0-immediate' | 'P1-high' | 'P2-standard' | 'P3-backlog';
-  complexity: { level: 'low' | 'medium' | 'high'; score: number };
+  complexity: { level: 'low' | 'medium' | 'high'; percentage: number };
   impact: 'isolated' | 'module' | 'cross-cutting' | 'system-wide';
   risk: 'low' | 'medium' | 'high' | 'critical';
   recommendedPhases: SPARCPhase[];
   requiresApproval: boolean;
   skipTriage: boolean;
+  estimatedEffort: 'trivial' | 'small' | 'medium' | 'large' | 'epic';
 }
 
 // Planning -> Execution
 interface WorkflowPlan {
   id: string;
   workItemId: string;
-  methodology: 'sparc-full' | 'sparc-partial' | 'tdd' | 'adhoc';
+  methodology: 'sparc-full' | 'sparc-partial' | 'tdd' | 'adhoc' | 'testing';
   template: string;
   topology: 'mesh' | 'hierarchical' | 'hierarchical-mesh' | 'ring' | 'star' | 'adaptive';
+  swarmStrategy: 'specialized' | 'balanced' | 'minimal';
+  consensus: 'raft' | 'pbft' | 'none';
+  maxAgents: number;
   phases: PlannedPhase[];
   agentTeam: PlannedAgent[];
   estimatedDuration: number;
@@ -823,14 +924,135 @@ interface ReviewVerdict {
 }
 
 type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement' | 'completion';
+
+// Intent union (14 known intents from Section 8.1)
+type WorkIntent =
+  | 'validate-main' | 'validate-branch'
+  | 'review-pr' | 're-review-pr' | 'post-merge'
+  | 'triage-issue' | 'classify-issue' | 'assign-issue' | 'close-issue'
+  | 'respond-comment' | 'process-review'
+  | 'debug-ci' | 'deploy-release' | 'incident-response'
+  | `custom:${string}`;
+
+// Referenced but previously undefined types
+interface PlannedPhase {
+  type: SPARCPhase;
+  agents: string[];
+  gate: string;
+  skippable: boolean;
+}
+
+interface PlannedAgent {
+  role: string;
+  type: string;
+  tier: 1 | 2 | 3;
+  required: boolean;
+}
+
+interface Artifact {
+  id: string;
+  phaseId: string;
+  type: string;
+  url: string;
+  metadata: Record<string, unknown>;
+}
+
+interface Finding {
+  id: string;
+  severity: 'info' | 'warning' | 'error' | 'critical';
+  category: string;
+  message: string;
+  location?: string;
+}
+
+// Bridge: Router output -> Planning input
+interface PlanningInput {
+  intakeEventId: string;
+  triageResult: TriageResult;
+  classification: {
+    domain: string;
+    complexity: { level: string; percentage: number };
+    scope: string;
+    risk: string;
+  };
+  templateKey: string;
+  agentTeam: PlannedAgent[];
+  ambiguity?: { score: number; needsClarification: boolean };
+}
+
+// Deployment output (referenced in Section 4.3 but previously untyped)
+interface DeploymentResult {
+  workflowPlanId: string;
+  status: 'success' | 'failed' | 'rolled-back';
+  environment: string;
+  healthChecks: { name: string; status: 'pass' | 'fail'; latency: number }[];
+  rollbackTriggered: boolean;
+}
+
+// Decision record for Learning context
+interface DecisionRecord {
+  id: string;
+  inputSignature: string;
+  classification: { domain: string; complexity: string; scope: string; risk: string };
+  templateSelected: string;
+  agentTeam: string[];
+  outcome: 'success' | 'partial' | 'failure';
+  duration: number;
+  cost: number;
+  timestamp: string;
+}
 ```
+
+#### Missing Domain Events (failure/recovery paths)
+
+| Event | Producer | Consumer(s) | Payload |
+|-------|----------|-------------|---------|
+| `PhaseRetried` | Execution | Learning | phase ID, retry count, feedback from previous attempt |
+| `WorkFailed` | Execution | Learning, Client Portal | work item ID, failure reason, retry count |
+| `WorkCancelled` | System/Human | Learning, Client Portal | work item ID, cancellation reason |
+| `SwarmInitialized` | Execution | Learning | swarm ID, topology, agent count |
+| `WorkPaused` | System/Human | Execution, Client Portal | work item ID, pause reason, resumable flag |
 
 ---
 
 ## 9. Directory Structure
 
+### 9.1 Current Directory Structure (as of 2026-03-10)
+
 ```
-/Users/senior/.superset/worktrees/orch-agents/espinozasenior/luis-j.-espinoza/auto/
+auto/
++-- .claude/                    # Claude Code configuration
+|   +-- helpers/                # 47 files: hook-handler.cjs, tech-lead-router.cjs,
+|   |                           #   intelligence.cjs, router.cjs, statusline.cjs, etc.
+|   +-- skills/                 # Skill definitions (33 directories)
+|   +-- settings.json           # Claude Code hooks configuration
++-- .claude-flow/               # RuFlo v3 runtime config and data
+|   +-- config.yaml             # V3 runtime configuration
+|   +-- agents/                 # Generated agent configs (5 agents)
+|   +-- daemon-state.json       # Daemon persistence
++-- .swarm/                     # Swarm state and memory
+|   +-- memory.db               # SQLite (0.15 MB)
+|   +-- schema.sql              # Database schema
+|   +-- state.json              # Swarm state
++-- .mcp.json                   # MCP server configuration
++-- CLAUDE.md                   # Project instructions and behavioral rules
++-- agents/                     # Agent YAML configs (5 files)
+|   +-- architect.yaml, coder.yaml, reviewer.yaml,
+|   +-- security-architect.yaml, tester.yaml
++-- docs/                       # Documentation
+|   +-- architecture-orch-agents.md  # This document
+|   +-- orchestration-strategy.md    # Reality check (what works vs broken)
+|   +-- kickstart-guide.md           # Verified working commands
+|   +-- adr/                         # ADR-051, ADR-052
++-- tests/
+|   +-- tech-lead-router.test.cjs    # 50 tests, all passing
++-- vectors.db                  # Vector embeddings database
+```
+
+### 9.2 Target Directory Structure (to be built during Phases 0-7)
+
+```
+auto/
 |
 +-- .claude/                    # Claude Code configuration (existing)
 |   +-- helpers/                # Hook handlers, router (existing)
@@ -987,6 +1209,26 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 
 ### 10.1 MCP Tool Usage by Context
 
+> **Status Key:** Working = confirmed functional per `orchestration-strategy.md`. Broken = dependency missing. Untested = not verified.
+
+| Context | MCP Tools Used | Purpose | Status |
+|---------|---------------|---------|--------|
+| **Cross-cutting** | `memory_store`, `memory_search`, `memory_retrieve` | Persistent key-value storage | **Working** |
+| **Cross-cutting** | `swarm_init`, `swarm_status`, `swarm_health` | Swarm lifecycle | **Working** |
+| **Cross-cutting** | `agent_spawn`, `agent_pool`, `agent_status`, `agent_health` | Agent lifecycle | **Working** |
+| **Cross-cutting** | `task_create`, `task_assign`, `task_status`, `task_complete` | Task lifecycle | **Working** |
+| **Cross-cutting** | `workflow_create`, `workflow_execute` | Workflow execution | **Working** |
+| **Cross-cutting** | `session_save`, `session_restore` | Session persistence | **Working** |
+| **Cross-cutting** | `system_health`, `system_metrics` | System monitoring | **Working** |
+| **Planning** | `agentdb_pattern-search`, `agentdb_hierarchical-recall` | Pattern matching (Stage 3) | **Broken** (AgentDB controller path) |
+| **Planning** | `hooks_model-route` | 3-tier model routing | **Untested** (WASM dependency) |
+| **Learning** | `agentdb_pattern-store`, `agentdb_hierarchical-store` | Pattern storage | **Broken** (AgentDB controller path) |
+| **Learning** | `hooks_intelligence_*` | Trajectory/learning hooks | **Working** (after `hooks pretrain`) |
+| **Review** | `aidefence_scan`, `aidefence_is_safe` | Security scanning | **Untested** |
+| **Review/Deployment** | `github_pr_manage`, `github_workflow` | GitHub integration | **Untested** |
+
+The table below shows the original per-context mapping (all tools available once bounded contexts are implemented):
+
 | Context | MCP Tools Used | Purpose |
 |---------|---------------|---------|
 | **Webhook Gateway** | `github_repo_analyze` | Enrich webhook events with repo metadata |
@@ -1030,14 +1272,14 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 |------|--------------|--------|
 | `hooks_pre-task` | Before each SPARC phase starts | Validate prerequisites, load context from memory |
 | `hooks_post-task` | After each SPARC phase completes | Store artifacts, update metrics, trigger next phase |
-| `hooks_pre-edit` | Before code modifications | Validate against architecture constraints |
+| `hooks_pre-edit` | Before code modifications | Validate against architecture constraints. **Implemented** in hook-handler.cjs (protected path check). |
 | `hooks_post-edit` | After code modifications | Run linting, security scan |
 | `hooks_session-start` | Webhook server starts | Restore active workflows from AgentDB |
 | `hooks_session-end` | Webhook server stops | Checkpoint all active workflows |
-| `hooks_intelligence_learn` | After Learning context processes outcome | Train pattern recognition |
-| `hooks_intelligence_trajectory-start` | When new workflow begins | Start trajectory recording |
-| `hooks_intelligence_trajectory-step` | At each phase transition | Record trajectory step |
-| `hooks_intelligence_trajectory-end` | When workflow completes | Finalize and store trajectory |
+| `hooks_intelligence_learn` | After Learning context processes outcome | Train pattern recognition. **Deferred to Phase 6** (Learning Context). Available via `ruflo hooks pretrain` for manual bootstrap. |
+| `hooks_intelligence_trajectory-start` | When new workflow begins | Start trajectory recording. **Deferred to Phase 6.** |
+| `hooks_intelligence_trajectory-step` | At each phase transition | Record trajectory step. **Deferred to Phase 6.** |
+| `hooks_intelligence_trajectory-end` | When workflow completes | Finalize and store trajectory. **Deferred to Phase 6.** |
 
 ### 10.4 Memory Namespace Architecture
 
@@ -1066,7 +1308,7 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 | Event processing latency | < 30s from receipt to agent spawn | End-to-end through intake/triage/planning |
 | GitHub event routing | < 5ms | Deterministic routing, no AI |
 | User input classification | < 600ms (worst case: 3-stage pipeline) | Including Haiku semantic + HNSW pattern |
-| Pattern search (HNSW) | < 10ms | Sub-linear similarity search |
+| Pattern search (HNSW) | < 10ms | Sub-linear similarity search. **Not available:** requires `@ruvector/core` (not installed). Falls back to linear scan. |
 | Concurrent workflows | Up to 5 simultaneous | Limited by 15-agent maximum |
 
 ### 11.2 Reliability
@@ -1095,7 +1337,7 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 
 | Signal | Implementation |
 |--------|---------------|
-| Structured logging | Pino (Fastify default) with JSON output, correlation IDs per workflow |
+| Structured logging | Pino (Fastify default) with JSON output, correlation IDs per workflow. **Not installed** -- Phase 0 dependency. |
 | Metrics | RuFlo `performance_metrics` + optional Prometheus export |
 | Event audit trail | All domain events stored in `events` namespace with full payload |
 | Decision tracking | Every routing decision stored with outcome for retrospective analysis |
@@ -1105,22 +1347,26 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 
 ## 12. Implementation Plan
 
-### Phase 0: Project Setup (P0 -- Days 1-2)
+### Phase 0: Project Setup + Formalize Existing Infrastructure (P0 -- Days 1-2)
 
 **Goal:** Initialize project, install dependencies, configure build tooling.
+
+> **Note:** Existing helper infrastructure (`.claude/helpers/tech-lead-router.cjs`, `hook-handler.cjs`, `intelligence.cjs`) provides the classification and routing foundation. Phase 0 creates the TypeScript project scaffold that these helpers will eventually migrate into. The 50+ passing tests in `tests/` validate the existing router behavior and should serve as regression tests during migration.
 
 | Task | Files | Exit Criteria |
 |------|-------|---------------|
 | Initialize npm project with TypeScript | `package.json`, `tsconfig.json` | `npm run build` succeeds |
-| Configure Vitest | `vitest.config.ts` | `npm test` runs (0 tests) |
+| Configure Vitest | `vitest.config.ts` | `npm test` runs (existing CJS tests + 0 new TS tests) |
 | Set up Fastify server skeleton | `src/server.ts`, `src/index.ts` | Server starts on configured port |
-| Create shared kernel | `src/shared/event-bus.ts`, `event-types.ts`, `errors.ts`, `config.ts`, `logger.ts` | NATS-backed event bus publishes/subscribes typed events |
+| Create shared kernel | `src/shared/event-bus.ts`, `event-types.ts`, `errors.ts`, `config.ts`, `logger.ts` | In-process EventEmitter for Phases 0-2; NATS upgrade at Phase 3+ |
 | Create Dockerfile | `Dockerfile` | Multi-stage build succeeds, image < 200MB |
 | Create docker-compose.yml | `docker-compose.yml` | `docker compose up` starts app + NATS |
 | NATS JetStream config | `config/nats-server.conf` | JetStream enabled with file storage |
 | Create domain types | `src/types.ts` | All core interfaces defined |
 | Environment config | `.env.example`, `src/shared/config.ts` | Config loads from env vars with defaults |
 | Linting and formatting | `.eslintrc.json`, `.prettierrc` | `npm run lint` passes |
+
+> **Migration path:** Existing CJS helpers (`.claude/helpers/tech-lead-router.cjs`, `hook-handler.cjs`, `intelligence.cjs`) continue unchanged during Phases 0-2. TypeScript wrappers call into CJS modules via `require()`. Full CJS-to-TS migration deferred to Phase 7 hardening.
 
 ### Phase 1: Webhook Gateway + Intake (P0 -- Days 3-7)
 
@@ -1146,7 +1392,7 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 | Triage engine | `src/triage/triage-engine.ts`, `urgency-rules.ts` | Correct priority for all GitHub event types |
 | Decision engine v2 (Stage 1: regex) | `src/planning/decision-engine-v2.ts` | All v1 regression tests pass |
 | SPARC decomposer | `src/planning/sparc-decomposer.ts` | Correct phase sequences for each methodology |
-| Template library (15 templates) | `src/planning/template-library.ts` | All templates return correct agent compositions |
+| Template library (9 implemented + 6 planned) | `src/planning/template-library.ts` | All templates return correct agent compositions |
 | Topology selector | `src/planning/topology-selector.ts` | Correct topology for agent count ranges |
 | Planning engine | `src/planning/planning-engine.ts` | Produces complete WorkflowPlan |
 | GitHub routing table | `config/github-routing.json` | Deterministic mapping for all 10 events |
@@ -1206,7 +1452,7 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 
 ### Phase 6: Learning + Decision Engine v2 Stages 2-3 (P2 -- Days 36-42)
 
-**Goal:** Complete the learning feedback loop. Enable semantic classification and pattern matching.
+**Goal:** Complete the learning feedback loop. Enable semantic classification and pattern matching. *Blocked by `@ruvector/learning-wasm` (not installed). Requires WASM fix before starting.*
 
 | Task | Files | Exit Criteria |
 |------|-------|---------------|
@@ -1238,16 +1484,16 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 
 ### Phase Summary
 
-| Phase | Priority | Duration | Key Deliverable |
-|-------|----------|----------|-----------------|
-| 0: Project Setup | P0 | 2 days | Build tooling, server skeleton, shared kernel |
-| 1: Webhook Gateway + Intake | P0 | 5 days | GitHub webhooks received and normalized |
-| 2: Triage + Planning | P0 | 7 days | Decision engine, SPARC decomposition, team selection |
-| 3: Execution | P1 | 7 days | Swarm orchestration, SPARC phase execution |
-| 4: Review + Deployment | P1 | 7 days | Quality gates, deployment pipeline, rollback |
-| 5: Client Intake API | P1 | 7 days | Client requirement submission and tracking |
-| 6: Learning | P2 | 7 days | Feedback loop, pattern matching, weight adjustment |
-| 7: Integration + Hardening | P2 | 7 days | E2E tests, error handling, documentation |
+| Phase | Priority | Duration | Status | Key Deliverable |
+|-------|----------|----------|--------|-----------------|
+| 0: Project Setup + Formalize Existing Infrastructure | P0 | 2 days | **NOT STARTED** | Build tooling, server skeleton, shared kernel |
+| 1: Webhook Gateway + Intake | P0 | 5 days | **NOT STARTED** | GitHub webhooks received and normalized |
+| 2: Triage + Planning | P0 | 7 days | **PARTIAL** -- `tech-lead-router.cjs` implements Stage 1 classification. 9 templates defined. No `src/` code. | Decision engine, SPARC decomposition, team selection |
+| 3: Execution | P1 | 7 days | **PARTIAL** -- RuFlo `workflow run` provides swarm orchestration. No custom execution coordinator. | Swarm orchestration, SPARC phase execution |
+| 4: Review + Deployment | P1 | 7 days | **NOT STARTED** | Quality gates, deployment pipeline, rollback |
+| 5: Client Intake API | P1 | 7 days | **NOT STARTED** | Client requirement submission and tracking |
+| 6: Learning | P2 | 7 days | **PARTIAL** -- Q-Learning router exists (untrained). Memory store/search works. Pattern store broken (AgentDB). | Feedback loop, pattern matching, weight adjustment |
+| 7: Integration + Hardening | P2 | 7 days | **NOT STARTED** | E2E tests, error handling, documentation |
 | **Total** | | **49 days** | |
 
 ---
@@ -1258,7 +1504,7 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 |---|------|------------|--------|------------|
 | R1 | **Swarm resource exhaustion** -- GitHub webhook bursts trigger more concurrent workflows than 15-agent limit supports | High | High | Triage context implements priority queue with admission control. Max 5 concurrent workflows. Lower-priority work queues until capacity available. NATS consumer groups provide natural backpressure. Webhook events queued in JetStream when capacity exceeded. |
 | R2 | **Webhook volume spike** -- Force-push or mass-label generates dozens of events in seconds | Medium | Medium | Deduplication buffer (30s window per PR/issue). Rate limit at 100/min per repo. Backpressure response (429 with Retry-After). NATS JetStream deduplication (by message ID). Pull-based consumers control intake rate. |
-| R3 | **Cold start problem** -- Pattern store empty on initial deployment, no learning benefit | High | Low | Seed pattern store with synthetic patterns from 15 templates (`scripts/seed-patterns.ts`). Degrade gracefully to Stage 1+2 classification. |
+| R3 | **Cold start problem** -- Pattern store empty on initial deployment, no learning benefit | High | Low | Seed pattern store with synthetic patterns from 9 implemented templates (`scripts/seed-patterns.ts`). Degrade gracefully to Stage 1+2 classification. |
 | R4 | **Learning feedback bias** -- Early decisions reinforce suboptimal templates | Medium | Medium | 10% exploration rate randomly varies template selection. Track counterfactual outcomes. Monthly weight decay (10% toward uniform). |
 | R5 | **AgentDB unavailability** -- Memory system down, breaks Stage 3 and learning | Low | Medium | Fail-safe: degrade to Stage 1+2 classification. Queue outcome records for later write. In-process LRU cache for hot patterns. |
 | R6 | **GitHub API rate limits** -- Excessive API calls during PR management | Medium | Medium | Octokit throttle plugin with automatic retry. Batch status updates. Cache repo metadata. |
@@ -1270,6 +1516,8 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 ---
 
 ## 14. Architecture Decision Records
+
+> All ADRs below remain in "Proposed" status. They will be moved to "Accepted" when implementation of the corresponding component begins, or "Superseded" if the design changes during implementation. Existing ADRs (ADR-051, ADR-052) are in `docs/adr/`. ADRs 053-060 will be written as individual files in `docs/adr/` as implementation decisions are made during each phase.
 
 ### ADR-053: Orch-Agents System Architecture
 
@@ -1340,25 +1588,32 @@ type SPARCPhase = 'specification' | 'pseudocode' | 'architecture' | 'refinement'
 | `release` | published | `deploy-release` | release-pipeline | completion | P0-immediate | yes |
 | `deployment_status` | failure | `incident-response` | monitoring-alerting | refinement (fix), completion (rollback) | P0-immediate | yes |
 
-## Appendix B: Template-to-Agent Mapping (All 15 Templates)
+## Appendix B: Template-to-Agent Mapping
+
+### B.1: Implemented Templates (9 -- in `tech-lead-router.cjs`)
 
 | Template | Lead Agent (Tier) | Supporting Agents (Tier) | Max Agents |
 |----------|------------------|-------------------------|------------|
-| quick-fix | coder (2) | reviewer (2) | 2 |
-| research-sprint | researcher (2) | planner (2), coder (2) | 3 |
-| feature-build | sparc-coord (3) | coder (3), tester (2), reviewer (2), architect (3) | 5 |
-| sparc-full-cycle | sparc-coord (3) | specification (3), pseudocode (3), architecture (3), coder (3), tester (2), reviewer (2), release-manager (2) | 8 |
+| quick-fix | coder (2) | tester (2) | 2 |
+| research-sprint | researcher (2) | analyst (2), coder (2) | 3 |
+| feature-build | architect (3) | coder (3), tester (2), reviewer (2) | 5 |
+| sparc-full-cycle | sparc-coord (3) | specification (3), pseudocode (3), architecture (3), sparc-coder (3), tester (2), reviewer (2) | 8 |
+| testing-sprint | tester (3) | coder (2), reviewer (2) | 3 |
 | security-audit | security-architect (3) | security-auditor (2), coder (2), reviewer (2), tester (2) | 5 |
-| performance-sprint | performance-engineer (3) | coder (2), tester (2), researcher (2) | 4 |
-| release-pipeline | release-manager (2) | cicd-engineer (2), tester (2), security-auditor (2), production-validator (2), coder (2) | 6 |
-| fullstack-swarm | sparc-coord (3) | architect (3), coder (3) x2, tester (2), reviewer (2), security-auditor (2), cicd-engineer (2) | 8 |
+| performance-sprint | performance-engineer (3) | coder (2), perf-analyzer (2), tester (2) | 4 |
+| release-pipeline | release-manager (2) | coder (2), tester (2), reviewer (2), security-auditor (2) | 6 |
+| fullstack-swarm | hierarchical-coordinator (3) | architect (3), coder (3), backend-dev (3), tester (2), reviewer (2), security-auditor (2), cicd-engineer (2) | 8 |
+
+### B.2: Planned Templates (6 -- not yet in router)
+
+| Template | Lead Agent (Tier) | Supporting Agents (Tier) | Max Agents |
+|----------|------------------|-------------------------|------------|
 | tdd-workflow | tester (3) | coder (3), reviewer (2), security-auditor (2), planner (2) | 5 |
 | github-ops | pr-manager (2) | code-review-swarm (2), issue-tracker (2), release-manager (2), researcher (2) | 5 |
 | sparc-planning | sparc-coord (3) | specification (3), architecture (3) | 3 |
 | pair-programming | coder (3) | reviewer (3) | 2 |
 | docs-generation | researcher (2) | coder (2), planner (2) | 3 |
 | cicd-pipeline | cicd-engineer (2) | tester (2), security-auditor (2), production-validator (2), coder (2) | 5 |
-| monitoring-alerting | performance-engineer (2) | production-validator (2), coder (2), researcher (2) | 4 |
 
 ## Appendix C: Configuration Schema
 

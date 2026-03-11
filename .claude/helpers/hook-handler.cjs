@@ -8,6 +8,7 @@
  * Commands:
  *   route          - Route a task to optimal agent (reads PROMPT from env/stdin)
  *   pre-bash       - Validate command safety before execution
+ *   pre-edit       - Validate edit target before code modifications
  *   post-edit      - Record edit outcome for learning
  *   session-restore - Restore previous session state
  *   session-end    - End session and persist state
@@ -57,6 +58,7 @@ const WORKFLOW_MAP = {
   'performance-sprint': 'development',
   'release-pipeline': 'custom',
   'fullstack-swarm': 'development',
+  'testing-sprint': 'testing',
 };
 
 // Get the command from argv
@@ -193,6 +195,20 @@ const handlers = {
     console.log('[OK] Command validated');
   },
 
+  'pre-edit': () => {
+    // Validate file path is not in protected locations
+    const filePath = hookInput.file_path || (hookInput.toolInput && hookInput.toolInput.file_path)
+      || process.env.TOOL_INPUT_file_path || args[0] || '';
+    const protected_paths = ['.env', 'credentials', 'secrets', '.claude/settings.json'];
+    for (const p of protected_paths) {
+      if (filePath.includes(p)) {
+        console.error(`[BLOCKED] Edit to protected file: ${p}`);
+        process.exit(1);
+      }
+    }
+    console.log('[OK] Edit validated');
+  },
+
   'post-edit': () => {
     // Record edit for session metrics
     if (session && session.metric) {
@@ -308,7 +324,7 @@ const handlers = {
     // Unknown command - pass through without error
     console.log(`[OK] Hook: ${command}`);
   } else {
-    console.log('Usage: hook-handler.cjs <route|pre-bash|post-edit|session-restore|session-end|pre-task|post-task|stats>');
+    console.log('Usage: hook-handler.cjs <route|pre-bash|pre-edit|post-edit|session-restore|session-end|pre-task|post-task|stats>');
   }
 }
 
