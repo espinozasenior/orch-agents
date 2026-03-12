@@ -10,6 +10,7 @@ import { createLogger } from './shared/logger';
 import { createEventBus } from './shared/event-bus';
 import { buildServer } from './server';
 import { startPipeline } from './pipeline';
+import { createMcpClient } from './execution/mcp-client';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -23,8 +24,16 @@ async function main(): Promise<void> {
   });
 
   // Wire the event-sourced processing pipeline:
-  // IntakeCompleted -> Triage -> Planning -> Execution -> WorkCompleted
-  const pipeline = startPipeline({ eventBus, logger });
+  // IntakeCompleted -> Triage -> Planning -> Execution -> Review
+  // When ENABLE_AGENTS=true, real claude-flow agents are spawned per phase.
+  const useRealAgents = process.env.ENABLE_AGENTS === 'true';
+  const mcpClient = useRealAgents ? createMcpClient() : undefined;
+
+  if (useRealAgents) {
+    logger.info('Real agent execution enabled');
+  }
+
+  const pipeline = startPipeline({ eventBus, logger, mcpClient });
 
   const server = await buildServer({ config, logger, eventBus });
 

@@ -97,6 +97,9 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           const reason = `Phase ${phase.type} failed gate check`;
           tracker.fail(plan.id, reason);
 
+          // Clean up swarm resources on failure
+          await phaseRunner.dispose?.();
+
           eventBus.publish(
             createDomainEvent('WorkFailed', {
               workItemId: plan.workItemId,
@@ -118,6 +121,9 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       const state = tracker.getState(plan.id);
       logger.info('Plan execution completed', { planId: plan.id });
 
+      // Clean up swarm resources
+      await phaseRunner.dispose?.();
+
       // Publish WorkCompleted so downstream consumers can react
       eventBus.publish(
         createDomainEvent('WorkCompleted', {
@@ -129,6 +135,9 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       );
 
     } catch (err) {
+      // Clean up swarm resources on error
+      await phaseRunner.dispose?.().catch(() => {});
+
       const reason = err instanceof Error ? err.message : String(err);
       tracker.fail(plan.id, reason);
 

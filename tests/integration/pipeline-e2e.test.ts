@@ -17,6 +17,7 @@ import type { DomainEventType } from '../../src/shared/event-types';
 import { createLogger } from '../../src/shared/logger';
 import { setUrgencyRules, resetUrgencyRules } from '../../src/triage/triage-engine';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
+import type { McpClient } from '../../src/execution/mcp-client';
 
 // ---------------------------------------------------------------------------
 // Test urgency rules (avoid filesystem dependency on config/urgency-rules.json)
@@ -284,5 +285,48 @@ describe('Pipeline E2E', () => {
     assert.equal(triagedEvents.length, 0, 'No events should be processed after shutdown');
 
     handle = undefined;
+  });
+
+  it('pipeline with mock McpClient produces WorkCompleted with real artifacts', async () => {
+    const eventBus = createEventBus();
+    const logger = createLogger({ level: 'error' });
+    setUrgencyRules(TEST_URGENCY_RULES);
+
+    // Build a mock McpClient with predictable responses
+    let agentCounter = 0;
+    let taskCounter = 0;
+    const mcpClient: McpClient = {
+      async swarmInit() { return { swarmId: 'mock-swarm-001' }; },
+      async swarmShutdown() {},
+      async agentSpawn() { return { agentId: `mock-agent-${agentCounter++}` }; },
+      async agentStatus(agentId) {
+        return { agentId, status: 'completed', output: '{}' };
+      },
+      async agentTerminate() {},
+      async taskCreate() { return { taskId: `mock-task-${taskCounter++}` }; },
+      async taskAssign() {},
+      async taskStatus(taskId) {
+        return { taskId, status: 'completed', output: JSON.stringify({ done: true }) };
+      },
+      async taskComplete() {},
+      async memoryStore() {},
+      async memorySearch() { return []; },
+    };
+
+    handle = startPipeline({ eventBus, logger, mcpClient });
+
+    const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted');
+
+    const intakeEvent = makeIntakeEvent({ id: 'intake-mcp-001' });
+    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'mcp-corr-001'));
+
+    const workCompleted = await workCompletedPromise;
+    const wcPayload = workCompleted.payload as {
+      workItemId: string;
+      phaseCount: number;
+    };
+
+    assert.equal(wcPayload.workItemId, 'intake-mcp-001');
+    assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one phase');
   });
 });

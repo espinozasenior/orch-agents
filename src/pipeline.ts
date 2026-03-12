@@ -17,6 +17,11 @@ import { startPlanningEngine } from './planning/planning-engine';
 import { startExecutionEngine } from './execution/execution-engine';
 import { createPhaseRunner, type GateChecker } from './execution/phase-runner';
 import { startReviewPipeline } from './review/review-pipeline';
+import type { McpClient } from './execution/mcp-client';
+import { createSwarmManager } from './execution/swarm-manager';
+import { createAgentOrchestrator } from './execution/agent-orchestrator';
+import { createTaskDelegator } from './execution/task-delegator';
+import { createArtifactCollector } from './execution/artifact-collector';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,6 +32,8 @@ export interface PipelineDeps {
   logger: Logger;
   /** Optional custom gate checker. Defaults to a pass-through that always passes. */
   gateChecker?: GateChecker;
+  /** Optional MCP client for real agent execution. When provided, enables real swarm/agent mode. */
+  mcpClient?: McpClient;
 }
 
 export interface PipelineHandle {
@@ -51,7 +58,7 @@ const passThroughGateChecker: GateChecker = async () => ({ passed: true });
  * allowing clean teardown in tests and graceful shutdown in production.
  */
 export function startPipeline(deps: PipelineDeps): PipelineHandle {
-  const { eventBus, logger, gateChecker } = deps;
+  const { eventBus, logger, gateChecker, mcpClient } = deps;
 
   const pipelineLogger = logger.child ? logger.child({ module: 'pipeline' }) : logger;
 
@@ -64,9 +71,21 @@ export function startPipeline(deps: PipelineDeps): PipelineHandle {
   const unsubPlanning = startPlanningEngine({ eventBus, logger });
 
   // Wire execution engine: PlanCreated -> WorkCompleted / WorkFailed
-  const phaseRunner = createPhaseRunner({
+  const phaseRunnerDeps: Parameters<typeof createPhaseRunner>[0] = {
     gateChecker: gateChecker ?? passThroughGateChecker,
-  });
+  };
+
+  // When mcpClient is provided, wire up real execution components
+  if (mcpClient) {
+    const execLogger = logger.child ? logger.child({ module: 'execution' }) : logger;
+    phaseRunnerDeps.swarmManager = createSwarmManager({ logger: execLogger, mcpClient });
+    phaseRunnerDeps.agentOrchestrator = createAgentOrchestrator({ logger: execLogger, mcpClient });
+    phaseRunnerDeps.taskDelegator = createTaskDelegator({ logger: execLogger, mcpClient });
+    phaseRunnerDeps.artifactCollector = createArtifactCollector({ logger: execLogger, mcpClient });
+    phaseRunnerDeps.logger = execLogger;
+  }
+
+  const phaseRunner = createPhaseRunner(phaseRunnerDeps);
   const unsubExecution = startExecutionEngine({ eventBus, logger, phaseRunner });
 
   // Wire review pipeline: WorkCompleted -> ReviewCompleted

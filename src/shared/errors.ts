@@ -188,6 +188,45 @@ export class ReviewError extends AppError {
   }
 }
 
+export class SwarmError extends AppError {
+  constructor(message: string, options: { cause?: unknown } = {}) {
+    super(message, {
+      code: 'ERR_SWARM',
+      statusCode: 500,
+      isOperational: true,
+      cause: options.cause,
+    });
+    this.name = 'SwarmError';
+  }
+}
+
+export class AgentSpawnError extends AppError {
+  constructor(message: string, options: { cause?: unknown } = {}) {
+    super(message, {
+      code: 'ERR_AGENT_SPAWN',
+      statusCode: 500,
+      isOperational: true,
+      cause: options.cause,
+    });
+    this.name = 'AgentSpawnError';
+  }
+}
+
+export class AgentTimeoutError extends AppError {
+  public readonly agentId: string;
+
+  constructor(agentId: string, timeoutMs: number, options: { cause?: unknown } = {}) {
+    super(`Agent ${agentId} timed out after ${timeoutMs}ms`, {
+      code: 'ERR_AGENT_TIMEOUT',
+      statusCode: 500,
+      isOperational: true,
+      cause: options.cause,
+    });
+    this.name = 'AgentTimeoutError';
+    this.agentId = agentId;
+  }
+}
+
 export class DeploymentError extends AppError {
   constructor(message: string, options: { cause?: unknown } = {}) {
     super(message, {
