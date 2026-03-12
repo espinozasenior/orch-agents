@@ -14,6 +14,7 @@ import type { Logger } from '../shared/logger';
 import { createDomainEvent } from '../shared/event-bus';
 import { ExecutionError } from '../shared/errors';
 import type { PhaseRunner } from './phase-runner';
+import { createRetryHandler } from './retry-handler';
 import { createWorkTracker } from './work-tracker';
 
 // ---------------------------------------------------------------------------
@@ -24,6 +25,8 @@ export interface ExecutionEngineDeps {
   eventBus: EventBus;
   logger: Logger;
   phaseRunner: PhaseRunner;
+  /** Maximum retries per failed non-skippable phase. Default: 3. */
+  maxRetries?: number;
 }
 
 /**
@@ -32,7 +35,8 @@ export interface ExecutionEngineDeps {
  * Returns an unsubscribe function for cleanup.
  */
 export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
-  const { eventBus, logger, phaseRunner } = deps;
+  const { eventBus, logger, phaseRunner, maxRetries } = deps;
+  const retryRunner = createRetryHandler({ phaseRunner, eventBus, maxRetries });
   const tracker = createWorkTracker();
 
   return eventBus.subscribe('PlanCreated', async (event) => {
@@ -68,8 +72,8 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
         logger.debug('Phase started', { planId: plan.id, phase: phase.type });
 
-        // Run the phase
-        const result = await phaseRunner.runPhase(plan, phase);
+        // Run the phase (with retry logic for non-skippable failures)
+        const result = await retryRunner.runPhase(plan, phase);
 
         // Record in tracker
         tracker.recordPhaseResult(plan.id, result);
@@ -97,11 +101,11 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
             createDomainEvent('WorkFailed', {
               workItemId: plan.workItemId,
               failureReason: reason,
-              retryCount: 0,
+              retryCount: maxRetries ?? 3,
             }, correlationId),
           );
 
-          logger.warn('Execution stopped: phase failed', {
+          logger.warn('Execution stopped: phase failed after retries', {
             planId: plan.id,
             phase: phase.type,
           });

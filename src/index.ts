@@ -1,13 +1,15 @@
 /**
  * Application entry point for the Orch-Agents system.
  *
- * Wires together config, logger, event bus, and HTTP server.
+ * Wires together config, logger, event bus, processing pipeline,
+ * and HTTP server.
  */
 
 import { loadConfig } from './shared/config';
 import { createLogger } from './shared/logger';
 import { createEventBus } from './shared/event-bus';
 import { buildServer } from './server';
+import { startPipeline } from './pipeline';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -19,6 +21,10 @@ async function main(): Promise<void> {
     nodeEnv: config.nodeEnv,
     logLevel: config.logLevel,
   });
+
+  // Wire the event-sourced processing pipeline:
+  // IntakeCompleted -> Triage -> Planning -> Execution -> WorkCompleted
+  const pipeline = startPipeline({ eventBus, logger });
 
   const server = await buildServer({ config, logger, eventBus });
 
@@ -35,6 +41,7 @@ async function main(): Promise<void> {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info('Shutting down', { signal });
+    pipeline.shutdown();
     eventBus.removeAllListeners();
     await server.close();
     process.exit(0);

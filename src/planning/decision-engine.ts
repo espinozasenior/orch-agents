@@ -36,8 +36,18 @@ export interface DecisionOutput {
 // Decision Engine
 // ---------------------------------------------------------------------------
 
+/**
+ * Subset of the router-bridge API used by the decision engine.
+ * Allows dependency injection for testing.
+ */
+export interface RouterBridge {
+  makeDecision: typeof routerBridge.makeDecision;
+}
+
 export interface DecisionEngineDeps {
   logger: Logger;
+  /** Optional router bridge override (defaults to the real CJS bridge). */
+  router?: RouterBridge;
 }
 
 /**
@@ -47,7 +57,7 @@ export interface DecisionEngineDeps {
  * triage result for urgency/priority context.
  */
 export function createDecisionEngine(deps: DecisionEngineDeps) {
-  const { logger } = deps;
+  const { logger, router = routerBridge } = deps;
 
   return {
     /**
@@ -63,7 +73,7 @@ export function createDecisionEngine(deps: DecisionEngineDeps) {
       // Run through the tech-lead-router (catch CJS module errors)
       let routerResult;
       try {
-        routerResult = routerBridge.makeDecision(taskDescription);
+        routerResult = router.makeDecision(taskDescription);
       } catch (routerErr) {
         logger.error('Router bridge failed', {
           error: routerErr instanceof Error ? routerErr.message : String(routerErr),
