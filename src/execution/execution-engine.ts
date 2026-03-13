@@ -41,6 +41,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
   return eventBus.subscribe('PlanCreated', async (event) => {
     const plan = event.payload.workflowPlan;
+    const intakeEvent = event.payload.intakeEvent;
     const correlationId = event.correlationId;
 
     logger.info('Executing plan', {
@@ -48,6 +49,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       workItemId: plan.workItemId,
       phases: plan.phases.length,
       methodology: plan.methodology,
+      correlationId,
     });
 
     // Guard against duplicate PlanCreated events
@@ -70,10 +72,10 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           }, correlationId),
         );
 
-        logger.debug('Phase started', { planId: plan.id, phase: phase.type });
+        logger.debug('Phase started', { planId: plan.id, phase: phase.type, correlationId });
 
         // Run the phase (with retry logic for non-skippable failures)
-        const result = await retryRunner.runPhase(plan, phase);
+        const result = await retryRunner.runPhase(plan, phase, intakeEvent);
 
         // Record in tracker
         tracker.recordPhaseResult(plan.id, result);
@@ -90,6 +92,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           phase: phase.type,
           status: result.status,
           duration: result.metrics.duration,
+          correlationId,
         });
 
         // If non-skippable phase failed, stop execution
@@ -119,7 +122,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       // All phases completed successfully
       tracker.complete(plan.id);
       const state = tracker.getState(plan.id);
-      logger.info('Plan execution completed', { planId: plan.id });
+      logger.info('Plan execution completed', { planId: plan.id, correlationId });
 
       // Clean up swarm resources
       await phaseRunner.dispose?.();

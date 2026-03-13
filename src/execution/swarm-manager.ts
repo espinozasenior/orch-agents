@@ -5,11 +5,11 @@
  * Tracks active swarm handles so shutdown is idempotent and safe.
  *
  * Dependencies are injected via SwarmManagerDeps, making this fully
- * testable with mock McpClient (London School TDD).
+ * testable with mock CliClient (London School TDD).
  */
 
 import type { WorkflowPlan } from '../types';
-import type { McpClient } from './mcp-client';
+import type { CliClient } from './cli-client';
 import type { Logger } from '../shared/logger';
 import { SwarmError } from '../shared/errors';
 
@@ -35,7 +35,7 @@ export interface SwarmManager {
 
 export interface SwarmManagerDeps {
   logger: Logger;
-  mcpClient: McpClient;
+  cliClient: CliClient;
 }
 
 // ---------------------------------------------------------------------------
@@ -43,10 +43,10 @@ export interface SwarmManagerDeps {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a SwarmManager that delegates to McpClient for swarm lifecycle.
+ * Create a SwarmManager that delegates to CliClient for swarm lifecycle.
  */
 export function createSwarmManager(deps: SwarmManagerDeps): SwarmManager {
-  const { logger, mcpClient } = deps;
+  const { logger, cliClient } = deps;
   const handles = new Map<string, SwarmHandle>();
 
   return {
@@ -59,7 +59,7 @@ export function createSwarmManager(deps: SwarmManagerDeps): SwarmManager {
 
       let swarmId: string;
       try {
-        const result = await mcpClient.swarmInit({
+        const result = await cliClient.swarmInit({
           topology: plan.topology,
           maxAgents: plan.maxAgents,
           strategy: plan.swarmStrategy,
@@ -99,7 +99,7 @@ export function createSwarmManager(deps: SwarmManagerDeps): SwarmManager {
       }
 
       logger.info('Shutting down swarm', { swarmId });
-      await mcpClient.swarmShutdown(swarmId);
+      await cliClient.swarmShutdown(swarmId);
       handle.status = 'shutdown';
       logger.info('Swarm shut down', { swarmId });
     },

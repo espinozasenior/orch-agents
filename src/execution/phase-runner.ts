@@ -1,23 +1,36 @@
 /**
- * Phase Runner.
+ * Phase Runner — thin orchestrator that delegates to strategy implementations.
  *
  * Executes a single SPARC phase within a workflow plan.
- * Uses a pluggable GateChecker to verify quality gates after execution.
+ * Uses the Strategy pattern to select execution mode:
+ *   1. Interactive — worktree-based agent execution (Phase 5)
+ *   2. Task-tool — prompt-based agent execution (Phase 4)
+ *   3. CLI — real agent lifecycle via Layer 2 (Phase 3)
+ *   4. Stub — simulated execution (fallback)
  *
- * Supports two modes:
- * - Stub mode (no real deps): simulates agent work, runs gate check only.
- * - Real mode (with SwarmManager, AgentOrchestrator, etc.): delegates to
- *   actual agents via the Layer 2 execution components.
+ * The first strategy whose canHandle() returns true is selected.
  */
 
-import { randomUUID } from 'node:crypto';
-import type { PlannedPhase, PhaseResult, WorkflowPlan } from '../types';
-import { TIER_COSTS, DEFAULT_AGENT_COST } from '../shared/constants';
+import type { PlannedPhase, PhaseResult, WorkflowPlan, IntakeEvent } from '../types';
 import type { Logger } from '../shared/logger';
-import type { SwarmManager, SwarmHandle } from './swarm-manager';
-import type { AgentOrchestrator, SpawnedAgent } from './agent-orchestrator';
+import type { SwarmManager } from './swarm-manager';
+import type { AgentOrchestrator } from './agent-orchestrator';
 import type { TaskDelegator } from './task-delegator';
-import type { ArtifactCollector, TaskResultRef } from './artifact-collector';
+import type { ArtifactCollector } from './artifact-collector';
+import type { TaskExecutor } from './task-executor';
+import type { WorktreeManager } from './worktree-manager';
+import type { ArtifactApplier } from './artifact-applier';
+import type { InteractiveTaskExecutor } from './interactive-executor';
+import type { FixItLoop } from './fix-it-loop';
+import type { ReviewGate } from '../review/review-gate';
+import type { GitHubClient } from '../integration/github-client';
+import type { EventBus } from '../shared/event-bus';
+
+import type { PhaseStrategy, StrategyDeps } from './strategies/phase-strategy';
+import { createInteractiveStrategy } from './strategies/interactive-strategy';
+import { createTaskToolStrategy } from './strategies/task-tool-strategy';
+import { createCliStrategy } from './strategies/cli-strategy';
+import { createStubStrategy } from './strategies/stub-strategy';
 
 // ---------------------------------------------------------------------------
 // Gate checker interface (mock-friendly)
@@ -38,7 +51,7 @@ export type GateChecker = (
 // ---------------------------------------------------------------------------
 
 export interface PhaseRunner {
-  runPhase(plan: WorkflowPlan, phase: PlannedPhase): Promise<PhaseResult>;
+  runPhase(plan: WorkflowPlan, phase: PlannedPhase, intakeEvent?: IntakeEvent): Promise<PhaseResult>;
   dispose?(): Promise<void>;
 }
 
@@ -49,6 +62,17 @@ export interface PhaseRunnerDeps {
   agentOrchestrator?: AgentOrchestrator;
   taskDelegator?: TaskDelegator;
   artifactCollector?: ArtifactCollector;
+  // Phase 4: task-tool execution (optional, takes priority when intakeEvent available)
+  taskExecutor?: TaskExecutor;
+  // Phase 5: interactive execution (optional, takes priority for refinement phases)
+  interactiveExecutor?: InteractiveTaskExecutor;
+  worktreeManager?: WorktreeManager;
+  artifactApplier?: ArtifactApplier;
+  fixItLoop?: FixItLoop;
+  reviewGate?: ReviewGate;
+  githubClient?: GitHubClient;
+  // Phase 6: domain event emission
+  eventBus?: EventBus;
   logger?: Logger;
   phaseTimeoutMs?: number; // default 300000 (5 min)
 }
@@ -64,11 +88,14 @@ const DEFAULT_PHASE_TIMEOUT_MS = 300_000; // 5 minutes
 // ---------------------------------------------------------------------------
 
 /**
- * Create a PhaseRunner that executes a phase and checks its gate.
+ * Create a PhaseRunner that executes a phase by selecting the first
+ * matching strategy and delegating to it.
  *
- * When real deps (swarmManager, agentOrchestrator, taskDelegator,
- * artifactCollector) are provided, delegates to real agents.
- * Otherwise, falls back to stub behavior.
+ * Strategy priority (first match wins):
+ *   1. interactive — taskExecutor + intakeEvent + refinement + interactive deps
+ *   2. task-tool   — taskExecutor + intakeEvent
+ *   3. cli         — swarmManager + agentOrchestrator + taskDelegator + artifactCollector
+ *   4. stub        — always matches (fallback)
  */
 export function createPhaseRunner(deps: PhaseRunnerDeps): PhaseRunner {
   const {
@@ -77,180 +104,71 @@ export function createPhaseRunner(deps: PhaseRunnerDeps): PhaseRunner {
     agentOrchestrator,
     taskDelegator,
     artifactCollector,
+    taskExecutor,
+    interactiveExecutor,
+    worktreeManager,
+    artifactApplier,
+    fixItLoop,
+    reviewGate,
+    githubClient,
+    eventBus,
     logger,
     phaseTimeoutMs = DEFAULT_PHASE_TIMEOUT_MS,
   } = deps;
 
-  const hasRealDeps = !!(swarmManager && agentOrchestrator && taskDelegator && artifactCollector);
+  // Build strategy deps from PhaseRunnerDeps
+  const strategyDeps: StrategyDeps = {
+    gateChecker,
+    swarmManager,
+    agentOrchestrator,
+    taskDelegator,
+    artifactCollector,
+    taskExecutor,
+    interactiveExecutor,
+    worktreeManager,
+    artifactApplier,
+    fixItLoop,
+    reviewGate,
+    githubClient,
+    eventBus,
+    logger,
+    phaseTimeoutMs,
+  };
 
-  // Cached swarm handle for lazy init
-  let cachedSwarmHandle: SwarmHandle | undefined;
-
-  // -------------------------------------------------------------------------
-  // Stub execution (backward compat)
-  // -------------------------------------------------------------------------
-
-  async function runStub(plan: WorkflowPlan, phase: PlannedPhase): Promise<PhaseResult> {
-    const phaseId = randomUUID();
-    const startTime = Date.now();
-
-    const gateResult = await gateChecker(plan.id, phase);
-    const duration = Date.now() - startTime;
-
-    let status: 'completed' | 'failed' | 'skipped';
-    if (gateResult.passed) {
-      status = 'completed';
-    } else if (phase.skippable) {
-      status = 'skipped';
-    } else {
-      status = 'failed';
-    }
-
-    const agentsInPhase = phase.agents.length;
-    const totalAgents = plan.agentTeam.length;
-    const agentUtilization = totalAgents > 0 ? agentsInPhase / totalAgents : 0;
-
-    let modelCost = 0;
-    for (const agentRole of phase.agents) {
-      const agent = plan.agentTeam.find((a) => a.role === agentRole || a.type === agentRole);
-      modelCost += TIER_COSTS[agent?.tier ?? 0] ?? DEFAULT_AGENT_COST;
-    }
-
-    return {
-      phaseId,
-      planId: plan.id,
-      phaseType: phase.type,
-      status,
-      artifacts: [],
-      metrics: {
-        duration,
-        agentUtilization: Math.round(agentUtilization * 100) / 100,
-        modelCost: Math.round(modelCost * 10000) / 10000,
-      },
-    };
-  }
+  // Create strategies in priority order
+  const cliStrategy = createCliStrategy();
+  const strategies: PhaseStrategy[] = [
+    createInteractiveStrategy(),
+    createTaskToolStrategy(),
+    cliStrategy,
+    createStubStrategy(),
+  ];
 
   // -------------------------------------------------------------------------
-  // Real execution (Phase 3)
-  // -------------------------------------------------------------------------
-
-  async function runReal(plan: WorkflowPlan, phase: PlannedPhase): Promise<PhaseResult> {
-    const phaseId = randomUUID();
-    const startTime = Date.now();
-
-    logger?.info('Running phase with real agents', { planId: plan.id, phase: phase.type });
-
-    try {
-      // 1. Lazy-init swarm on first call
-      if (!cachedSwarmHandle) {
-        cachedSwarmHandle = await swarmManager!.initSwarm(plan);
-        logger?.info('Swarm initialized', { swarmId: cachedSwarmHandle.swarmId });
-      }
-
-      // 2. Spawn agents for this phase
-      const spawnedAgents: SpawnedAgent[] = await agentOrchestrator!.spawnAgents(
-        cachedSwarmHandle.swarmId,
-        phase,
-        plan.agentTeam,
-      );
-
-      // 3. Create and assign tasks
-      const agentRefs = spawnedAgents.map((a) => ({ agentId: a.agentId, role: a.role }));
-      const delegatedTasks = await taskDelegator!.createAndAssign(plan, phase, agentRefs);
-
-      // 4. Wait for agents to complete
-      await agentOrchestrator!.waitForAgents(spawnedAgents, phaseTimeoutMs);
-
-      // 5. Collect task results
-      const taskResults = await taskDelegator!.collectResults(delegatedTasks);
-
-      // 6. Build TaskResultRef[] for artifact collector
-      const taskResultRefs: TaskResultRef[] = taskResults.map((tr) => ({
-        taskId: tr.taskId,
-        agentId: tr.agentId,
-        status: tr.status,
-        output: tr.output,
-      }));
-
-      // 7. Collect artifacts
-      const artifacts = artifactCollector!.collect(phaseId, phase, taskResultRefs);
-
-      // 8. Store checkpoint
-      await artifactCollector!.storeCheckpoint(plan.id, phaseId, artifacts);
-
-      // 9. Run gate checker
-      const gateResult = await gateChecker(plan.id, phase);
-      const duration = Date.now() - startTime;
-
-      // 10. Determine status
-      let status: 'completed' | 'failed' | 'skipped';
-      if (gateResult.passed) {
-        status = 'completed';
-      } else if (phase.skippable) {
-        status = 'skipped';
-      } else {
-        status = 'failed';
-      }
-
-      // Compute metrics
-      const agentsInPhase = phase.agents.length;
-      const totalAgents = plan.agentTeam.length;
-      const agentUtilization = totalAgents > 0 ? agentsInPhase / totalAgents : 0;
-
-      let modelCost = 0;
-      for (const agentRole of phase.agents) {
-        const agent = plan.agentTeam.find((a) => a.role === agentRole || a.type === agentRole);
-        modelCost += TIER_COSTS[agent?.tier ?? 0] ?? DEFAULT_AGENT_COST;
-      }
-
-      return {
-        phaseId,
-        planId: plan.id,
-        phaseType: phase.type,
-        status,
-        artifacts,
-        metrics: {
-          duration,
-          agentUtilization: Math.round(agentUtilization * 100) / 100,
-          modelCost: Math.round(modelCost * 10000) / 10000,
-        },
-      };
-    } catch (err) {
-      const duration = Date.now() - startTime;
-      const message = err instanceof Error ? err.message : String(err);
-      logger?.error('Phase execution failed', { planId: plan.id, phase: phase.type, error: message });
-
-      return {
-        phaseId,
-        planId: plan.id,
-        phaseType: phase.type,
-        status: 'failed',
-        artifacts: [],
-        metrics: {
-          duration,
-          agentUtilization: 0,
-          modelCost: 0,
-        },
-      };
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Dispose — shut down cached swarm
+  // Dispose — shut down cached swarm from CLI strategy
   // -------------------------------------------------------------------------
 
   async function dispose(): Promise<void> {
-    if (cachedSwarmHandle && swarmManager) {
+    const swarmHandle = cliStrategy.getCachedSwarmHandle();
+    if (swarmHandle && swarmManager) {
       logger?.info('Disposing phase runner, shutting down swarm', {
-        swarmId: cachedSwarmHandle.swarmId,
+        swarmId: swarmHandle.swarmId,
       });
-      await swarmManager.shutdownSwarm(cachedSwarmHandle.swarmId);
-      cachedSwarmHandle = undefined;
+      await swarmManager.shutdownSwarm(swarmHandle.swarmId);
+      cliStrategy.clearSwarmHandle();
     }
   }
 
   return {
-    runPhase: hasRealDeps ? runReal : runStub,
+    runPhase(plan: WorkflowPlan, phase: PlannedPhase, intakeEvent?: IntakeEvent): Promise<PhaseResult> {
+      for (const strategy of strategies) {
+        if (strategy.canHandle(strategyDeps, phase, intakeEvent)) {
+          return strategy.run(plan, phase, strategyDeps, logger, intakeEvent);
+        }
+      }
+      // Should never reach here because stub always matches
+      return strategies[strategies.length - 1].run(plan, phase, strategyDeps, logger, intakeEvent);
+    },
     dispose,
   };
 }

@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Artifact, PlannedPhase } from '../types';
-import type { McpClient } from './mcp-client';
+import type { CliClient } from './cli-client';
 import type { Logger } from '../shared/logger';
 
 // ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ export interface ArtifactCollector {
 
 export interface ArtifactCollectorDeps {
   logger: Logger;
-  mcpClient: McpClient;
+  cliClient: CliClient;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ export interface ArtifactCollectorDeps {
 // ---------------------------------------------------------------------------
 
 export function createArtifactCollector(deps: ArtifactCollectorDeps): ArtifactCollector {
-  const { logger, mcpClient } = deps;
+  const { logger, cliClient } = deps;
 
   return {
     collect(
@@ -80,7 +80,7 @@ export function createArtifactCollector(deps: ArtifactCollectorDeps): ArtifactCo
       const namespace = `artifacts:${planId}`;
 
       try {
-        await mcpClient.memoryStore(key, value, { namespace });
+        await cliClient.memoryStore(key, value, { namespace });
         logger.debug('Stored artifact checkpoint', { planId, phaseId, count: artifacts.length });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

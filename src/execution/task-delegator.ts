@@ -4,12 +4,12 @@
  * Creates tasks from a workflow plan, assigns them to spawned agents,
  * and collects results. Part of Phase 3: Real Agent Execution.
  *
- * All MCP interaction goes through the injected McpClient,
+ * All MCP interaction goes through the injected CliClient,
  * keeping this module fully testable via mocks.
  */
 
 import type { WorkflowPlan, PlannedPhase, SPARCPhase, Artifact } from '../types';
-import type { McpClient } from './mcp-client';
+import type { CliClient } from './cli-client';
 import type { Logger } from '../shared/logger';
 
 // ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ export interface TaskDelegator {
 
 export interface TaskDelegatorDeps {
   logger: Logger;
-  mcpClient: McpClient;
+  cliClient: CliClient;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ export interface TaskDelegatorDeps {
 // ---------------------------------------------------------------------------
 
 export function createTaskDelegator(deps: TaskDelegatorDeps): TaskDelegator {
-  const { logger, mcpClient } = deps;
+  const { logger, cliClient } = deps;
 
   return {
     async createAndAssign(
@@ -75,7 +75,7 @@ export function createTaskDelegator(deps: TaskDelegatorDeps): TaskDelegator {
           phaseType: phase.type,
         });
 
-        const { taskId } = await mcpClient.taskCreate({
+        const { taskId } = await cliClient.taskCreate({
           description,
           metadata: {
             planId: plan.id,
@@ -87,7 +87,7 @@ export function createTaskDelegator(deps: TaskDelegatorDeps): TaskDelegator {
 
         logger.debug('Assigning task to agent', { taskId, agentId: agent.agentId });
 
-        await mcpClient.taskAssign(taskId, agent.agentId);
+        await cliClient.taskAssign(taskId, agent.agentId);
 
         delegated.push({
           taskId,
@@ -112,7 +112,7 @@ export function createTaskDelegator(deps: TaskDelegatorDeps): TaskDelegator {
       for (const task of tasks) {
         logger.debug('Collecting result for task', { taskId: task.taskId });
 
-        const statusResult = await mcpClient.taskStatus(task.taskId);
+        const statusResult = await cliClient.taskStatus(task.taskId);
 
         const isFailed =
           statusResult.status === 'failed' ||

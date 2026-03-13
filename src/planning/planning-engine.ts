@@ -94,9 +94,9 @@ export function startPlanningEngine(deps: PlanningEngineDeps): () => void {
         estimatedDuration: plan.estimatedDuration,
       });
 
-      // Publish PlanCreated event
+      // Publish PlanCreated event (include intakeEvent for task-tool agents)
       eventBus.publish(
-        createDomainEvent('PlanCreated', { workflowPlan: plan }, event.correlationId),
+        createDomainEvent('PlanCreated', { workflowPlan: plan, intakeEvent }, event.correlationId),
       );
     } catch (err) {
       const planErr = new PlanningError(

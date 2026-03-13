@@ -12,7 +12,7 @@
 import type { EventBus } from '../shared/event-bus';
 import { createDomainEvent } from '../shared/event-bus';
 import type { PhaseRunner } from './phase-runner';
-import type { WorkflowPlan, PlannedPhase, PhaseResult } from '../types';
+import type { WorkflowPlan, PlannedPhase, PhaseResult, IntakeEvent } from '../types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,8 +37,8 @@ export function createRetryHandler(deps: RetryHandlerDeps): PhaseRunner {
   const { phaseRunner, eventBus, maxRetries = 3 } = deps;
 
   return {
-    async runPhase(plan: WorkflowPlan, phase: PlannedPhase): Promise<PhaseResult> {
-      let result = await phaseRunner.runPhase(plan, phase);
+    async runPhase(plan: WorkflowPlan, phase: PlannedPhase, intakeEvent?: IntakeEvent): Promise<PhaseResult> {
+      let result = await phaseRunner.runPhase(plan, phase, intakeEvent);
 
       // Only retry non-skippable phases that failed
       if (result.status !== 'failed' || phase.skippable) {
@@ -55,7 +55,7 @@ export function createRetryHandler(deps: RetryHandlerDeps): PhaseRunner {
           }),
         );
 
-        result = await phaseRunner.runPhase(plan, phase);
+        result = await phaseRunner.runPhase(plan, phase, intakeEvent);
 
         if (result.status !== 'failed') {
           return result;

@@ -17,11 +17,18 @@ import { startPlanningEngine } from './planning/planning-engine';
 import { startExecutionEngine } from './execution/execution-engine';
 import { createPhaseRunner, type GateChecker } from './execution/phase-runner';
 import { startReviewPipeline } from './review/review-pipeline';
-import type { McpClient } from './execution/mcp-client';
+import type { CliClient } from './execution/cli-client';
+import type { TaskExecutor } from './execution/task-executor';
 import { createSwarmManager } from './execution/swarm-manager';
 import { createAgentOrchestrator } from './execution/agent-orchestrator';
 import { createTaskDelegator } from './execution/task-delegator';
 import { createArtifactCollector } from './execution/artifact-collector';
+import type { InteractiveTaskExecutor } from './execution/interactive-executor';
+import type { WorktreeManager } from './execution/worktree-manager';
+import type { ArtifactApplier } from './execution/artifact-applier';
+import type { FixItLoop } from './execution/fix-it-loop';
+import type { ReviewGate } from './review/review-gate';
+import type { GitHubClient } from './integration/github-client';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,7 +40,16 @@ export interface PipelineDeps {
   /** Optional custom gate checker. Defaults to a pass-through that always passes. */
   gateChecker?: GateChecker;
   /** Optional MCP client for real agent execution. When provided, enables real swarm/agent mode. */
-  mcpClient?: McpClient;
+  cliClient?: CliClient;
+  /** Optional TaskExecutor for task-tool agent execution. When provided with intakeEvent, agents do real work. */
+  taskExecutor?: TaskExecutor;
+  /** Phase 5: interactive execution components (optional) */
+  interactiveExecutor?: InteractiveTaskExecutor;
+  worktreeManager?: WorktreeManager;
+  artifactApplier?: ArtifactApplier;
+  fixItLoop?: FixItLoop;
+  reviewGate?: ReviewGate;
+  githubClient?: GitHubClient;
 }
 
 export interface PipelineHandle {
@@ -58,7 +74,7 @@ const passThroughGateChecker: GateChecker = async () => ({ passed: true });
  * allowing clean teardown in tests and graceful shutdown in production.
  */
 export function startPipeline(deps: PipelineDeps): PipelineHandle {
-  const { eventBus, logger, gateChecker, mcpClient } = deps;
+  const { eventBus, logger, gateChecker, cliClient, taskExecutor } = deps;
 
   const pipelineLogger = logger.child ? logger.child({ module: 'pipeline' }) : logger;
 
@@ -75,21 +91,55 @@ export function startPipeline(deps: PipelineDeps): PipelineHandle {
     gateChecker: gateChecker ?? passThroughGateChecker,
   };
 
-  // When mcpClient is provided, wire up real execution components
-  if (mcpClient) {
+  // When cliClient is provided, wire up real execution components
+  if (cliClient) {
     const execLogger = logger.child ? logger.child({ module: 'execution' }) : logger;
-    phaseRunnerDeps.swarmManager = createSwarmManager({ logger: execLogger, mcpClient });
-    phaseRunnerDeps.agentOrchestrator = createAgentOrchestrator({ logger: execLogger, mcpClient });
-    phaseRunnerDeps.taskDelegator = createTaskDelegator({ logger: execLogger, mcpClient });
-    phaseRunnerDeps.artifactCollector = createArtifactCollector({ logger: execLogger, mcpClient });
+    phaseRunnerDeps.swarmManager = createSwarmManager({ logger: execLogger, cliClient });
+    phaseRunnerDeps.agentOrchestrator = createAgentOrchestrator({ logger: execLogger, cliClient });
+    phaseRunnerDeps.taskDelegator = createTaskDelegator({ logger: execLogger, cliClient });
+    phaseRunnerDeps.artifactCollector = createArtifactCollector({ logger: execLogger, cliClient });
     phaseRunnerDeps.logger = execLogger;
   }
+
+  // When taskExecutor is provided, enable task-tool mode
+  if (taskExecutor) {
+    phaseRunnerDeps.taskExecutor = taskExecutor;
+    const execLogger = phaseRunnerDeps.logger ?? (logger.child ? logger.child({ module: 'execution' }) : logger);
+    phaseRunnerDeps.logger = execLogger;
+  }
+
+  // When interactive execution deps are provided, wire them through
+  if (deps.interactiveExecutor) {
+    phaseRunnerDeps.interactiveExecutor = deps.interactiveExecutor;
+  }
+  if (deps.worktreeManager) {
+    phaseRunnerDeps.worktreeManager = deps.worktreeManager;
+  }
+  if (deps.artifactApplier) {
+    phaseRunnerDeps.artifactApplier = deps.artifactApplier;
+  }
+  if (deps.fixItLoop) {
+    phaseRunnerDeps.fixItLoop = deps.fixItLoop;
+  }
+  if (deps.reviewGate) {
+    phaseRunnerDeps.reviewGate = deps.reviewGate;
+  }
+  if (deps.githubClient) {
+    phaseRunnerDeps.githubClient = deps.githubClient;
+  }
+
+  // Thread eventBus through for domain event emission (Phase 6)
+  phaseRunnerDeps.eventBus = eventBus;
 
   const phaseRunner = createPhaseRunner(phaseRunnerDeps);
   const unsubExecution = startExecutionEngine({ eventBus, logger, phaseRunner });
 
   // Wire review pipeline: WorkCompleted -> ReviewCompleted
-  const unsubReview = startReviewPipeline({ eventBus, logger });
+  const unsubReview = startReviewPipeline({
+    eventBus,
+    logger,
+    reviewGate: deps.reviewGate,
+  });
 
   pipelineLogger.info('Pipeline engines started');
 

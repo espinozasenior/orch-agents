@@ -6,9 +6,9 @@
  */
 
 import type { PlannedPhase, PlannedAgent, Artifact } from '../types';
-import type { McpClient, AgentStatusResult } from './mcp-client';
+import type { CliClient, AgentStatusResult } from './cli-client';
 import type { Logger } from '../shared/logger';
-import { AgentSpawnError, AgentTimeoutError } from '../shared/errors';
+import { AgentTimeoutError } from '../shared/errors';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -39,7 +39,7 @@ export interface AgentOrchestrator {
 
 export interface AgentOrchestratorDeps {
   logger: Logger;
-  mcpClient: McpClient;
+  cliClient: CliClient;
   pollIntervalMs?: number;
   backoffMultiplier?: number;
 }
@@ -59,7 +59,7 @@ const MAX_POLL_INTERVAL_MS = 10000;
 export function createAgentOrchestrator(deps: AgentOrchestratorDeps): AgentOrchestrator {
   const {
     logger,
-    mcpClient,
+    cliClient,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     backoffMultiplier = DEFAULT_BACKOFF_MULTIPLIER,
   } = deps;
@@ -73,38 +73,46 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps): AgentOrche
     phase: PlannedPhase,
     team: PlannedAgent[],
   ): Promise<SpawnedAgent[]> {
-    const spawned: SpawnedAgent[] = [];
-
-    for (const roleName of phase.agents) {
+    // M9: Spawn agents concurrently using Promise.allSettled
+    const spawnPromises = phase.agents.map((roleName) => {
       const agentDef = team.find(a => a.role === roleName);
       const agentType = agentDef?.type ?? roleName;
       const agentTier = agentDef?.tier ?? 2;
 
       logger.debug('Spawning agent', { role: roleName, type: agentType, swarmId });
 
-      let agentId: string;
-      try {
-        const result = await mcpClient.agentSpawn({
-          type: agentType,
-          name: `${phase.type}-${roleName}`,
-          swarmId,
-        });
-        agentId = result.agentId;
-      } catch (err) {
-        throw new AgentSpawnError(
-          `Failed to spawn agent for role '${roleName}': ${err instanceof Error ? err.message : String(err)}`,
-          { cause: err },
-        );
-      }
-
-      spawned.push({
-        agentId,
+      return cliClient.agentSpawn({
+        type: agentType,
+        name: `${phase.type}-${roleName}`,
+        swarmId,
+      }).then((result) => ({
+        agentId: result.agentId,
         role: roleName,
         type: agentType,
         tier: agentTier,
-        status: 'spawned',
-      });
-    }
+        status: 'spawned' as const,
+      }));
+    });
+
+    const settled = await Promise.allSettled(spawnPromises);
+    const spawned: SpawnedAgent[] = settled.map((result, idx) => {
+      if (result.status === 'fulfilled') {
+        return result.value;
+      }
+      const roleName = phase.agents[idx];
+      const agentDef = team.find(a => a.role === roleName);
+      const agentType = agentDef?.type ?? roleName;
+      const agentTier = agentDef?.tier ?? 2;
+      const errMsg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      logger.warn('Failed to spawn agent', { role: roleName, error: errMsg });
+      return {
+        agentId: `failed-${roleName}`,
+        role: roleName,
+        type: agentType,
+        tier: agentTier,
+        status: 'failed' as const,
+      };
+    });
 
     logger.info('Spawned agents for phase', {
       phase: phase.type,
@@ -147,7 +155,7 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps): AgentOrche
       for (const agentId of [...pending]) {
         let statusResult: AgentStatusResult;
         try {
-          statusResult = await mcpClient.agentStatus(agentId);
+          statusResult = await cliClient.agentStatus(agentId);
         } catch {
           // Treat poll failure as a transient error; retry next round
           logger.warn('Failed to poll agent status', { agentId });
@@ -188,7 +196,7 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps): AgentOrche
     await Promise.all(
       agents.map(async (agent) => {
         try {
-          await mcpClient.agentTerminate(agent.agentId);
+          await cliClient.agentTerminate(agent.agentId);
           logger.debug('Terminated agent', { agentId: agent.agentId });
         } catch (err) {
           logger.warn('Failed to terminate agent', {
