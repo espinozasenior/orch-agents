@@ -514,3 +514,53 @@ When these are fixed:
 
 Tools absorbed by `ruflo workflow run` (don't call directly unless manual mode):
 - `swarm_init`, `agent_spawn`, `task_create`, `task_assign`
+
+---
+
+## Phase Execution Flow
+
+  PlanCreated event arrives
+    → Execution Engine starts phase loop
+      → PhaseRunner (lazy-inits swarm on first call)
+        → spawnAgents() for this phase's roles
+        → createAndAssign() tasks to agents
+        → waitForAgents() with exponential backoff + timeout
+        → collectResults() from completed tasks
+        → collect() artifacts and storeCheckpoint()
+        → gateChecker() runs quality gate
+        → return PhaseResult with real artifacts
+      → RetryHandler retries if failed
+    → Execution Engine calls phaseRunner.dispose() to shutdown swarm
+    → Publishes WorkCompleted/WorkFailed
+
+### Key Design Decisions
+
+  - McpClient adapter — only component touching MCP tools; everything else mocks it for TDD
+  - Lazy swarm init — swarm created on first phase, reused across phases, disposed at end
+  - Backward compatible — when no mcpClient provided, stub behavior preserved (all 309 tests pass)
+  - Optional dispose() on PhaseRunner interface for swarm cleanup
+
+### Parallelization (4 agents)
+
+  - Agent 1: mcp-client.ts + error types + tests
+  - Agent 2: swarm-manager.ts + tests
+  - Agent 3: agent-orchestrator.ts + task-delegator.ts + tests
+  - Agent 4: artifact-collector.ts + tests
+  - Then Agent 5-6: phase-runner modification + pipeline wiring + E2E tests
+
+## Full Pipeline Execution
+Webhook → Triage (P2-standard) → Plan (cicd-pipeline, 2 phases, 5 agents)
+    → Phase 1: refinement
+      → Swarm init (swarm-1773348896292, star topology)
+      → Spawn 2 agents (tester lead + implementer)
+      → Create & assign 2 tasks
+      → Collect results (2/2 completed)
+      → Phase completed (13s)
+    → Phase 2: completion
+      → Spawn 1 agent
+      → Create & assign 1 task
+      → Collect results (1/1 completed)
+      → Phase completed (6s)
+    → Plan execution completed
+    → Swarm shutdown
+    → Review: PASS, approved
