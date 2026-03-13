@@ -16,6 +16,8 @@ import type {
   DeploymentResult,
   DecisionRecord,
   SPARCPhase,
+  Artifact,
+  Finding,
 } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -61,7 +63,7 @@ export type WorkTriagedEvent = DomainEvent<
 
 export type PlanCreatedEvent = DomainEvent<
   'PlanCreated',
-  { workflowPlan: WorkflowPlan }
+  { workflowPlan: WorkflowPlan; intakeEvent?: IntakeEvent }
 >;
 
 export type PhaseStartedEvent = DomainEvent<
@@ -134,6 +136,40 @@ export type WorkCompletedEvent = DomainEvent<
 >;
 
 // ---------------------------------------------------------------------------
+// Artifact Execution Layer events (Phase 5)
+// ---------------------------------------------------------------------------
+
+export type ArtifactsAppliedEvent = DomainEvent<
+  'ArtifactsApplied',
+  { planId: string; commitSha: string; branch: string; changedFiles: string[] }
+>;
+
+export type ReviewRequestedEvent = DomainEvent<
+  'ReviewRequested',
+  { planId: string; commitSha: string; branch: string; artifacts: Artifact[]; attempt: number }
+>;
+
+export type ReviewRejectedEvent = DomainEvent<
+  'ReviewRejected',
+  { planId: string; findings: Finding[]; feedback: string; attempt: number }
+>;
+
+export type FixRequestedEvent = DomainEvent<
+  'FixRequested',
+  { planId: string; feedback: string; findings: Finding[]; attempt: number }
+>;
+
+export type CommitCreatedEvent = DomainEvent<
+  'CommitCreated',
+  { planId: string; sha: string; branch: string; files: string[]; message: string }
+>;
+
+export type RollbackTriggeredEvent = DomainEvent<
+  'RollbackTriggered',
+  { planId: string; reason: string; worktreePath: string }
+>;
+
+// ---------------------------------------------------------------------------
 // Union of all domain event types
 // ---------------------------------------------------------------------------
 
@@ -156,7 +192,13 @@ export type AnyDomainEvent =
   | WorkCancelledEvent
   | SwarmInitializedEvent
   | WorkPausedEvent
-  | WorkCompletedEvent;
+  | WorkCompletedEvent
+  | ArtifactsAppliedEvent
+  | ReviewRequestedEvent
+  | ReviewRejectedEvent
+  | FixRequestedEvent
+  | CommitCreatedEvent
+  | RollbackTriggeredEvent;
 
 // ---------------------------------------------------------------------------
 // Event type string literals for use with the event bus
@@ -188,4 +230,10 @@ export interface DomainEventMap {
   SwarmInitialized: SwarmInitializedEvent;
   WorkPaused: WorkPausedEvent;
   WorkCompleted: WorkCompletedEvent;
+  ArtifactsApplied: ArtifactsAppliedEvent;
+  ReviewRequested: ReviewRequestedEvent;
+  ReviewRejected: ReviewRejectedEvent;
+  FixRequested: FixRequestedEvent;
+  CommitCreated: CommitCreatedEvent;
+  RollbackTriggered: RollbackTriggeredEvent;
 }

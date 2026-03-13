@@ -187,6 +187,51 @@ export interface Finding {
 }
 
 // ---------------------------------------------------------------------------
+// Artifact Execution Layer types
+// ---------------------------------------------------------------------------
+
+export type ArtifactKind = 'analysis' | 'code-patch' | 'new-file' | 'test' | 'pr-comment' | 'commit';
+
+export interface CodeArtifactMetadata {
+  path: string;
+  diff?: string;
+  commitSha?: string;
+}
+
+export interface WorktreeHandle {
+  planId: string;
+  path: string;
+  branch: string;
+  baseBranch: string;
+  status: 'active' | 'committed' | 'pushed' | 'disposed';
+}
+
+export interface ApplyContext {
+  commitMessage: string;
+  expectedFiles?: string[];
+  forbiddenPatterns?: RegExp[];
+}
+
+export interface ApplyResult {
+  status: 'applied' | 'rejected' | 'rolled-back';
+  commitSha?: string;
+  changedFiles: string[];
+  rejectionReason?: string;
+}
+
+export interface FixItAttempt {
+  attempt: number;
+  findings: Finding[];
+  feedback: string;
+  commitSha?: string;
+}
+
+/**
+ * FixItResult is canonically defined in execution/fix-it-loop.ts (richer version with history).
+ * Import from there instead of duplicating here.
+ */
+
+// ---------------------------------------------------------------------------
 // Deployment
 // ---------------------------------------------------------------------------
 
