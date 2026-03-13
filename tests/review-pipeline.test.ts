@@ -25,7 +25,7 @@ import { startReviewPipeline, type ReviewPipelineDeps } from '../src/review/revi
 // ---------------------------------------------------------------------------
 
 function makeWorkCompletedEvent(
-  overrides: Partial<WorkCompletedEvent['payload']> = {},
+  overrides: Partial<WorkCompletedEvent['payload']> & Record<string, unknown> = {},
   correlationId = 'review-corr-001',
 ): WorkCompletedEvent {
   return createDomainEvent('WorkCompleted', {
@@ -35,6 +35,22 @@ function makeWorkCompletedEvent(
     totalDuration: 1500,
     ...overrides,
   }, correlationId);
+}
+
+/** Make a WorkCompleted event that carries review context (diff, worktreePath). */
+function makeWorkCompletedWithContext(
+  overrides: Partial<WorkCompletedEvent['payload']> & Record<string, unknown> = {},
+  correlationId = 'review-corr-001',
+): WorkCompletedEvent {
+  return createDomainEvent('WorkCompleted', {
+    workItemId: 'work-review-001',
+    planId: 'plan-review-001',
+    phaseCount: 2,
+    totalDuration: 1500,
+    diff: 'diff --git a/file.ts\n+line',
+    worktreePath: '/tmp/orch-agents/plan-001',
+    ...overrides,
+  } as WorkCompletedEvent['payload'], correlationId);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +131,57 @@ describe('Review Pipeline', () => {
     });
   });
 
+  describe('Stub mode logging disclosure', () => {
+    it('logs reviewMode "stub" in the "Review complete" log line', async () => {
+      eventBus = createEventBus();
+      const logMessages: { msg: string; ctx?: Record<string, unknown> }[] = [];
+      const spyLogger = {
+        trace: () => {},
+        debug: () => {},
+        info: (msg: string, ctx?: unknown) => logMessages.push({ msg, ctx: ctx as Record<string, unknown> }),
+        warn: () => {},
+        error: () => {},
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      unsub = startReviewPipeline({ eventBus, logger: spyLogger as ReturnType<typeof createLogger> });
+
+      eventBus.publish(makeWorkCompletedEvent());
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const reviewLog = logMessages.find((l) => l.msg === 'Review complete');
+      assert.ok(reviewLog, 'Should log "Review complete"');
+      assert.equal(reviewLog!.ctx?.reviewMode, 'stub', 'Should disclose reviewMode as "stub"');
+    });
+
+    it('includes feedback in the "Review complete" log line', async () => {
+      eventBus = createEventBus();
+      const logMessages: { msg: string; ctx?: Record<string, unknown> }[] = [];
+      const spyLogger = {
+        trace: () => {},
+        debug: () => {},
+        info: (msg: string, ctx?: unknown) => logMessages.push({ msg, ctx: ctx as Record<string, unknown> }),
+        warn: () => {},
+        error: () => {},
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      unsub = startReviewPipeline({ eventBus, logger: spyLogger as ReturnType<typeof createLogger> });
+
+      eventBus.publish(makeWorkCompletedEvent());
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const reviewLog = logMessages.find((l) => l.msg === 'Review complete');
+      assert.ok(reviewLog, 'Should log "Review complete"');
+      assert.ok(reviewLog!.ctx?.feedback, 'Should include feedback in log');
+      assert.equal(reviewLog!.ctx?.feedback, 'Stub review: auto-approved');
+    });
+  });
+
   describe('Correlation ID preservation', () => {
     it('preserves correlationId from WorkCompleted to ReviewCompleted', async () => {
       eventBus = createEventBus();
@@ -186,6 +253,220 @@ describe('Review Pipeline', () => {
 
       // Prevent double unsub in afterEach
       unsub = undefined;
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ReviewGate integration (Phase 6)
+  // -------------------------------------------------------------------------
+
+  describe('ReviewGate integration', () => {
+    it('uses ReviewGate for review when provided', async () => {
+      eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+
+      const mockReviewGate = {
+        review: async () => ({
+          phaseResultId: 'work-gate-001',
+          status: 'pass' as const,
+          findings: [],
+          securityScore: 95,
+          testCoveragePercent: 88,
+          codeReviewApproval: true,
+          feedback: 'Real review: all checks passed',
+        }),
+      };
+
+      unsub = startReviewPipeline({ eventBus, logger, reviewGate: mockReviewGate });
+
+      const verdicts: ReviewVerdict[] = [];
+      eventBus.subscribe('ReviewCompleted', (evt) => {
+        verdicts.push(evt.payload.reviewVerdict);
+      });
+
+      eventBus.publish(makeWorkCompletedWithContext({ workItemId: 'work-gate-001' }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(verdicts.length, 1);
+      assert.equal(verdicts[0].status, 'pass');
+      assert.equal(verdicts[0].feedback, 'Real review: all checks passed');
+      assert.equal(verdicts[0].securityScore, 95, 'Should use ReviewGate score, not stub');
+      assert.equal(verdicts[0].testCoveragePercent, 88, 'Should use ReviewGate coverage, not stub');
+    });
+
+    it('uses ReviewGate verdict even when it fails', async () => {
+      eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+
+      const mockReviewGate = {
+        review: async () => ({
+          phaseResultId: 'work-fail-001',
+          status: 'fail' as const,
+          findings: [{ id: 'f1', severity: 'error' as const, category: 'test', message: 'Tests failed' }],
+          securityScore: 40,
+          testCoveragePercent: 20,
+          codeReviewApproval: false,
+          feedback: 'Tests are failing',
+        }),
+      };
+
+      unsub = startReviewPipeline({ eventBus, logger, reviewGate: mockReviewGate });
+
+      const verdicts: ReviewVerdict[] = [];
+      eventBus.subscribe('ReviewCompleted', (evt) => {
+        verdicts.push(evt.payload.reviewVerdict);
+      });
+
+      eventBus.publish(makeWorkCompletedWithContext({ workItemId: 'work-fail-001' }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(verdicts.length, 1);
+      assert.equal(verdicts[0].status, 'fail', 'Should propagate fail verdict');
+      assert.equal(verdicts[0].codeReviewApproval, false);
+      assert.equal(verdicts[0].findings.length, 1);
+    });
+
+    it('logs reviewMode "review-gate" when ReviewGate is used', async () => {
+      eventBus = createEventBus();
+      const logMessages: { msg: string; ctx?: Record<string, unknown> }[] = [];
+      const spyLogger = {
+        trace: () => {},
+        debug: () => {},
+        info: (msg: string, ctx?: unknown) => logMessages.push({ msg, ctx: ctx as Record<string, unknown> }),
+        warn: () => {},
+        error: () => {},
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const mockReviewGate = {
+        review: async () => ({
+          phaseResultId: 'x',
+          status: 'pass' as const,
+          findings: [],
+          securityScore: 100,
+          testCoveragePercent: 100,
+          codeReviewApproval: true,
+          feedback: 'OK',
+        }),
+      };
+
+      unsub = startReviewPipeline({
+        eventBus,
+        logger: spyLogger as ReturnType<typeof createLogger>,
+        reviewGate: mockReviewGate,
+      });
+
+      eventBus.publish(makeWorkCompletedWithContext());
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const reviewLog = logMessages.find((l) => l.msg === 'Review complete');
+      assert.ok(reviewLog, 'Should log "Review complete"');
+      assert.equal(reviewLog!.ctx?.reviewMode, 'review-gate', 'Should disclose reviewMode as "review-gate"');
+    });
+
+    it('emits WorkFailed when ReviewGate throws an error', async () => {
+      eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+
+      const mockReviewGate = {
+        review: async () => { throw new Error('ReviewGate crash'); },
+      };
+
+      unsub = startReviewPipeline({ eventBus, logger, reviewGate: mockReviewGate });
+
+      const failures: unknown[] = [];
+      eventBus.subscribe('WorkFailed', (evt) => {
+        failures.push(evt);
+      });
+
+      eventBus.publish(makeWorkCompletedWithContext({ workItemId: 'work-crash-001' }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(failures.length, 1, 'Should emit WorkFailed when ReviewGate throws');
+    });
+
+    it('preserves stub behavior when reviewGate is undefined', async () => {
+      eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+
+      unsub = startReviewPipeline({ eventBus, logger, reviewGate: undefined });
+
+      const verdicts: ReviewVerdict[] = [];
+      eventBus.subscribe('ReviewCompleted', (evt) => {
+        verdicts.push(evt.payload.reviewVerdict);
+      });
+
+      eventBus.publish(makeWorkCompletedEvent());
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(verdicts.length, 1);
+      assert.equal(verdicts[0].status, 'pass', 'Stub should auto-approve');
+      assert.equal(verdicts[0].feedback, 'Stub review: auto-approved');
+    });
+  });
+
+  describe('ReviewGate with insufficient context (M1)', () => {
+    it('skips ReviewGate and falls back to stub when diff and worktreePath are empty', async () => {
+      eventBus = createEventBus();
+      const logMessages: { msg: string; ctx?: Record<string, unknown> }[] = [];
+      const spyLogger = {
+        trace: () => {},
+        debug: () => {},
+        info: (msg: string, ctx?: unknown) => logMessages.push({ msg, ctx: ctx as Record<string, unknown> }),
+        warn: (msg: string, ctx?: unknown) => logMessages.push({ msg, ctx: ctx as Record<string, unknown> }),
+        error: () => {},
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      let reviewGateCalled = false;
+      const mockReviewGate = {
+        review: async () => {
+          reviewGateCalled = true;
+          return {
+            phaseResultId: 'work-noctx',
+            status: 'pass' as const,
+            findings: [],
+            securityScore: 100,
+            testCoveragePercent: 100,
+            codeReviewApproval: true,
+            feedback: 'OK',
+          };
+        },
+      };
+
+      unsub = startReviewPipeline({
+        eventBus,
+        logger: spyLogger as ReturnType<typeof createLogger>,
+        reviewGate: mockReviewGate,
+      });
+
+      const verdicts: ReviewVerdict[] = [];
+      eventBus.subscribe('ReviewCompleted', (evt) => {
+        verdicts.push(evt.payload.reviewVerdict);
+      });
+
+      // WorkCompleted with no diff/worktreePath context
+      eventBus.publish(makeWorkCompletedEvent());
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(verdicts.length, 1);
+      // ReviewGate should NOT have been called since context is insufficient
+      assert.equal(reviewGateCalled, false, 'ReviewGate should not be called with empty context');
+      // Should fall back to stub
+      assert.equal(verdicts[0].status, 'pass');
+      assert.equal(verdicts[0].feedback, 'Stub review: auto-approved');
+
+      // Should have logged a warning
+      const warnLog = logMessages.find((l) => l.msg.includes('insufficient context'));
+      assert.ok(warnLog, 'Should warn about insufficient context');
     });
   });
 

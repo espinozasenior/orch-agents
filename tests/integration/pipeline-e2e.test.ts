@@ -17,7 +17,8 @@ import type { DomainEventType } from '../../src/shared/event-types';
 import { createLogger } from '../../src/shared/logger';
 import { setUrgencyRules, resetUrgencyRules } from '../../src/triage/triage-engine';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
-import type { McpClient } from '../../src/execution/mcp-client';
+import type { CliClient } from '../../src/execution/cli-client';
+import { createStubTaskExecutor } from '../../src/execution/task-executor';
 
 // ---------------------------------------------------------------------------
 // Test urgency rules (avoid filesystem dependency on config/urgency-rules.json)
@@ -287,15 +288,15 @@ describe('Pipeline E2E', () => {
     handle = undefined;
   });
 
-  it('pipeline with mock McpClient produces WorkCompleted with real artifacts', async () => {
+  it('pipeline with mock CliClient produces WorkCompleted with real artifacts', async () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
     setUrgencyRules(TEST_URGENCY_RULES);
 
-    // Build a mock McpClient with predictable responses
+    // Build a mock CliClient with predictable responses
     let agentCounter = 0;
     let taskCounter = 0;
-    const mcpClient: McpClient = {
+    const cliClient: CliClient = {
       async swarmInit() { return { swarmId: 'mock-swarm-001' }; },
       async swarmShutdown() {},
       async agentSpawn() { return { agentId: `mock-agent-${agentCounter++}` }; },
@@ -313,7 +314,7 @@ describe('Pipeline E2E', () => {
       async memorySearch() { return []; },
     };
 
-    handle = startPipeline({ eventBus, logger, mcpClient });
+    handle = startPipeline({ eventBus, logger, cliClient });
 
     const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted');
 
@@ -328,5 +329,47 @@ describe('Pipeline E2E', () => {
 
     assert.equal(wcPayload.workItemId, 'intake-mcp-001');
     assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one phase');
+  });
+
+  it('pipeline with task-tool executor produces WorkCompleted with real artifacts', async () => {
+    const eventBus = createEventBus();
+    const logger = createLogger({ level: 'error' });
+    setUrgencyRules(TEST_URGENCY_RULES);
+
+    const taskExecutor = createStubTaskExecutor();
+
+    handle = startPipeline({ eventBus, logger, taskExecutor });
+
+    const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted');
+    const phaseCompletedEvents = collectEvents(eventBus, 'PhaseCompleted', 1, 5000);
+
+    const intakeEvent = makeIntakeEvent({
+      id: 'intake-tt-001',
+      rawText: 'Fix auth bypass in session handler',
+      entities: {
+        repo: 'test-org/test-repo',
+        prNumber: 42,
+        files: ['src/auth.ts'],
+        labels: ['security'],
+        severity: 'high',
+      },
+    });
+    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'tt-corr-001'));
+
+    const workCompleted = await workCompletedPromise;
+    const wcPayload = workCompleted.payload as { workItemId: string; phaseCount: number };
+
+    assert.equal(wcPayload.workItemId, 'intake-tt-001');
+    assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one phase');
+
+    // Verify phase results have task-tool artifacts
+    const phaseEvents = await phaseCompletedEvents;
+    assert.ok(phaseEvents.length > 0, 'Should have at least one PhaseCompleted');
+
+    const phasePayload = phaseEvents[0].payload as { phaseResult: { artifacts: Array<{ url: string }> } };
+    assert.ok(
+      phasePayload.phaseResult.artifacts.some((a) => a.url.startsWith('task-tool://')),
+      'Artifacts should use task-tool:// URL scheme',
+    );
   });
 });

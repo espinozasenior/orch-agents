@@ -2,13 +2,13 @@
  * TDD: Tests for TaskDelegator -- creates tasks from a plan, assigns them
  * to spawned agents, and collects results.
  *
- * London School: McpClient is fully mocked.
+ * London School: CliClient is fully mocked.
  */
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WorkflowPlan, PlannedPhase, Artifact } from '../../src/types';
-import type { McpClient, TaskStatusResult } from '../../src/execution/mcp-client';
+import type { CliClient, TaskStatusResult } from '../../src/execution/cli-client';
 import type { Logger } from '../../src/shared/logger';
 import {
   type TaskDelegator,
@@ -77,7 +77,7 @@ const silentLogger: Logger = {
 };
 
 // ---------------------------------------------------------------------------
-// Mock McpClient builder
+// Mock CliClient builder
 // ---------------------------------------------------------------------------
 
 interface MockCallLog {
@@ -86,11 +86,11 @@ interface MockCallLog {
   taskStatus: Array<{ taskId: string }>;
 }
 
-function createMockMcpClient(overrides: {
+function createMockCliClient(overrides: {
   taskCreateResults?: Array<{ taskId: string }>;
   taskStatusResults?: Array<TaskStatusResult>;
   taskCreateError?: Error;
-} = {}): { client: McpClient; calls: MockCallLog } {
+} = {}): { client: CliClient; calls: MockCallLog } {
   let createIndex = 0;
   let statusIndex = 0;
 
@@ -100,7 +100,7 @@ function createMockMcpClient(overrides: {
     taskStatus: [],
   };
 
-  const client: McpClient = {
+  const client: CliClient = {
     async swarmInit() { return { swarmId: 'swarm-1' }; },
     async swarmShutdown() {},
     async agentSpawn() { return { agentId: 'a-1' }; },
@@ -149,8 +149,8 @@ describe('TaskDelegator', () => {
 
   describe('createAndAssign', () => {
     it('creates a task per spawned agent', async () => {
-      const { client, calls } = createMockMcpClient();
-      const delegator = createTaskDelegator({ logger: silentLogger, mcpClient: client });
+      const { client, calls } = createMockCliClient();
+      const delegator = createTaskDelegator({ logger: silentLogger, cliClient: client });
 
       await delegator.createAndAssign(plan, phase, agents);
 
@@ -158,10 +158,10 @@ describe('TaskDelegator', () => {
     });
 
     it('calls taskAssign for each created task', async () => {
-      const { client, calls } = createMockMcpClient({
+      const { client, calls } = createMockCliClient({
         taskCreateResults: [{ taskId: 'task-A' }, { taskId: 'task-B' }],
       });
-      const delegator = createTaskDelegator({ logger: silentLogger, mcpClient: client });
+      const delegator = createTaskDelegator({ logger: silentLogger, cliClient: client });
 
       await delegator.createAndAssign(plan, phase, agents);
 
@@ -171,8 +171,8 @@ describe('TaskDelegator', () => {
     });
 
     it('task description includes phase type, gate criteria, and work item context', async () => {
-      const { client, calls } = createMockMcpClient();
-      const delegator = createTaskDelegator({ logger: silentLogger, mcpClient: client });
+      const { client, calls } = createMockCliClient();
+      const delegator = createTaskDelegator({ logger: silentLogger, cliClient: client });
 
       await delegator.createAndAssign(plan, phase, agents);
 
@@ -184,10 +184,10 @@ describe('TaskDelegator', () => {
     });
 
     it('returns DelegatedTask[] with correct fields', async () => {
-      const { client } = createMockMcpClient({
+      const { client } = createMockCliClient({
         taskCreateResults: [{ taskId: 'task-X' }, { taskId: 'task-Y' }],
       });
-      const delegator = createTaskDelegator({ logger: silentLogger, mcpClient: client });
+      const delegator = createTaskDelegator({ logger: silentLogger, cliClient: client });
 
       const result = await delegator.createAndAssign(plan, phase, agents);
 
@@ -203,10 +203,10 @@ describe('TaskDelegator', () => {
     });
 
     it('error during task creation propagates cleanly', async () => {
-      const { client } = createMockMcpClient({
+      const { client } = createMockCliClient({
         taskCreateError: new Error('MCP tool task_create failed: timeout'),
       });
-      const delegator = createTaskDelegator({ logger: silentLogger, mcpClient: client });
+      const delegator = createTaskDelegator({ logger: silentLogger, cliClient: client });
 
       await assert.rejects(
         () => delegator.createAndAssign(plan, phase, agents),
@@ -220,13 +220,13 @@ describe('TaskDelegator', () => {
 
   describe('collectResults', () => {
     it('calls taskStatus for each delegated task', async () => {
-      const { client, calls } = createMockMcpClient({
+      const { client, calls } = createMockCliClient({
         taskStatusResults: [
           { taskId: 'task-1', status: 'completed', output: '{"artifacts":[]}' },
           { taskId: 'task-2', status: 'completed', output: '{"artifacts":[]}' },
         ],
       });
-      const delegator = createTaskDelegator({ logger: silentLogger, mcpClient: client });
+      const delegator = createTaskDelegator({ logger: silentLogger, cliClient: client });
 
       const tasks: DelegatedTask[] = [
         { taskId: 'task-1', phaseType: 'refinement', assignedAgentId: 'agent-1', description: 'desc', status: 'assigned' },
@@ -248,7 +248,7 @@ describe('TaskDelegator', () => {
         url: '/src/foo.ts',
         metadata: { lines: 42 },
       };
-      const { client } = createMockMcpClient({
+      const { client } = createMockCliClient({
         taskStatusResults: [
           {
             taskId: 'task-1',
@@ -257,7 +257,7 @@ describe('TaskDelegator', () => {
           },
         ],
       });
-      const delegator = createTaskDelegator({ logger: silentLogger, mcpClient: client });
+      const delegator = createTaskDelegator({ logger: silentLogger, cliClient: client });
 
       const tasks: DelegatedTask[] = [
         { taskId: 'task-1', phaseType: 'refinement', assignedAgentId: 'agent-1', description: 'desc', status: 'assigned' },
@@ -275,12 +275,12 @@ describe('TaskDelegator', () => {
     });
 
     it('handles failed tasks gracefully', async () => {
-      const { client } = createMockMcpClient({
+      const { client } = createMockCliClient({
         taskStatusResults: [
           { taskId: 'task-1', status: 'failed', output: 'Agent crashed' },
         ],
       });
-      const delegator = createTaskDelegator({ logger: silentLogger, mcpClient: client });
+      const delegator = createTaskDelegator({ logger: silentLogger, cliClient: client });
 
       const tasks: DelegatedTask[] = [
         { taskId: 'task-1', phaseType: 'refinement', assignedAgentId: 'agent-1', description: 'desc', status: 'assigned' },

@@ -9,7 +9,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import type { PlannedPhase, PhaseResult, WorkflowPlan, Artifact } from '../src/types';
+import type { PlannedPhase, PhaseResult, WorkflowPlan, Artifact, IntakeEvent } from '../src/types';
 import {
   type PhaseRunner,
   type PhaseRunnerDeps,
@@ -20,6 +20,7 @@ import type { SwarmManager, SwarmHandle } from '../src/execution/swarm-manager';
 import type { AgentOrchestrator, SpawnedAgent, AgentOutcome } from '../src/execution/agent-orchestrator';
 import type { TaskDelegator, DelegatedTask, TaskResult, SpawnedAgentRef } from '../src/execution/task-delegator';
 import type { ArtifactCollector, TaskResultRef } from '../src/execution/artifact-collector';
+import { createStubTaskExecutor, type TaskExecutor, type TaskExecutionRequest, type TaskExecutionResult } from '../src/execution/task-executor';
 import type { Logger } from '../src/shared/logger';
 import { AgentTimeoutError } from '../src/shared/errors';
 
@@ -453,6 +454,355 @@ describe('PhaseRunner', () => {
 
       // Should not throw
       await runner.dispose!();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Task-tool execution mode tests (Phase 4)
+  // -------------------------------------------------------------------------
+
+  describe('runPhase() — task-tool mode', () => {
+    function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
+      return {
+        id: 'intake-tt-001',
+        timestamp: '2026-03-12T00:00:00Z',
+        source: 'github',
+        sourceMetadata: { prNumber: 42 },
+        intent: 'review-pr',
+        entities: {
+          repo: 'test-org/test-repo',
+          branch: 'feature/auth',
+          prNumber: 42,
+          files: ['src/auth.ts'],
+          labels: ['security'],
+          severity: 'high',
+        },
+        rawText: 'Fix auth bypass',
+        ...overrides,
+      };
+    }
+
+    it('uses task-tool mode when taskExecutor and intakeEvent are provided', async () => {
+      const executedPrompts: string[] = [];
+      const mockExecutor: TaskExecutor = {
+        async execute(req: TaskExecutionRequest): Promise<TaskExecutionResult> {
+          executedPrompts.push(req.prompt);
+          return {
+            status: 'completed',
+            output: JSON.stringify({ phaseType: req.phaseType, agentRole: req.agentRole, artifacts: [] }),
+            duration: 10,
+          };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: makeLogger(),
+      });
+
+      const plan = makePlan();
+      const phase = plan.phases[1]; // refinement: ['coder', 'tester']
+
+      const result = await runner.runPhase(plan, phase, makeIntakeEvent());
+
+      assert.equal(result.status, 'completed');
+      assert.equal(result.phaseType, 'refinement');
+      assert.equal(executedPrompts.length, 2, 'Should execute one prompt per agent role');
+    });
+
+    it('prompts include webhook context from intakeEvent', async () => {
+      const executedPrompts: string[] = [];
+      const mockExecutor: TaskExecutor = {
+        async execute(req: TaskExecutionRequest): Promise<TaskExecutionResult> {
+          executedPrompts.push(req.prompt);
+          return { status: 'completed', output: '{}', duration: 10 };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: makeLogger(),
+      });
+
+      const plan = makePlan();
+      const phase = plan.phases[1];
+      const intake = makeIntakeEvent({ entities: { repo: 'org/my-app', prNumber: 99, files: ['main.ts'], severity: 'high' } });
+
+      await runner.runPhase(plan, phase, intake);
+
+      assert.ok(executedPrompts[0].includes('org/my-app'), 'Prompt should include repo');
+      assert.ok(executedPrompts[0].includes('99'), 'Prompt should include PR number');
+    });
+
+    it('produces artifacts from executor results', async () => {
+      const mockExecutor: TaskExecutor = {
+        async execute(req: TaskExecutionRequest): Promise<TaskExecutionResult> {
+          return {
+            status: 'completed',
+            output: JSON.stringify({ phaseType: req.phaseType, artifacts: [{ type: 'code', content: 'fix' }] }),
+            duration: 10,
+          };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: makeLogger(),
+      });
+
+      const result = await runner.runPhase(makePlan(), makePlan().phases[1], makeIntakeEvent());
+
+      assert.ok(result.artifacts.length > 0, 'Should have artifacts');
+      assert.ok(result.artifacts[0].url.startsWith('task-tool://'), 'Should use task-tool URL scheme');
+    });
+
+    it('falls back to stub when intakeEvent is not provided', async () => {
+      const mockExecutor: TaskExecutor = {
+        async execute(): Promise<TaskExecutionResult> {
+          throw new Error('Should not be called');
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: makeLogger(),
+      });
+
+      // No intakeEvent → falls back to stub
+      const result = await runner.runPhase(makePlan(), makePlan().phases[1]);
+
+      assert.equal(result.status, 'completed');
+      assert.deepEqual(result.artifacts, [], 'Stub mode returns empty artifacts');
+    });
+
+    it('handles executor failure gracefully', async () => {
+      const mockExecutor: TaskExecutor = {
+        async execute(): Promise<TaskExecutionResult> {
+          return { status: 'failed', output: '', duration: 5, error: 'Claude unavailable' };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: makeLogger(),
+      });
+
+      const result = await runner.runPhase(makePlan(), makePlan().phases[1], makeIntakeEvent());
+
+      // All agents failed → phase fails (non-skippable)
+      assert.equal(result.status, 'failed');
+    });
+
+    it('handles executor exception gracefully', async () => {
+      const mockExecutor: TaskExecutor = {
+        async execute(): Promise<TaskExecutionResult> {
+          throw new Error('Connection reset');
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: makeLogger(),
+      });
+
+      const result = await runner.runPhase(makePlan(), makePlan().phases[1], makeIntakeEvent());
+
+      assert.equal(result.status, 'failed');
+      assert.deepEqual(result.artifacts, []);
+    });
+
+    it('executes agent prompts concurrently', async () => {
+      const startTimes: number[] = [];
+      const mockExecutor: TaskExecutor = {
+        async execute(): Promise<TaskExecutionResult> {
+          startTimes.push(Date.now());
+          await new Promise((r) => setTimeout(r, 50));
+          return { status: 'completed', output: '{}', duration: 50 };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: makeLogger(),
+      });
+
+      const plan = makePlan();
+      const phase = plan.phases[1]; // refinement: ['coder', 'tester']
+
+      const result = await runner.runPhase(plan, phase, makeIntakeEvent());
+
+      assert.equal(result.status, 'completed');
+      // Both agents should start within ~10ms of each other (concurrent)
+      if (startTimes.length === 2) {
+        assert.ok(Math.abs(startTimes[0] - startTimes[1]) < 30, 'Agents should start concurrently');
+      }
+    });
+
+    it('logs per-agent dispatch and completion events', async () => {
+      const logMessages: { level: string; msg: string; data?: Record<string, unknown> }[] = [];
+      const spyLogger: Logger = {
+        trace: () => {},
+        debug: (msg: string, data?: unknown) => logMessages.push({ level: 'debug', msg, data: data as Record<string, unknown> }),
+        info: (msg: string, data?: unknown) => logMessages.push({ level: 'info', msg, data: data as Record<string, unknown> }),
+        warn: (msg: string, data?: unknown) => logMessages.push({ level: 'warn', msg, data: data as Record<string, unknown> }),
+        error: (msg: string, data?: unknown) => logMessages.push({ level: 'error', msg, data: data as Record<string, unknown> }),
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const mockExecutor: TaskExecutor = {
+        async execute(req: TaskExecutionRequest): Promise<TaskExecutionResult> {
+          return {
+            status: 'completed',
+            output: JSON.stringify({ summary: 'done' }),
+            duration: 42,
+          };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: spyLogger,
+      });
+
+      const plan = makePlan();
+      const phase = plan.phases[1]; // refinement: ['coder', 'tester']
+
+      await runner.runPhase(plan, phase, makeIntakeEvent());
+
+      // Should log dispatching each agent
+      const dispatchLogs = logMessages.filter((l) => l.msg === 'Dispatching task-tool agent');
+      assert.equal(dispatchLogs.length, 2, 'Should log dispatch for each agent');
+      assert.ok(dispatchLogs[0].data?.agentRole, 'Dispatch log should include agentRole');
+      assert.ok(dispatchLogs[0].data?.promptLength, 'Dispatch log should include promptLength');
+
+      // Should log each agent completion
+      const completionLogs = logMessages.filter((l) => l.msg === 'Task-tool agent completed');
+      assert.equal(completionLogs.length, 2, 'Should log completion for each agent');
+      assert.ok(completionLogs[0].data?.agentRole, 'Completion log should include agentRole');
+      assert.ok(completionLogs[0].data?.status, 'Completion log should include status');
+      assert.ok(completionLogs[0].data?.duration !== undefined, 'Completion log should include duration');
+
+      // Should log phase summary
+      const summaryLogs = logMessages.filter((l) => l.msg === 'Task-tool phase completed');
+      assert.equal(summaryLogs.length, 1, 'Should log phase summary');
+    });
+
+    it('logs output preview at debug level after agent completes', async () => {
+      const logMessages: { level: string; msg: string; data?: Record<string, unknown> }[] = [];
+      const spyLogger: Logger = {
+        trace: () => {},
+        debug: (msg: string, data?: unknown) => logMessages.push({ level: 'debug', msg, data: data as Record<string, unknown> }),
+        info: (msg: string, data?: unknown) => logMessages.push({ level: 'info', msg, data: data as Record<string, unknown> }),
+        warn: (msg: string, data?: unknown) => logMessages.push({ level: 'warn', msg, data: data as Record<string, unknown> }),
+        error: (msg: string, data?: unknown) => logMessages.push({ level: 'error', msg, data: data as Record<string, unknown> }),
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const mockExecutor: TaskExecutor = {
+        async execute(req: TaskExecutionRequest): Promise<TaskExecutionResult> {
+          return {
+            status: 'completed',
+            output: JSON.stringify({ summary: 'analysis complete', details: 'lots of text here' }),
+            duration: 42,
+          };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: spyLogger,
+      });
+
+      const plan = makePlan();
+      const phase = plan.phases[1]; // refinement: ['coder', 'tester']
+
+      await runner.runPhase(plan, phase, makeIntakeEvent());
+
+      const previewLogs = logMessages.filter((l) => l.msg === 'Task-tool agent output preview');
+      assert.equal(previewLogs.length, 2, 'Should log output preview for each agent');
+      assert.ok(previewLogs[0].data?.agentRole, 'Preview log should include agentRole');
+      assert.ok(typeof previewLogs[0].data?.outputPreview === 'string', 'Preview should be a string');
+      // Verify truncation: preview should be at most 500 chars
+      assert.ok((previewLogs[0].data!.outputPreview as string).length <= 500, 'Preview should be truncated to 500 chars');
+    });
+
+    it('logs artifact count after building artifacts', async () => {
+      const logMessages: { level: string; msg: string; data?: Record<string, unknown> }[] = [];
+      const spyLogger: Logger = {
+        trace: () => {},
+        debug: (msg: string, data?: unknown) => logMessages.push({ level: 'debug', msg, data: data as Record<string, unknown> }),
+        info: (msg: string, data?: unknown) => logMessages.push({ level: 'info', msg, data: data as Record<string, unknown> }),
+        warn: (msg: string, data?: unknown) => logMessages.push({ level: 'warn', msg, data: data as Record<string, unknown> }),
+        error: (msg: string, data?: unknown) => logMessages.push({ level: 'error', msg, data: data as Record<string, unknown> }),
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const mockExecutor: TaskExecutor = {
+        async execute(req: TaskExecutionRequest): Promise<TaskExecutionResult> {
+          return {
+            status: 'completed',
+            output: JSON.stringify({ artifacts: [{ type: 'code' }] }),
+            duration: 10,
+          };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: spyLogger,
+      });
+
+      await runner.runPhase(makePlan(), makePlan().phases[1], makeIntakeEvent());
+
+      const artifactLogs = logMessages.filter((l) => l.msg === 'Task-tool phase artifacts');
+      assert.equal(artifactLogs.length, 1, 'Should log artifact count');
+      assert.equal(typeof artifactLogs[0].data?.artifactCount, 'number', 'Should include artifactCount');
+      assert.ok((artifactLogs[0].data!.artifactCount as number) > 0, 'Should have artifacts');
+    });
+
+    it('logs agent failure with error details', async () => {
+      const logMessages: { level: string; msg: string; data?: Record<string, unknown> }[] = [];
+      const spyLogger: Logger = {
+        trace: () => {},
+        debug: (msg: string, data?: unknown) => logMessages.push({ level: 'debug', msg, data: data as Record<string, unknown> }),
+        info: (msg: string, data?: unknown) => logMessages.push({ level: 'info', msg, data: data as Record<string, unknown> }),
+        warn: (msg: string, data?: unknown) => logMessages.push({ level: 'warn', msg, data: data as Record<string, unknown> }),
+        error: (msg: string, data?: unknown) => logMessages.push({ level: 'error', msg, data: data as Record<string, unknown> }),
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const mockExecutor: TaskExecutor = {
+        async execute(): Promise<TaskExecutionResult> {
+          return { status: 'failed', output: '', duration: 5, error: 'Claude unavailable' };
+        },
+      };
+
+      const runner = createPhaseRunner({
+        gateChecker: passingGate,
+        taskExecutor: mockExecutor,
+        logger: spyLogger,
+      });
+
+      await runner.runPhase(makePlan(), makePlan().phases[1], makeIntakeEvent());
+
+      // Should log failure with error details
+      const failLogs = logMessages.filter((l) => l.msg === 'Task-tool agent completed' && l.data?.status === 'failed');
+      assert.ok(failLogs.length > 0, 'Should log agent failures');
+      assert.ok(failLogs[0].data?.error, 'Failure log should include error message');
     });
   });
 });

@@ -1,14 +1,14 @@
 /**
  * TDD: Tests for AgentOrchestrator — spawns, monitors, and terminates agents.
  *
- * London School: McpClient is fully mocked so we test only orchestration
+ * London School: CliClient is fully mocked so we test only orchestration
  * logic (exponential backoff, timeout, error propagation).
  */
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PlannedPhase, PlannedAgent, Artifact } from '../../src/types';
-import type { McpClient, AgentSpawnOpts, AgentStatusResult } from '../../src/execution/mcp-client';
+import type { CliClient, AgentSpawnOpts, AgentStatusResult } from '../../src/execution/cli-client';
 import type { Logger } from '../../src/shared/logger';
 import { AgentSpawnError, AgentTimeoutError } from '../../src/shared/errors';
 import {
@@ -58,13 +58,13 @@ function makeTeam(): PlannedAgent[] {
   ];
 }
 
-interface MockMcpClientOptions {
+interface MockCliClientOptions {
   spawnFn?: (opts: AgentSpawnOpts) => Promise<{ agentId: string }>;
   statusFn?: (agentId: string) => Promise<AgentStatusResult>;
   terminateFn?: (agentId: string) => Promise<void>;
 }
 
-function createMockMcpClient(options: MockMcpClientOptions = {}): McpClient {
+function createMockCliClient(options: MockCliClientOptions = {}): CliClient {
   return {
     swarmInit: async () => ({ swarmId: 'swarm-1' }),
     swarmShutdown: async () => {},
@@ -83,10 +83,10 @@ function createMockMcpClient(options: MockMcpClientOptions = {}): McpClient {
   };
 }
 
-function makeDeps(mcpClient: McpClient, overrides: Partial<AgentOrchestratorDeps> = {}): AgentOrchestratorDeps {
+function makeDeps(cliClient: CliClient, overrides: Partial<AgentOrchestratorDeps> = {}): AgentOrchestratorDeps {
   return {
     logger: createSilentLogger(),
-    mcpClient,
+    cliClient,
     pollIntervalMs: 1,       // fast tests
     backoffMultiplier: 1.5,
     ...overrides,
@@ -103,9 +103,9 @@ describe('AgentOrchestrator', () => {
   });
 
   describe('spawnAgents()', () => {
-    it('calls mcpClient.agentSpawn for each agent role in phase.agents', async () => {
+    it('calls cliClient.agentSpawn for each agent role in phase.agents', async () => {
       const spawnedNames: string[] = [];
-      const mockClient = createMockMcpClient({
+      const mockClient = createMockCliClient({
         spawnFn: async (opts) => {
           spawnedNames.push(opts.name);
           return { agentId: `agent-${++agentCounter}` };
@@ -123,7 +123,7 @@ describe('AgentOrchestrator', () => {
 
     it('resolves agent roles from the team to get type and tier', async () => {
       const spawnedTypes: string[] = [];
-      const mockClient = createMockMcpClient({
+      const mockClient = createMockCliClient({
         spawnFn: async (opts) => {
           spawnedTypes.push(opts.type);
           return { agentId: `agent-${++agentCounter}` };
@@ -141,7 +141,7 @@ describe('AgentOrchestrator', () => {
     });
 
     it('returns SpawnedAgent[] with correct fields', async () => {
-      const mockClient = createMockMcpClient();
+      const mockClient = createMockCliClient();
       const orch = createAgentOrchestrator(makeDeps(mockClient));
       const phase = makePhase({ agents: ['coder', 'tester'] });
 
@@ -157,8 +157,58 @@ describe('AgentOrchestrator', () => {
       }
     });
 
-    it('throws AgentSpawnError when mcpClient.agentSpawn fails', async () => {
-      const mockClient = createMockMcpClient({
+    it('spawns agents concurrently not sequentially', async () => {
+      const spawnTimestamps: number[] = [];
+      const mockClient = createMockCliClient({
+        spawnFn: async (opts) => {
+          spawnTimestamps.push(Date.now());
+          // Add a small delay to make sequential vs parallel distinguishable
+          await new Promise(r => setTimeout(r, 20));
+          return { agentId: `agent-${++agentCounter}` };
+        },
+      });
+      const orch = createAgentOrchestrator(makeDeps(mockClient));
+      const phase = makePhase({ agents: ['coder', 'tester'] });
+
+      const spawned = await orch.spawnAgents('swarm-1', phase, makeTeam());
+
+      assert.equal(spawned.length, 2);
+      // If parallel, both spawn calls should start within a few ms of each other
+      // If sequential, second would start ~20ms after first
+      const timeDiff = Math.abs(spawnTimestamps[1] - spawnTimestamps[0]);
+      assert.ok(timeDiff < 15, `Spawn calls should be concurrent (diff: ${timeDiff}ms)`);
+    });
+
+    it('handles individual spawn failures with Promise.allSettled', async () => {
+      let callCount = 0;
+      const mockClient = createMockCliClient({
+        spawnFn: async (opts) => {
+          callCount++;
+          if (opts.name.includes('tester')) {
+            throw new Error('tester spawn failed');
+          }
+          return { agentId: `agent-${++agentCounter}` };
+        },
+      });
+      const orch = createAgentOrchestrator(makeDeps(mockClient));
+      const phase = makePhase({ agents: ['coder', 'tester'] });
+
+      const spawned = await orch.spawnAgents('swarm-1', phase, makeTeam());
+
+      // Should return both — successful and failed
+      assert.equal(spawned.length, 2);
+      // The successful one should have a real agentId
+      const successfulAgent = spawned.find(a => a.role === 'coder');
+      assert.ok(successfulAgent);
+      assert.ok(successfulAgent!.agentId.startsWith('agent-'));
+      // The failed one should have a status of 'failed'
+      const failedAgent = spawned.find(a => a.role === 'tester');
+      assert.ok(failedAgent);
+      assert.equal(failedAgent!.status, 'failed');
+    });
+
+    it('returns failed SpawnedAgent when cliClient.agentSpawn fails', async () => {
+      const mockClient = createMockCliClient({
         spawnFn: async () => {
           throw new Error('daemon unreachable');
         },
@@ -166,14 +216,12 @@ describe('AgentOrchestrator', () => {
       const orch = createAgentOrchestrator(makeDeps(mockClient));
       const phase = makePhase({ agents: ['coder'] });
 
-      await assert.rejects(
-        () => orch.spawnAgents('swarm-1', phase, makeTeam()),
-        (err: unknown) => {
-          assert.ok(err instanceof AgentSpawnError);
-          assert.ok(err.message.includes('coder'));
-          return true;
-        },
-      );
+      // M9: No longer throws — returns failed agents instead
+      const spawned = await orch.spawnAgents('swarm-1', phase, makeTeam());
+
+      assert.equal(spawned.length, 1);
+      assert.equal(spawned[0].status, 'failed');
+      assert.equal(spawned[0].role, 'coder');
     });
   });
 
@@ -184,7 +232,7 @@ describe('AgentOrchestrator', () => {
   describe('waitForAgents()', () => {
     it('polls agentStatus until all agents report completed', async () => {
       let pollCount = 0;
-      const mockClient = createMockMcpClient({
+      const mockClient = createMockCliClient({
         statusFn: async (agentId) => {
           pollCount++;
           // Complete on second poll round
@@ -207,7 +255,7 @@ describe('AgentOrchestrator', () => {
     });
 
     it('returns AgentOutcome[] with status and duration', async () => {
-      const mockClient = createMockMcpClient({
+      const mockClient = createMockCliClient({
         statusFn: async (agentId) => ({
           agentId,
           status: 'completed' as const,
@@ -232,7 +280,7 @@ describe('AgentOrchestrator', () => {
 
     it('terminates agents on timeout and throws AgentTimeoutError', async () => {
       const terminatedIds: string[] = [];
-      const mockClient = createMockMcpClient({
+      const mockClient = createMockCliClient({
         statusFn: async (agentId) => ({
           agentId,
           status: 'running' as const,
@@ -260,7 +308,7 @@ describe('AgentOrchestrator', () => {
     });
 
     it('handles mixed results (some complete, some fail)', async () => {
-      const mockClient = createMockMcpClient({
+      const mockClient = createMockCliClient({
         statusFn: async (agentId) => {
           if (agentId === 'a-1') {
             return { agentId, status: 'completed' as const, output: 'ok' };
@@ -294,9 +342,9 @@ describe('AgentOrchestrator', () => {
   // ---------------------------------------------------------------------------
 
   describe('terminateAgents()', () => {
-    it('calls mcpClient.agentTerminate for each agent', async () => {
+    it('calls cliClient.agentTerminate for each agent', async () => {
       const terminatedIds: string[] = [];
-      const mockClient = createMockMcpClient({
+      const mockClient = createMockCliClient({
         terminateFn: async (agentId) => {
           terminatedIds.push(agentId);
         },
@@ -315,7 +363,7 @@ describe('AgentOrchestrator', () => {
 
     it('does not throw when agentTerminate fails for one agent', async () => {
       let callCount = 0;
-      const mockClient = createMockMcpClient({
+      const mockClient = createMockCliClient({
         terminateFn: async (agentId) => {
           callCount++;
           if (agentId === 'a-2') {

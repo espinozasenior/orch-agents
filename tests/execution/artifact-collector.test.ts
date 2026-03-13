@@ -2,13 +2,13 @@
  * TDD: Tests for ArtifactCollector — collects and normalizes agent results
  * into Artifact objects and stores checkpoints via memory.
  *
- * London School: McpClient and Logger are fully mocked.
+ * London School: CliClient and Logger are fully mocked.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PlannedPhase } from '../../src/types';
-import type { McpClient, MemoryStoreOpts } from '../../src/execution/mcp-client';
+import type { CliClient, MemoryStoreOpts } from '../../src/execution/cli-client';
 import type { Logger } from '../../src/shared/logger';
 import {
   type ArtifactCollector,
@@ -63,8 +63,8 @@ function stubLogger(): Logger & { warnCalls: Array<{ msg: string; ctx?: unknown 
   return logger;
 }
 
-/** Create a mock McpClient with spies for memory methods. */
-function mockMcpClient(overrides: Partial<McpClient> = {}): McpClient & {
+/** Create a mock CliClient with spies for memory methods. */
+function mockCliClient(overrides: Partial<CliClient> = {}): CliClient & {
   memoryStoreCalls: Array<{ key: string; value: string; opts?: MemoryStoreOpts }>;
 } {
   const memoryStoreCalls: Array<{ key: string; value: string; opts?: MemoryStoreOpts }> = [];
@@ -104,7 +104,7 @@ describe('ArtifactCollector', () => {
     it('returns an ArtifactCollector object', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       assert.ok(collector);
       assert.equal(typeof collector.collect, 'function');
@@ -116,7 +116,7 @@ describe('ArtifactCollector', () => {
     it('creates Artifact[] from TaskResultRef[] with correct fields', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       const phase = makePhase();
       const results = [
@@ -132,7 +132,7 @@ describe('ArtifactCollector', () => {
     it('artifact.id is a UUID', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       const artifacts = collector.collect('phase-1', makePhase(), [makeTaskResult()]);
 
@@ -142,7 +142,7 @@ describe('ArtifactCollector', () => {
     it('artifact.phaseId matches the provided phaseId', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       const artifacts = collector.collect('phase-ref-42', makePhase(), [makeTaskResult()]);
 
@@ -152,7 +152,7 @@ describe('ArtifactCollector', () => {
     it('artifact.type matches the phase type', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       const phase = makePhase({ type: 'refinement' });
       const artifacts = collector.collect('phase-1', phase, [makeTaskResult()]);
@@ -163,7 +163,7 @@ describe('ArtifactCollector', () => {
     it('artifact.type reflects different phase types', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       const phase = makePhase({ type: 'architecture' });
       const artifacts = collector.collect('phase-1', phase, [makeTaskResult()]);
@@ -174,7 +174,7 @@ describe('ArtifactCollector', () => {
     it('artifact.url is memory:// URI with plan/phase path', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       const artifacts = collector.collect('phase-ref-1', makePhase(), [
         makeTaskResult({ taskId: 'task-001' }),
@@ -186,7 +186,7 @@ describe('ArtifactCollector', () => {
     it('artifact.metadata includes agentId, taskId, status', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       const artifacts = collector.collect('phase-1', makePhase(), [
         makeTaskResult({ taskId: 'task-007', agentId: 'agent-x', status: 'completed' }),
@@ -200,7 +200,7 @@ describe('ArtifactCollector', () => {
     it('handles empty task results (returns empty array)', () => {
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       const artifacts = collector.collect('phase-1', makePhase(), []);
 
@@ -209,11 +209,11 @@ describe('ArtifactCollector', () => {
   });
 
   describe('storeCheckpoint()', () => {
-    it('calls mcpClient.memoryStore with correct key/value/namespace', async () => {
-      const mcp = mockMcpClient();
+    it('calls cliClient.memoryStore with correct key/value/namespace', async () => {
+      const mcp = mockCliClient();
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mcp,
+        cliClient: mcp,
       });
       const artifacts = collector.collect('phase-1', makePhase(), [makeTaskResult()]);
 
@@ -225,10 +225,10 @@ describe('ArtifactCollector', () => {
     });
 
     it('serializes artifacts as JSON', async () => {
-      const mcp = mockMcpClient();
+      const mcp = mockCliClient();
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mcp,
+        cliClient: mcp,
       });
       const artifacts = collector.collect('phase-1', makePhase(), [makeTaskResult()]);
 
@@ -242,10 +242,10 @@ describe('ArtifactCollector', () => {
     });
 
     it('uses namespace "artifacts:{planId}"', async () => {
-      const mcp = mockMcpClient();
+      const mcp = mockCliClient();
       const collector = createArtifactCollector({
         logger: stubLogger(),
-        mcpClient: mcp,
+        cliClient: mcp,
       });
       const artifacts = collector.collect('phase-1', makePhase(), [makeTaskResult()]);
 
@@ -255,14 +255,14 @@ describe('ArtifactCollector', () => {
       assert.equal(call.opts?.namespace, 'artifacts:plan-xyz');
     });
 
-    it('handles mcpClient failure gracefully (logs warning, does not throw)', async () => {
+    it('handles cliClient failure gracefully (logs warning, does not throw)', async () => {
       const logger = stubLogger();
-      const mcp = mockMcpClient({
+      const mcp = mockCliClient({
         memoryStore: async () => {
           throw new Error('Memory service unavailable');
         },
       });
-      const collector = createArtifactCollector({ logger, mcpClient: mcp });
+      const collector = createArtifactCollector({ logger, cliClient: mcp });
       const artifacts = collector.collect('phase-1', makePhase(), [makeTaskResult()]);
 
       // Should not throw

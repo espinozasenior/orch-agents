@@ -360,6 +360,128 @@ describe('Execution Engine', () => {
     });
   });
 
+  describe('correlationId in log lines', () => {
+    it('includes correlationId in "Executing plan" log', async () => {
+      const eventBus = createEventBus();
+      const logMessages: { level: string; msg: string; ctx?: Record<string, unknown> }[] = [];
+      const spyLogger = {
+        trace: () => {},
+        debug: (msg: string, ctx?: unknown) => logMessages.push({ level: 'debug', msg, ctx: ctx as Record<string, unknown> }),
+        info: (msg: string, ctx?: unknown) => logMessages.push({ level: 'info', msg, ctx: ctx as Record<string, unknown> }),
+        warn: (msg: string, ctx?: unknown) => logMessages.push({ level: 'warn', msg, ctx: ctx as Record<string, unknown> }),
+        error: (msg: string, ctx?: unknown) => logMessages.push({ level: 'error', msg, ctx: ctx as Record<string, unknown> }),
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const phaseRunner = createPhaseRunner({ gateChecker: passingGate });
+      const unsub = startExecutionEngine({ eventBus, logger: spyLogger as ReturnType<typeof createLogger>, phaseRunner });
+
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: makePlan(),
+      }, 'corr-id-abc'));
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const execLog = logMessages.find((l) => l.msg === 'Executing plan');
+      assert.ok(execLog, 'Should log "Executing plan"');
+      assert.equal(execLog!.ctx?.correlationId, 'corr-id-abc', 'Should include correlationId');
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+
+    it('includes correlationId in "Phase started" log', async () => {
+      const eventBus = createEventBus();
+      const logMessages: { level: string; msg: string; ctx?: Record<string, unknown> }[] = [];
+      const spyLogger = {
+        trace: () => {},
+        debug: (msg: string, ctx?: unknown) => logMessages.push({ level: 'debug', msg, ctx: ctx as Record<string, unknown> }),
+        info: (msg: string, ctx?: unknown) => logMessages.push({ level: 'info', msg, ctx: ctx as Record<string, unknown> }),
+        warn: (msg: string, ctx?: unknown) => logMessages.push({ level: 'warn', msg, ctx: ctx as Record<string, unknown> }),
+        error: (msg: string, ctx?: unknown) => logMessages.push({ level: 'error', msg, ctx: ctx as Record<string, unknown> }),
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const phaseRunner = createPhaseRunner({ gateChecker: passingGate });
+      const unsub = startExecutionEngine({ eventBus, logger: spyLogger as ReturnType<typeof createLogger>, phaseRunner });
+
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: makePlan(),
+      }, 'corr-id-def'));
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const phaseStartLogs = logMessages.filter((l) => l.msg === 'Phase started');
+      assert.ok(phaseStartLogs.length > 0, 'Should log "Phase started"');
+      assert.equal(phaseStartLogs[0].ctx?.correlationId, 'corr-id-def', 'Should include correlationId');
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+
+    it('includes correlationId in "Phase completed" log', async () => {
+      const eventBus = createEventBus();
+      const logMessages: { level: string; msg: string; ctx?: Record<string, unknown> }[] = [];
+      const spyLogger = {
+        trace: () => {},
+        debug: (msg: string, ctx?: unknown) => logMessages.push({ level: 'debug', msg, ctx: ctx as Record<string, unknown> }),
+        info: (msg: string, ctx?: unknown) => logMessages.push({ level: 'info', msg, ctx: ctx as Record<string, unknown> }),
+        warn: (msg: string, ctx?: unknown) => logMessages.push({ level: 'warn', msg, ctx: ctx as Record<string, unknown> }),
+        error: (msg: string, ctx?: unknown) => logMessages.push({ level: 'error', msg, ctx: ctx as Record<string, unknown> }),
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const phaseRunner = createPhaseRunner({ gateChecker: passingGate });
+      const unsub = startExecutionEngine({ eventBus, logger: spyLogger as ReturnType<typeof createLogger>, phaseRunner });
+
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: makePlan(),
+      }, 'corr-id-ghi'));
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const phaseCompleteLogs = logMessages.filter((l) => l.msg === 'Phase completed');
+      assert.ok(phaseCompleteLogs.length > 0, 'Should log "Phase completed"');
+      assert.equal(phaseCompleteLogs[0].ctx?.correlationId, 'corr-id-ghi', 'Should include correlationId');
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+
+    it('includes correlationId in "Plan execution completed" log', async () => {
+      const eventBus = createEventBus();
+      const logMessages: { level: string; msg: string; ctx?: Record<string, unknown> }[] = [];
+      const spyLogger = {
+        trace: () => {},
+        debug: (msg: string, ctx?: unknown) => logMessages.push({ level: 'debug', msg, ctx: ctx as Record<string, unknown> }),
+        info: (msg: string, ctx?: unknown) => logMessages.push({ level: 'info', msg, ctx: ctx as Record<string, unknown> }),
+        warn: (msg: string, ctx?: unknown) => logMessages.push({ level: 'warn', msg, ctx: ctx as Record<string, unknown> }),
+        error: (msg: string, ctx?: unknown) => logMessages.push({ level: 'error', msg, ctx: ctx as Record<string, unknown> }),
+        fatal: () => {},
+        child: () => spyLogger,
+      };
+
+      const phaseRunner = createPhaseRunner({ gateChecker: passingGate });
+      const unsub = startExecutionEngine({ eventBus, logger: spyLogger as ReturnType<typeof createLogger>, phaseRunner });
+
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: makePlan(),
+      }, 'corr-id-jkl'));
+
+      await new Promise((r) => setTimeout(r, 100));
+
+      const completedLog = logMessages.find((l) => l.msg === 'Plan execution completed');
+      assert.ok(completedLog, 'Should log "Plan execution completed"');
+      assert.equal(completedLog!.ctx?.correlationId, 'corr-id-jkl', 'Should include correlationId');
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+  });
+
   describe('WorkCompleted event', () => {
     it('publishes WorkCompleted on successful execution', async () => {
       const eventBus = createEventBus();

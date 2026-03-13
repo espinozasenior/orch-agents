@@ -1,13 +1,13 @@
 /**
  * TDD: Tests for SwarmManager — initializes and shuts down claude-flow swarms.
  *
- * London School: McpClient and Logger are fully mocked.
+ * London School: CliClient and Logger are fully mocked.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WorkflowPlan } from '../../src/types';
-import type { McpClient, SwarmInitOpts } from '../../src/execution/mcp-client';
+import type { CliClient, SwarmInitOpts } from '../../src/execution/cli-client';
 import type { Logger, LogContext } from '../../src/shared/logger';
 import {
   type SwarmHandle,
@@ -59,8 +59,8 @@ function stubLogger(): Logger {
   };
 }
 
-/** Create a mock McpClient with spies for swarm methods. */
-function mockMcpClient(overrides: Partial<McpClient> = {}): McpClient & {
+/** Create a mock CliClient with spies for swarm methods. */
+function mockCliClient(overrides: Partial<CliClient> = {}): CliClient & {
   swarmInitCalls: SwarmInitOpts[];
   swarmShutdownCalls: string[];
 } {
@@ -104,7 +104,7 @@ describe('SwarmManager', () => {
     it('returns a SwarmManager object', () => {
       const manager = createSwarmManager({
         logger: stubLogger(),
-        mcpClient: mockMcpClient(),
+        cliClient: mockCliClient(),
       });
       assert.ok(manager);
       assert.equal(typeof manager.initSwarm, 'function');
@@ -113,9 +113,9 @@ describe('SwarmManager', () => {
   });
 
   describe('initSwarm()', () => {
-    it('calls mcpClient.swarmInit with correct params from WorkflowPlan', async () => {
-      const mcp = mockMcpClient();
-      const manager = createSwarmManager({ logger: stubLogger(), mcpClient: mcp });
+    it('calls cliClient.swarmInit with correct params from WorkflowPlan', async () => {
+      const mcp = mockCliClient();
+      const manager = createSwarmManager({ logger: stubLogger(), cliClient: mcp });
       const plan = makePlan();
 
       await manager.initSwarm(plan);
@@ -129,8 +129,8 @@ describe('SwarmManager', () => {
     });
 
     it('returns SwarmHandle with swarmId, topology, maxAgents, status active', async () => {
-      const mcp = mockMcpClient();
-      const manager = createSwarmManager({ logger: stubLogger(), mcpClient: mcp });
+      const mcp = mockCliClient();
+      const manager = createSwarmManager({ logger: stubLogger(), cliClient: mcp });
       const plan = makePlan();
 
       const handle = await manager.initSwarm(plan);
@@ -142,8 +142,8 @@ describe('SwarmManager', () => {
     });
 
     it('maps plan topology, strategy, consensus to swarm init opts', async () => {
-      const mcp = mockMcpClient();
-      const manager = createSwarmManager({ logger: stubLogger(), mcpClient: mcp });
+      const mcp = mockCliClient();
+      const manager = createSwarmManager({ logger: stubLogger(), cliClient: mcp });
       const plan = makePlan({
         topology: 'mesh',
         swarmStrategy: 'balanced',
@@ -162,13 +162,13 @@ describe('SwarmManager', () => {
       assert.equal(handle.maxAgents, 10);
     });
 
-    it('throws SwarmError when mcpClient fails', async () => {
-      const mcp = mockMcpClient({
+    it('throws SwarmError when cliClient fails', async () => {
+      const mcp = mockCliClient({
         swarmInit: async () => {
           throw new Error('MCP connection refused');
         },
       });
-      const manager = createSwarmManager({ logger: stubLogger(), mcpClient: mcp });
+      const manager = createSwarmManager({ logger: stubLogger(), cliClient: mcp });
 
       await assert.rejects(
         () => manager.initSwarm(makePlan()),
@@ -182,9 +182,9 @@ describe('SwarmManager', () => {
   });
 
   describe('shutdownSwarm()', () => {
-    it('calls mcpClient.swarmShutdown with the swarmId', async () => {
-      const mcp = mockMcpClient();
-      const manager = createSwarmManager({ logger: stubLogger(), mcpClient: mcp });
+    it('calls cliClient.swarmShutdown with the swarmId', async () => {
+      const mcp = mockCliClient();
+      const manager = createSwarmManager({ logger: stubLogger(), cliClient: mcp });
       const plan = makePlan();
 
       const handle = await manager.initSwarm(plan);
@@ -195,8 +195,8 @@ describe('SwarmManager', () => {
     });
 
     it('updates handle status to shutdown', async () => {
-      const mcp = mockMcpClient();
-      const manager = createSwarmManager({ logger: stubLogger(), mcpClient: mcp });
+      const mcp = mockCliClient();
+      const manager = createSwarmManager({ logger: stubLogger(), cliClient: mcp });
       const plan = makePlan();
 
       const handle = await manager.initSwarm(plan);
@@ -207,8 +207,8 @@ describe('SwarmManager', () => {
     });
 
     it('is idempotent - calling twice does not throw', async () => {
-      const mcp = mockMcpClient();
-      const manager = createSwarmManager({ logger: stubLogger(), mcpClient: mcp });
+      const mcp = mockCliClient();
+      const manager = createSwarmManager({ logger: stubLogger(), cliClient: mcp });
       const plan = makePlan();
 
       const handle = await manager.initSwarm(plan);
@@ -221,8 +221,8 @@ describe('SwarmManager', () => {
     });
 
     it('is a no-op for unknown swarmId', async () => {
-      const mcp = mockMcpClient();
-      const manager = createSwarmManager({ logger: stubLogger(), mcpClient: mcp });
+      const mcp = mockCliClient();
+      const manager = createSwarmManager({ logger: stubLogger(), cliClient: mcp });
 
       // Should not throw for an unknown swarmId
       await manager.shutdownSwarm('unknown-swarm');
