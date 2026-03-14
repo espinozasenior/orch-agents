@@ -14,7 +14,8 @@
     "test:integration": "node --import tsx --test tests/integration/*.test.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "setup": "node --import tsx src/setup/cli.ts"
   },
   "keywords": [
     "orchestration",

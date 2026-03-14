@@ -1,17 +1,64 @@
 /**
  * Tests for the Template Library.
+ *
+ * Covers: JSON loading, setTemplates/resetTemplates, validation,
+ * cross-reference validation, and existing public API.
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   getTemplate,
   listTemplateKeys,
   registerTemplate,
   unregisterTemplate,
   getDefaultTemplate,
+  setTemplates,
+  resetTemplates,
+  validateTemplates,
+  validateRoutingTemplateRefs,
   type WorkflowTemplate,
 } from '../src/planning/template-library';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeValidTemplate(overrides: Partial<WorkflowTemplate> = {}): WorkflowTemplate {
+  return {
+    key: 'test-tpl',
+    name: 'Test Template',
+    description: 'A test template',
+    methodology: 'adhoc',
+    phases: [{ type: 'refinement', agents: ['coder'], gate: 'tests-pass', skippable: false }],
+    defaultAgents: [{ role: 'coder', type: 'coder', tier: 2, required: true }],
+    topology: 'star',
+    consensus: 'none',
+    swarmStrategy: 'minimal',
+    maxAgents: 2,
+    estimatedDuration: 5,
+    estimatedCost: 0.01,
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Ensure templates are loaded from disk before each suite
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  resetTemplates();
+});
+
+afterEach(() => {
+  resetTemplates();
+});
+
+// ---------------------------------------------------------------------------
+// 1. Existing public API tests (must still pass)
+// ---------------------------------------------------------------------------
 
 describe('Template Library', () => {
   describe('getTemplate()', () => {
@@ -86,19 +133,7 @@ describe('Template Library', () => {
 
   describe('registerTemplate()', () => {
     it('adds a custom template', () => {
-      const custom: WorkflowTemplate = {
-        key: 'custom-test',
-        name: 'Custom Test',
-        description: 'test template',
-        methodology: 'adhoc',
-        phases: [{ type: 'refinement', agents: ['coder'], gate: 'tests-pass', skippable: false }],
-        defaultAgents: [{ role: 'coder', type: 'coder', tier: 2, required: true }],
-        topology: 'star',
-        consensus: 'none',
-        swarmStrategy: 'minimal',
-        maxAgents: 2,
-        estimatedDuration: 5,
-      };
+      const custom: WorkflowTemplate = makeValidTemplate({ key: 'custom-test', name: 'Custom Test' });
       registerTemplate(custom);
       const retrieved = getTemplate('custom-test');
       assert.ok(retrieved);
@@ -111,19 +146,19 @@ describe('Template Library', () => {
   });
 
   describe('getDefaultTemplate()', () => {
-    it('sparc-full → feature-build', () => {
+    it('sparc-full -> feature-build', () => {
       assert.equal(getDefaultTemplate('sparc-full').key, 'feature-build');
     });
 
-    it('tdd → tdd-workflow', () => {
+    it('tdd -> tdd-workflow', () => {
       assert.equal(getDefaultTemplate('tdd').key, 'tdd-workflow');
     });
 
-    it('sparc-partial → github-ops', () => {
+    it('sparc-partial -> github-ops', () => {
       assert.equal(getDefaultTemplate('sparc-partial').key, 'github-ops');
     });
 
-    it('adhoc → quick-fix', () => {
+    it('adhoc -> quick-fix', () => {
       assert.equal(getDefaultTemplate('adhoc').key, 'quick-fix');
     });
   });
@@ -160,6 +195,198 @@ describe('Template Library', () => {
           assert.ok([1, 2, 3].includes(agent.tier), `${key}/${agent.role}: invalid tier ${agent.tier}`);
         }
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 2. JSON loading tests
+  // -------------------------------------------------------------------------
+
+  describe('JSON loading', () => {
+    it('templates are loaded from config/workflow-templates.json', () => {
+      // Read the JSON file directly and compare with loaded templates
+      const filePath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+      const raw = readFileSync(filePath, 'utf-8');
+      const jsonTemplates = JSON.parse(raw) as WorkflowTemplate[];
+
+      const keys = listTemplateKeys();
+      for (const jt of jsonTemplates) {
+        assert.ok(keys.includes(jt.key), `JSON template ${jt.key} not found in loaded templates`);
+        const loaded = getTemplate(jt.key);
+        assert.ok(loaded);
+        assert.equal(loaded.name, jt.name);
+        assert.equal(loaded.methodology, jt.methodology);
+      }
+    });
+
+    it('JSON file contains exactly 7 templates', () => {
+      const filePath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+      const raw = readFileSync(filePath, 'utf-8');
+      const jsonTemplates = JSON.parse(raw) as WorkflowTemplate[];
+      assert.equal(jsonTemplates.length, 7);
+    });
+
+    it('each JSON template has estimatedCost field', () => {
+      const filePath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+      const raw = readFileSync(filePath, 'utf-8');
+      const jsonTemplates = JSON.parse(raw) as WorkflowTemplate[];
+      for (const jt of jsonTemplates) {
+        assert.ok(
+          typeof jt.estimatedCost === 'number',
+          `${jt.key}: missing or non-numeric estimatedCost`,
+        );
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 3. setTemplates / resetTemplates tests
+  // -------------------------------------------------------------------------
+
+  describe('setTemplates() / resetTemplates()', () => {
+    it('setTemplates overrides loaded templates', () => {
+      const custom = makeValidTemplate({ key: 'only-one', name: 'Only One' });
+      setTemplates([custom]);
+
+      const keys = listTemplateKeys();
+      assert.equal(keys.length, 1);
+      assert.equal(keys[0], 'only-one');
+      assert.equal(getTemplate('cicd-pipeline'), undefined);
+    });
+
+    it('resetTemplates reloads from disk', () => {
+      setTemplates([makeValidTemplate({ key: 'tmp' })]);
+      assert.equal(listTemplateKeys().length, 1);
+
+      resetTemplates();
+      const keys = listTemplateKeys();
+      assert.ok(keys.length >= 7, 'should reload all 7 templates from disk');
+      assert.ok(keys.includes('cicd-pipeline'));
+    });
+
+    it('setTemplates with empty array results in no templates', () => {
+      setTemplates([]);
+      assert.equal(listTemplateKeys().length, 0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 4. Validation tests
+  // -------------------------------------------------------------------------
+
+  describe('validateTemplates()', () => {
+    it('passes for valid templates loaded from JSON', () => {
+      const errors = validateTemplates();
+      assert.equal(errors.length, 0, `Unexpected errors: ${errors.join('; ')}`);
+    });
+
+    it('catches invalid tier values', () => {
+      setTemplates([
+        makeValidTemplate({
+          key: 'bad-tier',
+          defaultAgents: [{ role: 'x', type: 'coder', tier: 5 as unknown as 1, required: true }],
+        }),
+      ]);
+      const errors = validateTemplates();
+      assert.ok(errors.length > 0);
+      assert.ok(errors.some((e) => e.includes('tier')), `Expected tier error, got: ${errors}`);
+    });
+
+    it('catches missing required fields', () => {
+      setTemplates([
+        {
+          key: 'missing-fields',
+          name: '',
+          description: '',
+          methodology: 'adhoc',
+          phases: [],
+          defaultAgents: [],
+          topology: 'star',
+          consensus: 'none',
+          swarmStrategy: 'minimal',
+          maxAgents: 0,
+          estimatedDuration: 0,
+          estimatedCost: 0,
+        } as WorkflowTemplate,
+      ]);
+      const errors = validateTemplates();
+      assert.ok(errors.length > 0);
+      assert.ok(
+        errors.some((e) => e.includes('name') || e.includes('phases') || e.includes('maxAgents')),
+        `Expected field errors, got: ${errors}`,
+      );
+    });
+
+    it('catches invalid phase types', () => {
+      setTemplates([
+        makeValidTemplate({
+          key: 'bad-phase',
+          phases: [{ type: 'invalid-phase' as never, agents: ['coder'], gate: 'g', skippable: false }],
+        }),
+      ]);
+      const errors = validateTemplates();
+      assert.ok(errors.length > 0);
+      assert.ok(errors.some((e) => e.includes('phase')), `Expected phase error, got: ${errors}`);
+    });
+
+    it('catches invalid topology values', () => {
+      setTemplates([
+        makeValidTemplate({
+          key: 'bad-topo',
+          topology: 'invalid-topo' as never,
+        }),
+      ]);
+      const errors = validateTemplates();
+      assert.ok(errors.length > 0);
+      assert.ok(errors.some((e) => e.includes('topology')), `Expected topology error, got: ${errors}`);
+    });
+
+    it('catches invalid consensus values', () => {
+      setTemplates([
+        makeValidTemplate({
+          key: 'bad-consensus',
+          consensus: 'paxos' as never,
+        }),
+      ]);
+      const errors = validateTemplates();
+      assert.ok(errors.length > 0);
+      assert.ok(errors.some((e) => e.includes('consensus')), `Expected consensus error, got: ${errors}`);
+    });
+
+    it('catches invalid swarmStrategy values', () => {
+      setTemplates([
+        makeValidTemplate({
+          key: 'bad-strategy',
+          swarmStrategy: 'aggressive' as never,
+        }),
+      ]);
+      const errors = validateTemplates();
+      assert.ok(errors.length > 0);
+      assert.ok(errors.some((e) => e.includes('swarmStrategy')), `Expected strategy error, got: ${errors}`);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 5. Cross-reference validation tests
+  // -------------------------------------------------------------------------
+
+  describe('validateRoutingTemplateRefs()', () => {
+    it('passes when all routing templates exist', () => {
+      // Default state: all 7 templates loaded, routing references them
+      const errors = validateRoutingTemplateRefs();
+      assert.equal(errors.length, 0, `Unexpected errors: ${errors.join('; ')}`);
+    });
+
+    it('catches orphan template references from routing config', () => {
+      // Remove some templates so routing refs become orphaned
+      setTemplates([makeValidTemplate({ key: 'cicd-pipeline' })]);
+      const errors = validateRoutingTemplateRefs();
+      assert.ok(errors.length > 0, 'should detect orphan template references');
+      // Routing config references quick-fix, github-ops, etc. which are now missing
+      assert.ok(
+        errors.some((e) => e.includes('quick-fix') || e.includes('github-ops')),
+        `Expected orphan ref error, got: ${errors}`,
+      );
     });
   });
 });

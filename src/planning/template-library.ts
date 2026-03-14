@@ -4,10 +4,16 @@
  * Maps template keys (from github-routing.json) to concrete workflow
  * configurations: SPARC phases, agent teams, topology, and consensus.
  *
+ * Templates are loaded from config/workflow-templates.json on first access
+ * (lazy singleton). Use setTemplates()/resetTemplates() for test overrides.
+ *
  * Templates are the bridge between triage output and the planning engine.
  */
 
-import type { PlannedPhase, PlannedAgent, SPARCPhase } from '../types';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import type { PlannedPhase, PlannedAgent } from '../types';
+import { isValidSPARCPhase } from '../shared/constants';
 
 // ---------------------------------------------------------------------------
 // Template definition
@@ -25,157 +31,160 @@ export interface WorkflowTemplate {
   swarmStrategy: 'specialized' | 'balanced' | 'minimal';
   maxAgents: number;
   estimatedDuration: number; // minutes
+  estimatedCost?: number;
 }
 
 // ---------------------------------------------------------------------------
-// Built-in templates (from Appendix A template keys)
+// Valid enum values for validation
 // ---------------------------------------------------------------------------
 
-const TEMPLATES: Map<string, WorkflowTemplate> = new Map([
-  ['cicd-pipeline', {
-    key: 'cicd-pipeline',
-    name: 'CI/CD Pipeline',
-    description: 'Validate code on push to default branch',
-    methodology: 'sparc-partial',
-    phases: [
-      { type: 'refinement' as SPARCPhase, agents: ['tester', 'reviewer'], gate: 'tests-pass', skippable: false },
-      { type: 'completion' as SPARCPhase, agents: ['coder'], gate: 'build-pass', skippable: false },
-    ],
-    defaultAgents: [
-      { role: 'validator', type: 'tester', tier: 2, required: true },
-      { role: 'reviewer', type: 'reviewer', tier: 2, required: false },
-      { role: 'deployer', type: 'coder', tier: 2, required: true },
-    ],
-    topology: 'hierarchical',
-    consensus: 'raft',
-    swarmStrategy: 'minimal',
-    maxAgents: 4,
-    estimatedDuration: 10,
-  }],
-  ['quick-fix', {
-    key: 'quick-fix',
-    name: 'Quick Fix',
-    description: 'Fast single-phase fix for low-complexity tasks',
-    methodology: 'adhoc',
-    phases: [
-      { type: 'refinement' as SPARCPhase, agents: ['coder'], gate: 'tests-pass', skippable: false },
-    ],
-    defaultAgents: [
-      { role: 'implementer', type: 'coder', tier: 2, required: true },
-      { role: 'validator', type: 'tester', tier: 2, required: false },
-    ],
-    topology: 'star',
-    consensus: 'none',
-    swarmStrategy: 'minimal',
-    maxAgents: 3,
-    estimatedDuration: 5,
-  }],
-  ['github-ops', {
-    key: 'github-ops',
-    name: 'GitHub Operations',
-    description: 'PR review, issue triage, and GitHub-specific workflows',
-    methodology: 'sparc-partial',
-    phases: [
-      { type: 'specification' as SPARCPhase, agents: ['architect'], gate: 'spec-approved', skippable: true },
-      { type: 'refinement' as SPARCPhase, agents: ['reviewer', 'coder'], gate: 'review-approved', skippable: false },
-    ],
-    defaultAgents: [
-      { role: 'lead', type: 'architect', tier: 3, required: false },
-      { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
-      { role: 'implementer', type: 'coder', tier: 2, required: true },
-    ],
-    topology: 'hierarchical',
-    consensus: 'raft',
-    swarmStrategy: 'specialized',
-    maxAgents: 5,
-    estimatedDuration: 15,
-  }],
-  ['tdd-workflow', {
-    key: 'tdd-workflow',
-    name: 'TDD Workflow',
-    description: 'Test-driven development for bug fixes',
-    methodology: 'tdd',
-    phases: [
-      { type: 'specification' as SPARCPhase, agents: ['tester'], gate: 'test-written', skippable: false },
-      { type: 'refinement' as SPARCPhase, agents: ['coder'], gate: 'tests-pass', skippable: false },
-      { type: 'completion' as SPARCPhase, agents: ['reviewer'], gate: 'review-approved', skippable: false },
-    ],
-    defaultAgents: [
-      { role: 'test-writer', type: 'tester', tier: 2, required: true },
-      { role: 'implementer', type: 'coder', tier: 3, required: true },
-      { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
-    ],
-    topology: 'hierarchical',
-    consensus: 'raft',
-    swarmStrategy: 'specialized',
-    maxAgents: 5,
-    estimatedDuration: 20,
-  }],
-  ['feature-build', {
-    key: 'feature-build',
-    name: 'Feature Build',
-    description: 'Full SPARC methodology for new features',
-    methodology: 'sparc-full',
-    phases: [
-      { type: 'specification' as SPARCPhase, agents: ['architect', 'researcher'], gate: 'spec-approved', skippable: false },
-      { type: 'pseudocode' as SPARCPhase, agents: ['architect'], gate: 'pseudocode-reviewed', skippable: false },
-      { type: 'architecture' as SPARCPhase, agents: ['architect', 'security-architect'], gate: 'arch-approved', skippable: false },
-      { type: 'refinement' as SPARCPhase, agents: ['coder', 'tester'], gate: 'tests-pass', skippable: false },
-      { type: 'completion' as SPARCPhase, agents: ['reviewer', 'coder'], gate: 'review-approved', skippable: false },
-    ],
-    defaultAgents: [
-      { role: 'lead', type: 'architect', tier: 3, required: true },
-      { role: 'implementer', type: 'coder', tier: 3, required: true },
-      { role: 'validator', type: 'tester', tier: 2, required: true },
-      { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
-      { role: 'researcher', type: 'researcher', tier: 2, required: false },
-      { role: 'security', type: 'security-architect', tier: 3, required: false },
-    ],
-    topology: 'hierarchical-mesh',
-    consensus: 'raft',
-    swarmStrategy: 'specialized',
-    maxAgents: 8,
-    estimatedDuration: 45,
-  }],
-  ['release-pipeline', {
-    key: 'release-pipeline',
-    name: 'Release Pipeline',
-    description: 'Post-merge and release deployment workflow',
-    methodology: 'sparc-partial',
-    phases: [
-      { type: 'completion' as SPARCPhase, agents: ['coder', 'tester'], gate: 'deploy-verified', skippable: false },
-    ],
-    defaultAgents: [
-      { role: 'deployer', type: 'coder', tier: 2, required: true },
-      { role: 'validator', type: 'tester', tier: 2, required: true },
-    ],
-    topology: 'hierarchical',
-    consensus: 'raft',
-    swarmStrategy: 'minimal',
-    maxAgents: 4,
-    estimatedDuration: 10,
-  }],
-  ['monitoring-alerting', {
-    key: 'monitoring-alerting',
-    name: 'Monitoring & Alerting',
-    description: 'Incident response for deployment failures',
-    methodology: 'adhoc',
-    phases: [
-      { type: 'refinement' as SPARCPhase, agents: ['coder', 'tester'], gate: 'fix-verified', skippable: false },
-      { type: 'completion' as SPARCPhase, agents: ['coder'], gate: 'deploy-verified', skippable: false },
-    ],
-    defaultAgents: [
-      { role: 'incident-lead', type: 'architect', tier: 3, required: true },
-      { role: 'fixer', type: 'coder', tier: 3, required: true },
-      { role: 'validator', type: 'tester', tier: 2, required: true },
-    ],
-    topology: 'star',
-    consensus: 'none',
-    swarmStrategy: 'minimal',
-    maxAgents: 4,
-    estimatedDuration: 15,
-  }],
+const VALID_TOPOLOGIES = new Set<string>([
+  'mesh', 'hierarchical', 'hierarchical-mesh', 'ring', 'star', 'adaptive',
 ]);
+
+const VALID_CONSENSUS = new Set<string>(['raft', 'pbft', 'none']);
+
+const VALID_STRATEGIES = new Set<string>(['specialized', 'balanced', 'minimal']);
+
+const VALID_METHODOLOGIES = new Set<string>([
+  'sparc-full', 'sparc-partial', 'tdd', 'adhoc', 'testing',
+]);
+
+// ---------------------------------------------------------------------------
+// Lazy-loaded template store
+// ---------------------------------------------------------------------------
+
+let _templates: Map<string, WorkflowTemplate> | undefined;
+
+function loadTemplatesFromDisk(): Map<string, WorkflowTemplate> {
+  const filePath = resolve(__dirname, '..', '..', 'config', 'workflow-templates.json');
+  const raw = readFileSync(filePath, 'utf-8');
+  const entries = JSON.parse(raw) as WorkflowTemplate[];
+  const map = new Map<string, WorkflowTemplate>();
+  for (const entry of entries) {
+    map.set(entry.key, entry);
+  }
+  return map;
+}
+
+function getTemplatesMap(): Map<string, WorkflowTemplate> {
+  if (!_templates) {
+    _templates = loadTemplatesFromDisk();
+  }
+  return _templates;
+}
+
+// ---------------------------------------------------------------------------
+// Test override helpers (same pattern as github-normalizer / triage-engine)
+// ---------------------------------------------------------------------------
+
+/**
+ * Override the templates map (for testing).
+ */
+export function setTemplates(templates: WorkflowTemplate[]): void {
+  _templates = new Map(templates.map((t) => [t.key, t]));
+}
+
+/**
+ * Reset templates to force reload from disk on next access.
+ */
+export function resetTemplates(): void {
+  _templates = undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate all currently loaded templates.
+ * Returns an array of human-readable error strings (empty = valid).
+ */
+export function validateTemplates(): string[] {
+  const errors: string[] = [];
+  const map = getTemplatesMap();
+
+  for (const [key, t] of map) {
+    // Required string fields
+    if (!t.name) errors.push(`${key}: missing or empty name`);
+    if (!t.description) errors.push(`${key}: missing or empty description`);
+
+    // Methodology
+    if (!VALID_METHODOLOGIES.has(t.methodology)) {
+      errors.push(`${key}: invalid methodology "${t.methodology}"`);
+    }
+
+    // Phases
+    if (!t.phases || t.phases.length === 0) {
+      errors.push(`${key}: phases array is empty or missing`);
+    } else {
+      for (const phase of t.phases) {
+        if (!isValidSPARCPhase(phase.type)) {
+          errors.push(`${key}: invalid phase type "${phase.type}"`);
+        }
+      }
+    }
+
+    // Agents
+    if (!t.defaultAgents || t.defaultAgents.length === 0) {
+      errors.push(`${key}: defaultAgents array is empty or missing`);
+    } else {
+      for (const agent of t.defaultAgents) {
+        if (![1, 2, 3].includes(agent.tier)) {
+          errors.push(`${key}/${agent.role}: invalid tier ${agent.tier} (must be 1, 2, or 3)`);
+        }
+      }
+    }
+
+    // Topology
+    if (!VALID_TOPOLOGIES.has(t.topology)) {
+      errors.push(`${key}: invalid topology "${t.topology}"`);
+    }
+
+    // Consensus
+    if (!VALID_CONSENSUS.has(t.consensus)) {
+      errors.push(`${key}: invalid consensus "${t.consensus}"`);
+    }
+
+    // Strategy
+    if (!VALID_STRATEGIES.has(t.swarmStrategy)) {
+      errors.push(`${key}: invalid swarmStrategy "${t.swarmStrategy}"`);
+    }
+
+    // Max agents
+    if (!t.maxAgents || t.maxAgents <= 0) {
+      errors.push(`${key}: maxAgents must be > 0`);
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Cross-reference validation: check every `template` value in
+ * config/github-routing.json has a matching entry in the templates map.
+ *
+ * Returns an array of error strings (empty = all refs are valid).
+ */
+export function validateRoutingTemplateRefs(): string[] {
+  const errors: string[] = [];
+  const map = getTemplatesMap();
+
+  const routingPath = resolve(__dirname, '..', '..', 'config', 'github-routing.json');
+  const raw = readFileSync(routingPath, 'utf-8');
+  const rules = JSON.parse(raw) as Array<{ template: string; event: string; action: string | null }>;
+
+  for (const rule of rules) {
+    if (!map.has(rule.template)) {
+      errors.push(
+        `Routing rule (event=${rule.event}, action=${rule.action}) references ` +
+        `template "${rule.template}" which does not exist in workflow-templates.json`,
+      );
+    }
+  }
+
+  return errors;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -186,28 +195,28 @@ const TEMPLATES: Map<string, WorkflowTemplate> = new Map([
  * Returns undefined if not found.
  */
 export function getTemplate(key: string): WorkflowTemplate | undefined {
-  return TEMPLATES.get(key);
+  return getTemplatesMap().get(key);
 }
 
 /**
  * List all registered template keys.
  */
 export function listTemplateKeys(): string[] {
-  return [...TEMPLATES.keys()];
+  return [...getTemplatesMap().keys()];
 }
 
 /**
  * Register a custom template (for extensibility and testing).
  */
 export function registerTemplate(template: WorkflowTemplate): void {
-  TEMPLATES.set(template.key, template);
+  getTemplatesMap().set(template.key, template);
 }
 
 /**
  * Unregister a custom template (for test cleanup).
  */
 export function unregisterTemplate(key: string): void {
-  TEMPLATES.delete(key);
+  getTemplatesMap().delete(key);
 }
 
 /**
@@ -215,11 +224,12 @@ export function unregisterTemplate(key: string): void {
  */
 export function getDefaultTemplate(
   methodology: 'sparc-full' | 'sparc-partial' | 'tdd' | 'adhoc',
-): WorkflowTemplate {
+): WorkflowTemplate | undefined {
+  const map = getTemplatesMap();
   switch (methodology) {
-    case 'sparc-full': return TEMPLATES.get('feature-build')!;
-    case 'tdd': return TEMPLATES.get('tdd-workflow')!;
-    case 'sparc-partial': return TEMPLATES.get('github-ops')!;
-    case 'adhoc': return TEMPLATES.get('quick-fix')!;
+    case 'sparc-full': return map.get('feature-build');
+    case 'tdd': return map.get('tdd-workflow');
+    case 'sparc-partial': return map.get('github-ops');
+    case 'adhoc': return map.get('quick-fix');
   }
 }
