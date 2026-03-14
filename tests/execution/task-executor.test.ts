@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
   createStubTaskExecutor,
   createClaudeTaskExecutor,
+  extractJson,
   type TaskExecutor,
   type TaskExecutionRequest,
   type TaskExecutionResult,
@@ -33,6 +34,22 @@ function makeRequest(overrides: Partial<TaskExecutionRequest> = {}): TaskExecuti
     metadata: { planId: 'plan-001', workItemId: 'work-001' },
     ...overrides,
   };
+}
+
+/** Collect log calls for assertions. */
+function makeSpyLogger(): Logger & { calls: { level: string; msg: string; ctx?: LogContext }[] } {
+  const calls: { level: string; msg: string; ctx?: LogContext }[] = [];
+  const spy: Logger & { calls: typeof calls } = {
+    calls,
+    trace: (msg: string, ctx?: LogContext) => calls.push({ level: 'trace', msg, ctx }),
+    debug: (msg: string, ctx?: LogContext) => calls.push({ level: 'debug', msg, ctx }),
+    info: (msg: string, ctx?: LogContext) => calls.push({ level: 'info', msg, ctx }),
+    warn: (msg: string, ctx?: LogContext) => calls.push({ level: 'warn', msg, ctx }),
+    error: (msg: string, ctx?: LogContext) => calls.push({ level: 'error', msg, ctx }),
+    fatal: (msg: string, ctx?: LogContext) => calls.push({ level: 'fatal', msg, ctx }),
+    child: () => spy,
+  };
+  return spy;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,22 +151,6 @@ describe('TaskExecutor', () => {
   // -------------------------------------------------------------------------
 
   describe('createClaudeTaskExecutor() — logger instrumentation', () => {
-    /** Collect log calls for assertions. */
-    function makeSpyLogger(): Logger & { calls: { level: string; msg: string; ctx?: LogContext }[] } {
-      const calls: { level: string; msg: string; ctx?: LogContext }[] = [];
-      const spy: Logger & { calls: typeof calls } = {
-        calls,
-        trace: (msg: string, ctx?: LogContext) => calls.push({ level: 'trace', msg, ctx }),
-        debug: (msg: string, ctx?: LogContext) => calls.push({ level: 'debug', msg, ctx }),
-        info: (msg: string, ctx?: LogContext) => calls.push({ level: 'info', msg, ctx }),
-        warn: (msg: string, ctx?: LogContext) => calls.push({ level: 'warn', msg, ctx }),
-        error: (msg: string, ctx?: LogContext) => calls.push({ level: 'error', msg, ctx }),
-        fatal: (msg: string, ctx?: LogContext) => calls.push({ level: 'fatal', msg, ctx }),
-        child: () => spy,
-      };
-      return spy;
-    }
-
     /**
      * Build a mock 'claude' script that echoes JSON.
      * We use a small inline Node script so we control exit code + stdout.
@@ -273,6 +274,245 @@ describe('TaskExecutor', () => {
       // Should not throw
       const result = await executor.execute(makeRequest());
       assert.ok(result.status, 'Should still return a result');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Step 2: extractJson hardening
+  // -------------------------------------------------------------------------
+
+  describe('extractJson() — hook pollution hardening', () => {
+    it('preserves existing behavior for clean JSON input', () => {
+      const input = '{"valid": true}';
+      const result = extractJson(input);
+      assert.equal(result, '{"valid": true}');
+    });
+
+    it('preserves existing behavior for fenced JSON input', () => {
+      const input = '```json\n{"fenced": true}\n```';
+      const result = extractJson(input);
+      assert.equal(result, '{"fenced": true}');
+    });
+
+    it('extracts JSON correctly when preceded by hook output lines', () => {
+      const input = [
+        '[hook: session-start] Restoring session...',
+        'Session restored from backup',
+        'Memory imported from project',
+        '{"valid": true}',
+      ].join('\n');
+      const result = extractJson(input);
+      assert.ok(result !== undefined, 'Should extract JSON');
+      assert.deepEqual(JSON.parse(result!), { valid: true });
+    });
+
+    it('extracts JSON correctly when followed by hook output lines', () => {
+      const input = [
+        '{"valid": true}',
+        '[hook: session-end] consolidating...',
+        'Intelligence consolidated',
+        'Auto-memory synced',
+      ].join('\n');
+      const result = extractJson(input);
+      assert.ok(result !== undefined, 'Should extract JSON');
+      assert.deepEqual(JSON.parse(result!), { valid: true });
+    });
+
+    it('extracts JSON correctly when interleaved with hook output', () => {
+      const input = [
+        '[hook: session-start] Restoring session...',
+        'Session restored from backup',
+        '{"result": "success", "count": 42}',
+        '[hook: session-end] consolidating...',
+        'Intelligence consolidated',
+      ].join('\n');
+      const result = extractJson(input);
+      assert.ok(result !== undefined, 'Should extract JSON');
+      assert.deepEqual(JSON.parse(result!), { result: 'success', count: 42 });
+    });
+
+    it('identifies [hook: ...] patterns', () => {
+      const input = '[hook: session-start] Restoring session...\n{"ok": true}';
+      const result = extractJson(input);
+      assert.ok(result !== undefined);
+      assert.deepEqual(JSON.parse(result!), { ok: true });
+    });
+
+    it('identifies "Session restored" pattern', () => {
+      const input = 'Session restored from backup\n{"ok": true}';
+      const result = extractJson(input);
+      assert.ok(result !== undefined);
+      assert.deepEqual(JSON.parse(result!), { ok: true });
+    });
+
+    it('identifies "Memory imported" pattern', () => {
+      const input = 'Memory imported from project\n{"ok": true}';
+      const result = extractJson(input);
+      assert.ok(result !== undefined);
+      assert.deepEqual(JSON.parse(result!), { ok: true });
+    });
+
+    it('identifies "Intelligence consolidated" pattern', () => {
+      const input = 'Intelligence consolidated\n{"ok": true}';
+      const result = extractJson(input);
+      assert.ok(result !== undefined);
+      assert.deepEqual(JSON.parse(result!), { ok: true });
+    });
+
+    it('identifies "Auto-memory synced" pattern', () => {
+      const input = 'Auto-memory synced\n{"ok": true}';
+      const result = extractJson(input);
+      assert.ok(result !== undefined);
+      assert.deepEqual(JSON.parse(result!), { ok: true });
+    });
+
+    it('identifies bracketed hook patterns like [SessionEnd hook]', () => {
+      const input = '[SessionEnd hook] running cleanup\n{"ok": true}';
+      const result = extractJson(input);
+      assert.ok(result !== undefined);
+      assert.deepEqual(JSON.parse(result!), { ok: true });
+    });
+
+    it('does NOT strip legitimate JSON containing the word "hook"', () => {
+      const input = '{"hookEnabled": true, "type": "webhook"}';
+      const result = extractJson(input);
+      assert.ok(result !== undefined, 'Should not strip legitimate JSON');
+      assert.deepEqual(JSON.parse(result!), { hookEnabled: true, type: 'webhook' });
+    });
+
+    it('returns undefined for input that is only hook output', () => {
+      const input = [
+        '[hook: session-start] Restoring session...',
+        'Session restored from backup',
+        'Intelligence consolidated',
+      ].join('\n');
+      const result = extractJson(input);
+      assert.equal(result, undefined);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Step 3: task-executor.ts integration with sandbox
+  // -------------------------------------------------------------------------
+
+  describe('createClaudeTaskExecutor() — sandbox integration', () => {
+    it('spawned process uses a cwd that is NOT the project directory', async () => {
+      const logger = makeSpyLogger();
+      const executor = createClaudeTaskExecutor({
+        cliBin: 'node',
+        defaultTimeout: 5000,
+        logger,
+      });
+
+      // Use a node script that prints its cwd to stdout
+      await executor.execute(makeRequest({
+        prompt: '-e "process.stdout.write(process.cwd())"',
+      }));
+
+      // The spawn log should contain sandbox info
+      const spawnLog = logger.calls.find((c) => c.msg === 'Task executor: process spawned');
+      assert.ok(spawnLog, 'Should log process spawned');
+      assert.ok(spawnLog!.ctx?.sandboxCwd, 'Should include sandboxCwd');
+      assert.notEqual(
+        spawnLog!.ctx?.sandboxCwd,
+        process.cwd(),
+        'Sandbox cwd should differ from project cwd',
+      );
+    });
+
+    it('after execution completes, temporary directory is cleaned up', async () => {
+      const logger = makeSpyLogger();
+      const executor = createClaudeTaskExecutor({
+        cliBin: 'node',
+        defaultTimeout: 5000,
+        logger,
+      });
+
+      await executor.execute(makeRequest({ prompt: '' }));
+
+      const spawnLog = logger.calls.find((c) => c.msg === 'Task executor: process spawned');
+      assert.ok(spawnLog?.ctx?.sandboxCwd, 'Should have sandbox cwd');
+
+      const fs = await import('node:fs');
+      assert.ok(
+        !fs.existsSync(spawnLog!.ctx!.sandboxCwd as string),
+        'Sandbox directory should be cleaned up after completion',
+      );
+    });
+
+    it('after execution fails, temporary directory is still cleaned up', async () => {
+      const logger = makeSpyLogger();
+      const executor = createClaudeTaskExecutor({
+        cliBin: 'node',
+        defaultTimeout: 5000,
+        logger,
+      });
+
+      // Script that exits with code 1
+      await executor.execute(makeRequest({
+        prompt: '-e "process.exit(1)"',
+      }));
+
+      const spawnLog = logger.calls.find((c) => c.msg === 'Task executor: process spawned');
+      assert.ok(spawnLog?.ctx?.sandboxCwd, 'Should have sandbox cwd');
+
+      const fs = await import('node:fs');
+      assert.ok(
+        !fs.existsSync(spawnLog!.ctx!.sandboxCwd as string),
+        'Sandbox directory should be cleaned up even after failure',
+      );
+    });
+
+    it('extractJson with hook-polluted output still extracts valid JSON', async () => {
+      // Write a temp script that outputs hook pollution + JSON
+      const fs = await import('node:fs');
+      const os = await import('node:os');
+      const path = await import('node:path');
+      const scriptPath = path.join(os.tmpdir(), `hook-test-${Date.now()}.js`);
+      fs.writeFileSync(scriptPath, [
+        'process.stdout.write("[hook: session-start] Restoring...\\n");',
+        'process.stdout.write("Session restored from backup\\n");',
+        'process.stdout.write(JSON.stringify({status:"ok",data:123})+"\\n");',
+        'process.stdout.write("[hook: session-end] consolidating...\\n");',
+        'process.stdout.write("Intelligence consolidated\\n");',
+      ].join('\n'));
+
+      try {
+        const logger = makeSpyLogger();
+        const executor = createClaudeTaskExecutor({
+          cliBin: 'node',
+          defaultTimeout: 5000,
+          logger,
+        });
+
+        // Override: use the temp script path as the prompt, but we need to
+        // actually invoke node with different args. Since spawn uses
+        // ['--print', '-'], we need a different approach.
+        // Instead, test extractJson directly with polluted output (already
+        // covered in Step 2 tests), and here just verify the integration
+        // still produces valid results through the executor.
+        const result = await executor.execute(makeRequest({ prompt: '' }));
+
+        // The key assertion: extractJson is called on the output and the
+        // executor does not crash. The detailed extraction is tested in
+        // the extractJson test suite.
+        assert.ok(result.status, 'Should return a result status');
+
+        // Also verify via direct extractJson call with polluted content
+        const polluted = [
+          '[hook: session-start] Restoring...',
+          'Session restored from backup',
+          '{"status":"ok","data":123}',
+          '[hook: session-end] consolidating...',
+          'Intelligence consolidated',
+        ].join('\n');
+
+        const extracted = extractJson(polluted);
+        assert.ok(extracted !== undefined, 'Should extract JSON from polluted output');
+        assert.deepEqual(JSON.parse(extracted!), { status: 'ok', data: 123 });
+      } finally {
+        fs.unlinkSync(scriptPath);
+      }
     });
   });
 });

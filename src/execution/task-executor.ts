@@ -6,8 +6,11 @@
  * - createClaudeTaskExecutor() — real Claude CLI invocation (Phase 4+)
  */
 
+import { spawn as _spawn } from 'node:child_process';
 import type { SPARCPhase } from '../types';
 import type { Logger } from '../shared/logger';
+import { createAgentSandbox, type AgentSandbox } from './agent-sandbox';
+import { buildSafeEnv } from './cli-client';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -112,14 +115,18 @@ export function createClaudeTaskExecutor(opts: ClaudeTaskExecutorOpts = {}): Tas
     async execute(request: TaskExecutionRequest): Promise<TaskExecutionResult> {
       const startTime = Date.now();
       const timeout = request.timeout || defaultTimeout;
+      let sandbox: AgentSandbox | undefined;
 
       try {
-        const { spawn } = await import('node:child_process');
+        // Create an isolated sandbox to prevent hook pollution
+        sandbox = createAgentSandbox();
 
-        const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
-          const child = spawn(cliBin, ['--print', '-'], {
+          const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve, reject) => {
+          const child = _spawn(cliBin, ['--print', '-'], {
+            cwd: sandbox!.cwd,
             timeout,
-            env: { ...process.env, FORCE_COLOR: '0' },
+            // QUALITY-10 FIX: Only pass safe env vars, not entire process.env
+            env: buildSafeEnv(),
             stdio: ['pipe', 'pipe', 'pipe'],
           });
 
@@ -130,6 +137,7 @@ export function createClaudeTaskExecutor(opts: ClaudeTaskExecutorOpts = {}): Tas
             agentRole: request.agentRole,
             phaseType: request.phaseType,
             timeoutMs: timeout,
+            sandboxCwd: sandbox!.cwd,
           });
 
           let stdout = '';
@@ -198,6 +206,9 @@ export function createClaudeTaskExecutor(opts: ClaudeTaskExecutorOpts = {}): Tas
           duration,
           error: message,
         };
+      } finally {
+        // Always clean up sandbox, even on failure
+        sandbox?.cleanup();
       }
     },
   };
@@ -208,12 +219,95 @@ export function createClaudeTaskExecutor(opts: ClaudeTaskExecutorOpts = {}): Tas
 // ---------------------------------------------------------------------------
 
 /**
- * Extract a JSON block from Claude's response text.
- * Looks for ```json ... ``` blocks or raw JSON objects.
+ * Check if a line is hook output that should be stripped before JSON extraction.
+ * Only matches standalone hook diagnostic lines, not JSON content.
  */
-function extractJson(text: string): string | undefined {
+function isHookOutput(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return false;
+
+  // [hook: session-start], [hook: session-end], etc.
+  if (trimmed.startsWith('[hook:')) return true;
+
+  // [SessionEnd hook], [UserPromptSubmit hook], etc.
+  if (/^\[.*hook.*\]/i.test(trimmed)) return true;
+
+  // Known hook diagnostic messages
+  if (trimmed.startsWith('Session restored')) return true;
+  if (trimmed.startsWith('Memory imported')) return true;
+  if (trimmed.startsWith('Intelligence consolidated')) return true;
+  if (trimmed.startsWith('Auto-memory synced')) return true;
+
+  return false;
+}
+
+/**
+ * Strip known hook output lines from text before JSON extraction.
+ * Only strips lines that are clearly hook diagnostic output.
+ * Preserves any line that could be part of valid JSON.
+ */
+function stripHookOutput(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !isHookOutput(line))
+    .join('\n');
+}
+
+/**
+ * Extract the first balanced JSON object from text using brace counting.
+ * Handles nested objects correctly unlike regex approaches.
+ */
+function extractBalancedJson(text: string): string | undefined {
+  const start = text.indexOf('{');
+  if (start === -1) return undefined;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (ch === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Extract a JSON block from Claude's response text.
+ * First strips known hook output patterns, then looks for
+ * ```json ... ``` blocks or raw JSON objects.
+ */
+export function extractJson(text: string): string | undefined {
+  // Step 1: Strip known hook output patterns (defense-in-depth)
+  const cleaned = stripHookOutput(text);
+
   // Try fenced code block first
-  const fenced = text.match(/```json\s*\n?([\s\S]*?)```/);
+  const fenced = cleaned.match(/```json\s*\n?([\s\S]*?)```/);
   if (fenced?.[1]) {
     try {
       JSON.parse(fenced[1].trim());
@@ -221,21 +315,12 @@ function extractJson(text: string): string | undefined {
     } catch { /* not valid JSON */ }
   }
 
-  // Try raw JSON object (non-greedy: find the first balanced { ... })
-  const jsonMatch = text.match(/\{[\s\S]*?\}/);
-  if (jsonMatch?.[0]) {
+  // DESIGN-04 FIX: Use balanced brace matching instead of fragile regex
+  const jsonStr = extractBalancedJson(cleaned);
+  if (jsonStr) {
     try {
-      JSON.parse(jsonMatch[0]);
-      return jsonMatch[0];
-    } catch { /* not valid JSON, try greedy fallback */ }
-  }
-
-  // Greedy fallback for nested JSON objects
-  const greedyMatch = text.match(/\{[\s\S]*\}/);
-  if (greedyMatch?.[0] && greedyMatch[0] !== jsonMatch?.[0]) {
-    try {
-      JSON.parse(greedyMatch[0]);
-      return greedyMatch[0];
+      JSON.parse(jsonStr);
+      return jsonStr;
     } catch { /* not valid JSON */ }
   }
 
