@@ -146,9 +146,9 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps): AgentOrche
         const pendingAgents = agents.filter(a => pending.has(a.agentId));
         await terminateAgents(pendingAgents);
 
-        // Pick the first pending agent for the error
-        const firstPending = pendingAgents[0];
-        throw new AgentTimeoutError(firstPending.agentId, timeoutMs);
+        // DESIGN-07 FIX: Include all pending agent IDs in the error
+        const pendingIds = pendingAgents.map(a => a.agentId);
+        throw new AgentTimeoutError(pendingIds[0], timeoutMs, pendingIds);
       }
 
       // Poll each pending agent
@@ -183,6 +183,9 @@ export function createAgentOrchestrator(deps: AgentOrchestratorDeps): AgentOrche
         );
       }
     }
+
+    // BUG-05 FIX: Terminate all agents after successful completion
+    await terminateAgents(agents);
 
     // Return outcomes in original agent order
     return agents.map(a => outcomes.get(a.agentId)!);

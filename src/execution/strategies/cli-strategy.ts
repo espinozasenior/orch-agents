@@ -46,6 +46,8 @@ export function createCliStrategy(): PhaseStrategy & { getCachedSwarmHandle(): S
 
       logger?.info('Running phase with real agents', { planId: plan.id, phase: phase.type });
 
+      let spawnedAgents: SpawnedAgent[] = [];
+
       try {
         // 1. Lazy-init swarm on first call
         if (!cachedSwarmHandle) {
@@ -54,7 +56,7 @@ export function createCliStrategy(): PhaseStrategy & { getCachedSwarmHandle(): S
         }
 
         // 2. Spawn agents for this phase
-        const spawnedAgents: SpawnedAgent[] = await deps.agentOrchestrator!.spawnAgents(
+        spawnedAgents = await deps.agentOrchestrator!.spawnAgents(
           cachedSwarmHandle.swarmId,
           phase,
           plan.agentTeam,
@@ -64,7 +66,7 @@ export function createCliStrategy(): PhaseStrategy & { getCachedSwarmHandle(): S
         const agentRefs = spawnedAgents.map((a) => ({ agentId: a.agentId, role: a.role }));
         const delegatedTasks = await deps.taskDelegator!.createAndAssign(plan, phase, agentRefs);
 
-        // 4. Wait for agents to complete
+        // 4. Wait for agents to complete (also terminates them on success now)
         await deps.agentOrchestrator!.waitForAgents(spawnedAgents, deps.phaseTimeoutMs);
 
         // 5. Collect task results
@@ -104,6 +106,16 @@ export function createCliStrategy(): PhaseStrategy & { getCachedSwarmHandle(): S
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger?.error('Phase execution failed', { planId: plan.id, phase: phase.type, error: message });
+
+        // Ensure agents are cleaned up on error too
+        if (spawnedAgents.length > 0) {
+          await deps.agentOrchestrator!.terminateAgents(spawnedAgents).catch((cleanupErr) => {
+            logger?.warn('Failed to cleanup agents after error', {
+              error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+            });
+          });
+        }
+
         return makeFailedResult(phaseId, plan, phase, startTime);
       }
     },

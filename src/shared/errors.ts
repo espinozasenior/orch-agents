@@ -214,16 +214,22 @@ export class AgentSpawnError extends AppError {
 
 export class AgentTimeoutError extends AppError {
   public readonly agentId: string;
+  /** All agent IDs that were still pending at timeout. */
+  public readonly pendingAgentIds: string[];
 
-  constructor(agentId: string, timeoutMs: number, options: { cause?: unknown } = {}) {
-    super(`Agent ${agentId} timed out after ${timeoutMs}ms`, {
+  constructor(agentId: string, timeoutMs: number, pendingAgentIds?: string[]) {
+    const ids = pendingAgentIds ?? [agentId];
+    const msg = ids.length > 1
+      ? `${ids.length} agents timed out after ${timeoutMs}ms: ${ids.join(', ')}`
+      : `Agent ${agentId} timed out after ${timeoutMs}ms`;
+    super(msg, {
       code: 'ERR_AGENT_TIMEOUT',
       statusCode: 500,
       isOperational: true,
-      cause: options.cause,
     });
     this.name = 'AgentTimeoutError';
     this.agentId = agentId;
+    this.pendingAgentIds = ids;
   }
 }
 
