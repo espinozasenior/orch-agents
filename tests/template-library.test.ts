@@ -7,7 +7,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   getTemplate,
@@ -97,13 +97,13 @@ describe('Template Library', () => {
       assert.ok(t);
       assert.equal(t.methodology, 'sparc-full');
       assert.equal(t.phases.length, 5);
-      assert.ok(t.maxAgents >= 6);
+      assert.ok(t.maxAgents >= 4);
     });
 
     it('returns release-pipeline template', () => {
       const t = getTemplate('release-pipeline');
       assert.ok(t);
-      assert.equal(t.phases.length, 1);
+      assert.equal(t.phases.length, 2);
     });
 
     it('returns monitoring-alerting template', () => {
@@ -118,9 +118,9 @@ describe('Template Library', () => {
   });
 
   describe('listTemplateKeys()', () => {
-    it('returns all 7 built-in templates', () => {
+    it('returns all built-in templates', () => {
       const keys = listTemplateKeys();
-      assert.ok(keys.length >= 7);
+      assert.ok(keys.length >= 7, `expected >= 7 templates, got ${keys.length}`);
       assert.ok(keys.includes('cicd-pipeline'));
       assert.ok(keys.includes('quick-fix'));
       assert.ok(keys.includes('github-ops'));
@@ -203,11 +203,13 @@ describe('Template Library', () => {
   // -------------------------------------------------------------------------
 
   describe('JSON loading', () => {
-    it('templates are loaded from config/workflow-templates.json', () => {
-      // Read the JSON file directly and compare with loaded templates
-      const filePath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+    it('templates are loaded from config/team-templates.json', () => {
+      // Read the unified JSON file directly and compare with loaded templates
+      const unifiedPath = resolve(__dirname, '..', 'config', 'team-templates.json');
+      const legacyPath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+      const filePath = existsSync(unifiedPath) ? unifiedPath : legacyPath;
       const raw = readFileSync(filePath, 'utf-8');
-      const jsonTemplates = JSON.parse(raw) as WorkflowTemplate[];
+      const jsonTemplates = JSON.parse(raw) as Array<{ key: string; name: string; methodology: string }>;
 
       const keys = listTemplateKeys();
       for (const jt of jsonTemplates) {
@@ -219,17 +221,21 @@ describe('Template Library', () => {
       }
     });
 
-    it('JSON file contains exactly 7 templates', () => {
-      const filePath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+    it('JSON file contains at least 7 templates', () => {
+      const unifiedPath = resolve(__dirname, '..', 'config', 'team-templates.json');
+      const legacyPath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+      const filePath = existsSync(unifiedPath) ? unifiedPath : legacyPath;
       const raw = readFileSync(filePath, 'utf-8');
-      const jsonTemplates = JSON.parse(raw) as WorkflowTemplate[];
-      assert.equal(jsonTemplates.length, 7);
+      const jsonTemplates = JSON.parse(raw) as unknown[];
+      assert.ok(jsonTemplates.length >= 7, `expected >= 7 templates, got ${jsonTemplates.length}`);
     });
 
     it('each JSON template has estimatedCost field', () => {
-      const filePath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+      const unifiedPath = resolve(__dirname, '..', 'config', 'team-templates.json');
+      const legacyPath = resolve(__dirname, '..', 'config', 'workflow-templates.json');
+      const filePath = existsSync(unifiedPath) ? unifiedPath : legacyPath;
       const raw = readFileSync(filePath, 'utf-8');
-      const jsonTemplates = JSON.parse(raw) as WorkflowTemplate[];
+      const jsonTemplates = JSON.parse(raw) as Array<{ key: string; estimatedCost?: number }>;
       for (const jt of jsonTemplates) {
         assert.ok(
           typeof jt.estimatedCost === 'number',

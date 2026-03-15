@@ -21,6 +21,7 @@ import { createDecisionEngine, type DecisionOutput } from './decision-engine';
 import { decompose } from './sparc-decomposer';
 import { selectTopology } from './topology-selector';
 import { getTemplate } from './template-library';
+import { loadSetup, applyTopologyOverrides, applyAgentOverrides } from '../setup/config-writer';
 
 // ---------------------------------------------------------------------------
 // Planning Engine
@@ -63,6 +64,26 @@ export function startPlanningEngine(deps: PlanningEngineDeps): () => void {
       // Step 3: Topology Selector → swarm config
       const topology = selectTopology(planningInput);
 
+      // Step 3b: Apply setup.json overrides (fixes silent-ignore bug)
+      let adjustedAgents = decomposition.adjustedAgents;
+      let finalTopology = topology.topology;
+      let finalConsensus = topology.consensus;
+      let finalStrategy = topology.swarmStrategy;
+      let finalMaxAgents = topology.maxAgents;
+      try {
+        const setup = loadSetup();
+        if (setup) {
+          const overridden = applyTopologyOverrides(topology, setup);
+          finalTopology = overridden.topology as typeof topology.topology;
+          finalConsensus = overridden.consensus as typeof topology.consensus;
+          finalStrategy = overridden.swarmStrategy as typeof topology.swarmStrategy;
+          finalMaxAgents = overridden.maxAgents;
+          adjustedAgents = applyAgentOverrides(adjustedAgents, setup.activeAgents);
+        }
+      } catch {
+        // setup.json missing or invalid — use defaults
+      }
+
       // Step 4: Look up template for cost/duration estimates
       const template = getTemplate(planningInput.templateKey);
 
@@ -72,14 +93,14 @@ export function startPlanningEngine(deps: PlanningEngineDeps): () => void {
         workItemId: intakeEvent.id,
         methodology: decomposition.methodology,
         template: planningInput.templateKey,
-        topology: topology.topology,
-        swarmStrategy: topology.swarmStrategy,
-        consensus: topology.consensus,
-        maxAgents: topology.maxAgents,
+        topology: finalTopology,
+        swarmStrategy: finalStrategy,
+        consensus: finalConsensus,
+        maxAgents: finalMaxAgents,
         phases: decomposition.phases,
-        agentTeam: decomposition.adjustedAgents,
+        agentTeam: adjustedAgents,
         estimatedDuration: template?.estimatedDuration ?? estimateDuration(decomposition.phases.length),
-        estimatedCost: estimateCost(decomposition.adjustedAgents),
+        estimatedCost: estimateCost(adjustedAgents),
       };
 
       logger.info('Plan created', {
