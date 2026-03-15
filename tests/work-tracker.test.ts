@@ -12,6 +12,7 @@ import {
   type WorkTracker,
   type WorkItemState,
 } from '../src/execution/work-tracker';
+import { createAgentTracker } from '../src/execution/agent-tracker';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -200,6 +201,64 @@ describe('WorkTracker', () => {
       tracker.cleanup(0);
       assert.equal(tracker.getState('plan-001'), undefined);
       assert.ok(tracker.getState('plan-002')); // still running
+    });
+  });
+
+  describe('getAgentsByPlan() — AgentTracker delegation', () => {
+    it('returns empty array when no agentTracker provided', () => {
+      const tracker = createWorkTracker();
+      const agents = tracker.getAgentsByPlan('plan-001');
+      assert.deepEqual(agents, []);
+    });
+
+    it('returns empty array when agentTracker has no agents for the plan', () => {
+      const agentTracker = createAgentTracker();
+      const tracker = createWorkTracker({ agentTracker });
+      const agents = tracker.getAgentsByPlan('plan-001');
+      assert.deepEqual(agents, []);
+    });
+
+    it('delegates to agentTracker and returns per-agent state', () => {
+      const agentTracker = createAgentTracker();
+      agentTracker.spawn('exec-1', 'plan-001', 'coder', 'sparc-coder', 'refinement');
+      agentTracker.spawn('exec-2', 'plan-001', 'tester', 'tester', 'completion');
+      agentTracker.touch('exec-1', 200);
+      agentTracker.complete('exec-2', { input: 100, output: 50 });
+
+      const tracker = createWorkTracker({ agentTracker });
+      const agents = tracker.getAgentsByPlan('plan-001');
+
+      assert.equal(agents.length, 2);
+      const coder = agents.find(a => a.agentRole === 'coder');
+      const tester = agents.find(a => a.agentRole === 'tester');
+
+      assert.ok(coder);
+      assert.equal(coder!.status, 'running');
+      assert.equal(coder!.bytesReceived, 200);
+
+      assert.ok(tester);
+      assert.equal(tester!.status, 'completed');
+      assert.deepEqual(tester!.tokenUsage, { input: 100, output: 50 });
+    });
+
+    it('only returns agents for the requested plan, not other plans', () => {
+      const agentTracker = createAgentTracker();
+      agentTracker.spawn('exec-1', 'plan-001', 'coder', 'coder', 'refinement');
+      agentTracker.spawn('exec-2', 'plan-002', 'tester', 'tester', 'completion');
+
+      const tracker = createWorkTracker({ agentTracker });
+      const agents = tracker.getAgentsByPlan('plan-001');
+
+      assert.equal(agents.length, 1);
+      assert.equal(agents[0].planId, 'plan-001');
+    });
+
+    it('backward compatible — createWorkTracker() without opts still works', () => {
+      const tracker = createWorkTracker();
+      tracker.start('plan-001', 'work-001');
+      tracker.complete('plan-001');
+      assert.equal(tracker.getState('plan-001')?.status, 'completed');
+      assert.deepEqual(tracker.getAgentsByPlan('plan-001'), []);
     });
   });
 });

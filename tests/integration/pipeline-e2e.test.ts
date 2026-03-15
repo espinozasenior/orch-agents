@@ -19,6 +19,12 @@ import { setUrgencyRules, resetUrgencyRules } from '../../src/triage/triage-engi
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
 import type { CliClient } from '../../src/execution/cli-client';
 import { createStubTaskExecutor } from '../../src/execution/task-executor';
+import { createStreamingTaskExecutor } from '../../src/execution/streaming-executor';
+import { createAgentTracker } from '../../src/execution/agent-tracker';
+import { createCancellationController } from '../../src/execution/cancellation-controller';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Test urgency rules (avoid filesystem dependency on config/urgency-rules.json)
@@ -370,6 +376,159 @@ describe('Pipeline E2E', () => {
     assert.ok(
       phasePayload.phaseResult.artifacts.some((a) => a.url.startsWith('task-tool://')),
       'Artifacts should use task-tool:// URL scheme',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streaming executor E2E — Dorothy layer
+// ---------------------------------------------------------------------------
+
+describe('Pipeline E2E — Streaming Executor (Dorothy)', () => {
+  let handle: PipelineHandle | undefined;
+  let scriptPath: string | undefined;
+
+  afterEach(() => {
+    handle?.shutdown();
+    handle = undefined;
+    resetUrgencyRules();
+    if (scriptPath) {
+      try { fs.unlinkSync(scriptPath); } catch {}
+      scriptPath = undefined;
+    }
+  });
+
+  it('streaming executor emits AgentSpawned, AgentChunk, AgentCompleted through full pipeline', async () => {
+    const eventBus = createEventBus();
+    const logger = createLogger({ level: 'error' });
+    setUrgencyRules(TEST_URGENCY_RULES);
+
+    // Create a temp script that outputs valid JSON (simulates Claude CLI)
+    scriptPath = path.join(os.tmpdir(), `e2e-claude-${Date.now()}.js`);
+    fs.writeFileSync(scriptPath, `
+      process.stdout.write(JSON.stringify({
+        phaseType: 'refinement',
+        agentRole: 'implementer',
+        summary: 'Streaming E2E test output',
+        artifacts: [{ type: 'analysis', content: 'streaming test' }],
+        issues: [],
+        status: 'completed',
+      }));
+    `);
+
+    const agentTracker = createAgentTracker();
+    const cancellationController = createCancellationController();
+    const taskExecutor = createStreamingTaskExecutor({
+      eventBus,
+      agentTracker,
+      cancellationController,
+      cliBin: 'node',
+      cliArgs: [scriptPath],
+      defaultTimeout: 10_000,
+    });
+
+    handle = startPipeline({ eventBus, logger, taskExecutor, agentTracker, cancellationController });
+
+    // Collect Dorothy-layer events
+    const spawnedEvents: unknown[] = [];
+    const chunkEvents: unknown[] = [];
+    const completedEvents: unknown[] = [];
+    eventBus.subscribe('AgentSpawned', (evt) => spawnedEvents.push(evt));
+    eventBus.subscribe('AgentChunk', (evt) => chunkEvents.push(evt));
+    eventBus.subscribe('AgentCompleted', (evt) => completedEvents.push(evt));
+
+    // Wait for pipeline completion
+    const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted', 15_000);
+
+    const intakeEvent = makeIntakeEvent({
+      id: 'intake-streaming-001',
+      rawText: 'Streaming E2E test task',
+      entities: {
+        repo: 'test-org/test-repo',
+        prNumber: 99,
+        files: ['src/streaming.ts'],
+        labels: [],
+        severity: 'medium',
+      },
+    });
+
+    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'streaming-corr-001'));
+
+    const workCompleted = await workCompletedPromise;
+    const wcPayload = workCompleted.payload as { workItemId: string; phaseCount: number };
+
+    // Pipeline completed
+    assert.equal(wcPayload.workItemId, 'intake-streaming-001');
+    assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one phase');
+
+    // Dorothy events fired during execution
+    assert.ok(spawnedEvents.length > 0, 'Should have emitted at least one AgentSpawned event');
+    assert.ok(chunkEvents.length > 0, 'Should have emitted at least one AgentChunk (stdout data)');
+    assert.ok(completedEvents.length > 0, 'Should have emitted at least one AgentCompleted event');
+
+    // Agent tracker has per-agent state
+    const trackedAgents = agentTracker.getAgentsByPlan((workCompleted.payload as { planId: string }).planId);
+    assert.ok(trackedAgents.length > 0, 'AgentTracker should have tracked agents for this plan');
+    assert.ok(
+      trackedAgents.every(a => a.status === 'completed'),
+      'All tracked agents should be completed',
+    );
+    assert.ok(
+      trackedAgents.some(a => a.bytesReceived > 0),
+      'At least one agent should have received bytes',
+    );
+  });
+
+  it('streaming executor produces task-tool artifacts through pipeline', async () => {
+    const eventBus = createEventBus();
+    const logger = createLogger({ level: 'error' });
+    setUrgencyRules(TEST_URGENCY_RULES);
+
+    scriptPath = path.join(os.tmpdir(), `e2e-claude-artifacts-${Date.now()}.js`);
+    fs.writeFileSync(scriptPath, `
+      process.stdout.write(JSON.stringify({
+        phaseType: 'refinement',
+        agentRole: 'implementer',
+        summary: 'Artifact test',
+        artifacts: [{ type: 'code-patch', content: 'diff --git a/file.ts' }],
+        issues: [],
+        status: 'completed',
+      }));
+    `);
+
+    const agentTracker = createAgentTracker();
+    const cancellationController = createCancellationController();
+    const taskExecutor = createStreamingTaskExecutor({
+      eventBus,
+      agentTracker,
+      cancellationController,
+      cliBin: 'node',
+      cliArgs: [scriptPath],
+      defaultTimeout: 10_000,
+    });
+
+    handle = startPipeline({ eventBus, logger, taskExecutor, agentTracker, cancellationController });
+
+    const phaseCompletedPromise = collectEvents(eventBus, 'PhaseCompleted', 1, 15_000);
+
+    const intakeEvent = makeIntakeEvent({
+      id: 'intake-streaming-artifacts',
+      rawText: 'Streaming artifact test',
+      entities: { repo: 'test/repo', prNumber: 100, files: ['src/a.ts'], labels: [], severity: 'low' },
+    });
+
+    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }));
+
+    const phaseEvents = await phaseCompletedPromise;
+    assert.ok(phaseEvents.length > 0);
+
+    const phasePayload = phaseEvents[0].payload as {
+      phaseResult: { artifacts: Array<{ url: string; metadata: Record<string, unknown> }> };
+    };
+
+    assert.ok(
+      phasePayload.phaseResult.artifacts.some(a => a.url.startsWith('task-tool://')),
+      'Streaming executor should produce task-tool:// artifacts through the pipeline',
     );
   });
 });

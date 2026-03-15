@@ -27,10 +27,11 @@ export interface TaskExecutionRequest {
 }
 
 export interface TaskExecutionResult {
-  status: 'completed' | 'failed';
+  status: 'completed' | 'failed' | 'cancelled';
   output: string;
   duration: number;
   error?: string;
+  tokenUsage?: { input: number; output: number };
 }
 
 export interface TaskExecutor {

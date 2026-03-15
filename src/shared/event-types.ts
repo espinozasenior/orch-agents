@@ -170,6 +170,35 @@ export type RollbackTriggeredEvent = DomainEvent<
 >;
 
 // ---------------------------------------------------------------------------
+// Agent execution events (Dorothy streaming layer)
+// ---------------------------------------------------------------------------
+
+export type AgentSpawnedEvent = DomainEvent<
+  'AgentSpawned',
+  { execId: string; planId: string; agentRole: string; agentType: string; phaseType: SPARCPhase }
+>;
+
+export type AgentChunkEvent = DomainEvent<
+  'AgentChunk',
+  { execId: string; planId: string; agentRole: string; chunk: string; timestamp: string }
+>;
+
+export type AgentCompletedEvent = DomainEvent<
+  'AgentCompleted',
+  { execId: string; planId: string; agentRole: string; duration: number; tokenUsage?: { input: number; output: number } }
+>;
+
+export type AgentFailedEvent = DomainEvent<
+  'AgentFailed',
+  { execId: string; planId: string; agentRole: string; error: string; duration: number }
+>;
+
+export type AgentCancelledEvent = DomainEvent<
+  'AgentCancelled',
+  { execId: string; planId: string; agentRole: string; duration: number }
+>;
+
+// ---------------------------------------------------------------------------
 // Union of all domain event types
 // ---------------------------------------------------------------------------
 
@@ -198,7 +227,12 @@ export type AnyDomainEvent =
   | ReviewRejectedEvent
   | FixRequestedEvent
   | CommitCreatedEvent
-  | RollbackTriggeredEvent;
+  | RollbackTriggeredEvent
+  | AgentSpawnedEvent
+  | AgentChunkEvent
+  | AgentCompletedEvent
+  | AgentFailedEvent
+  | AgentCancelledEvent;
 
 // ---------------------------------------------------------------------------
 // Event type string literals for use with the event bus
@@ -236,4 +270,9 @@ export interface DomainEventMap {
   FixRequested: FixRequestedEvent;
   CommitCreated: CommitCreatedEvent;
   RollbackTriggered: RollbackTriggeredEvent;
+  AgentSpawned: AgentSpawnedEvent;
+  AgentChunk: AgentChunkEvent;
+  AgentCompleted: AgentCompletedEvent;
+  AgentFailed: AgentFailedEvent;
+  AgentCancelled: AgentCancelledEvent;
 }

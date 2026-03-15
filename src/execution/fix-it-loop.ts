@@ -21,7 +21,7 @@ export interface FixExecutor {
 }
 
 export interface FixExecutionResult {
-  status: 'completed' | 'failed';
+  status: 'completed' | 'failed' | 'cancelled';
   output: string;
   duration: number;
   error?: string;

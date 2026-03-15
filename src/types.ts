@@ -232,6 +232,37 @@ export interface FixItAttempt {
  */
 
 // ---------------------------------------------------------------------------
+// Agent Execution Tracking (Dorothy streaming layer)
+// ---------------------------------------------------------------------------
+
+export type AgentExecStatus = 'spawned' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
+
+export interface AgentExecState {
+  execId: string;
+  planId: string;
+  agentRole: string;
+  agentType: string;
+  phaseType: SPARCPhase;
+  status: AgentExecStatus;
+  spawnedAt: string;
+  lastActivity: string;
+  completedAt: string | null;
+  bytesReceived: number;
+  chunksReceived: number;
+  parsedSignals: {
+    toolUseCount: number;
+    thinkingDetected: boolean;
+    jsonDetected: boolean;
+  };
+  tokenUsage?: TokenUsage;
+}
+
+export interface TokenUsage {
+  input: number;
+  output: number;
+}
+
+// ---------------------------------------------------------------------------
 // Deployment
 // ---------------------------------------------------------------------------
 

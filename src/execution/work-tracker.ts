@@ -6,6 +6,7 @@
  */
 
 import type { PhaseResult } from '../types';
+import type { AgentTracker, AgentExecState } from './agent-tracker';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,14 +31,21 @@ export interface WorkTracker {
   getState(planId: string): WorkItemState | undefined;
   listActive(): WorkItemState[];
   cleanup(maxAgeMs: number): void;
+  /** Delegate to AgentTracker for per-agent drill-down (when available). */
+  getAgentsByPlan(planId: string): AgentExecState[];
 }
 
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
 
-export function createWorkTracker(): WorkTracker {
+export interface WorkTrackerOpts {
+  agentTracker?: AgentTracker;
+}
+
+export function createWorkTracker(opts: WorkTrackerOpts = {}): WorkTracker {
   const items = new Map<string, WorkItemState>();
+  const { agentTracker } = opts;
 
   return {
     start(planId: string, workItemId: string): void {
@@ -103,6 +111,11 @@ export function createWorkTracker(): WorkTracker {
           }
         }
       }
+    },
+
+    getAgentsByPlan(planId: string): AgentExecState[] {
+      if (!agentTracker) return [];
+      return agentTracker.getAgentsByPlan(planId);
     },
   };
 }

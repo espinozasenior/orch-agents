@@ -19,6 +19,8 @@ import { createPhaseRunner, type GateChecker } from './execution/phase-runner';
 import { startReviewPipeline } from './review/review-pipeline';
 import type { CliClient } from './execution/cli-client';
 import type { TaskExecutor } from './execution/task-executor';
+import type { AgentTracker } from './execution/agent-tracker';
+import type { CancellationController } from './execution/cancellation-controller';
 import { createSwarmManager } from './execution/swarm-manager';
 import { createAgentOrchestrator } from './execution/agent-orchestrator';
 import { createTaskDelegator } from './execution/task-delegator';
@@ -50,6 +52,9 @@ export interface PipelineDeps {
   fixItLoop?: FixItLoop;
   reviewGate?: ReviewGate;
   githubClient?: GitHubClient;
+  /** Dorothy streaming layer (optional) */
+  agentTracker?: AgentTracker;
+  cancellationController?: CancellationController;
 }
 
 export interface PipelineHandle {

@@ -12,6 +12,9 @@ import { buildServer } from './server';
 import { startPipeline } from './pipeline';
 import { createCliClient } from './execution/cli-client';
 import { createClaudeTaskExecutor } from './execution/task-executor';
+import { createStreamingTaskExecutor } from './execution/streaming-executor';
+import { createAgentTracker } from './execution/agent-tracker';
+import { createCancellationController } from './execution/cancellation-controller';
 import { createWorktreeManager } from './execution/worktree-manager';
 import { createInteractiveExecutor } from './execution/interactive-executor';
 import { createArtifactApplier } from './execution/artifact-applier';
@@ -41,15 +44,32 @@ async function main(): Promise<void> {
   //   neither                 → stub mode (pass-through, no real execution)
   const useTaskAgents = process.env.ENABLE_TASK_AGENTS === 'true';
   const useRealAgents = process.env.ENABLE_AGENTS === 'true';
+  const useStreamingExecutor = process.env.ENABLE_STREAMING_EXECUTOR === 'true';
   // Task-tool mode takes priority; skip MCP client when task-tool is enabled
-  const cliClient = (useRealAgents && !useTaskAgents) ? createCliClient() : undefined;
-  const taskExecutor = useTaskAgents ? createClaudeTaskExecutor() : undefined;
+  const cliClient = (useRealAgents && !useTaskAgents && !useStreamingExecutor) ? createCliClient() : undefined;
 
-  if (useTaskAgents) {
+  // Dorothy streaming layer: per-agent tracking and cancellation
+  let agentTracker: ReturnType<typeof createAgentTracker> | undefined;
+  let cancellationController: ReturnType<typeof createCancellationController> | undefined;
+  let taskExecutor: ReturnType<typeof createClaudeTaskExecutor> | ReturnType<typeof createStreamingTaskExecutor> | undefined;
+
+  if (useStreamingExecutor) {
+    agentTracker = createAgentTracker();
+    cancellationController = createCancellationController();
+    taskExecutor = createStreamingTaskExecutor({
+      eventBus,
+      agentTracker,
+      cancellationController,
+      logger,
+    });
+    logger.info('Streaming task executor enabled (Dorothy layer)');
+  } else if (useTaskAgents) {
+    taskExecutor = createClaudeTaskExecutor();
     logger.info('Task-tool agent execution enabled');
-    if (useRealAgents) {
-      logger.warn('ENABLE_AGENTS ignored — ENABLE_TASK_AGENTS takes priority');
-    }
+  }
+
+  if ((useTaskAgents || useStreamingExecutor) && useRealAgents) {
+    logger.warn('ENABLE_AGENTS ignored — task executor takes priority');
   } else if (useRealAgents) {
     logger.info('Real agent execution enabled (CLI lifecycle)');
   }
@@ -163,12 +183,14 @@ async function main(): Promise<void> {
   const pipeline = startPipeline({
     eventBus, logger, cliClient, taskExecutor,
     interactiveExecutor, worktreeManager, artifactApplier, fixItLoop, reviewGate, githubClient,
+    agentTracker, cancellationController,
   });
 
   const server = await buildServer({ config, logger, eventBus });
 
   try {
-    await server.listen({ port: config.port, host: '0.0.0.0' });
+    const host = process.env.BIND_HOST ?? '0.0.0.0';
+    await server.listen({ port: config.port, host });
     logger.info('Server listening', { port: config.port });
   } catch (err) {
     logger.fatal('Failed to start server', {
