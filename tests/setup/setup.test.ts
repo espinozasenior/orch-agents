@@ -29,17 +29,17 @@ import type { SetupConfig, AgentToggle, EventToggle } from '../../src/setup/type
 // ---------------------------------------------------------------------------
 
 describe('discoverAgentTypes', () => {
-  it('discovers agent types from agents/*.yaml files on disk', () => {
+  it('discovers agent types from .claude/agents/ Markdown files', () => {
     const { discoverAgentTypes } = require('../../src/setup/presets');
     const types = discoverAgentTypes();
-    // Should find the 5 YAML files in agents/
+    // Should find agents from .claude/agents/ via AgentRegistry
     assert.ok(types.includes('coder'), 'should find coder');
     assert.ok(types.includes('tester'), 'should find tester');
     assert.ok(types.includes('reviewer'), 'should find reviewer');
     assert.ok(types.includes('architect'), 'should find architect');
     assert.ok(types.includes('security-architect'), 'should find security-architect');
-    // Should be sorted for deterministic UI
-    const sorted = [...types].sort();
+    // Should be sorted for deterministic UI (localeCompare)
+    const sorted = [...types].sort((a, b) => a.localeCompare(b));
     assert.deepEqual(types, sorted, 'agent types should be sorted');
   });
 

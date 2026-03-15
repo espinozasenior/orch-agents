@@ -9,6 +9,7 @@ import type { TerminalIO, SetupConfig, SelectItem, PresetKey, TopologyChoice, Co
 import { getPresetDefs, applyPreset, getAgentTypes, ALL_EVENT_IDS } from './presets';
 import { singleSelect, multiSelect, numericInput } from './renderer';
 import { loadSetup, saveSetup, formatSummary } from './config-writer';
+import { getDefaultRegistry } from '../agent-registry';
 
 // ---------------------------------------------------------------------------
 // Wizard entry point
@@ -204,6 +205,11 @@ async function runCustomFlow(
 // ---------------------------------------------------------------------------
 
 function agentDescription(type: string): string {
+  const registry = getDefaultRegistry();
+  const def = registry.getByName(type);
+  if (def?.description) return def.description;
+
+  // Fallback for agents not yet in registry
   const descs: Record<string, string> = {
     'coder': 'Writes and modifies code',
     'tester': 'Creates and runs tests',

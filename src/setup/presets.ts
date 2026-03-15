@@ -5,15 +5,14 @@
  * Each preset defines which agents, events, topology, and limits to use.
  */
 
-import { readdirSync, existsSync } from 'node:fs';
-import { resolve, basename } from 'node:path';
 import type {
   SetupConfig, PresetKey, AgentToggle, EventToggle,
   TopologyChoice, ConsensusChoice, StrategyChoice,
 } from './types';
+import { getDefaultRegistry, type AgentRegistry } from '../agent-registry';
 
 // ---------------------------------------------------------------------------
-// Agent type discovery from agents/*.yaml on disk
+// Agent type discovery from .claude/agents/**/*.md (via AgentRegistry)
 // ---------------------------------------------------------------------------
 
 const FALLBACK_AGENT_TYPES = [
@@ -21,38 +20,44 @@ const FALLBACK_AGENT_TYPES = [
   'security-architect', 'tester',
 ];
 
-const DEFAULT_AGENTS_DIR = resolve(__dirname, '..', '..', 'agents');
-
 /**
- * Discover agent types by scanning a directory for *.yaml files.
- * Returns sorted list of type names (filename without extension).
- * Falls back to hardcoded list if directory doesn't exist.
+ * Discover agent types by scanning .claude/agents/ Markdown frontmatter.
+ * Falls back to hardcoded list if no agents are found.
+ *
+ * @param agentsDirOrRegistry - path to agents dir (for backward compat) or AgentRegistry instance
  */
-export function discoverAgentTypes(agentsDir: string = DEFAULT_AGENTS_DIR): string[] {
-  if (!existsSync(agentsDir)) return [...FALLBACK_AGENT_TYPES];
-  try {
-    const files = readdirSync(agentsDir);
-    const types = files
-      .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
-      .map(f => basename(f, f.endsWith('.yaml') ? '.yaml' : '.yml'))
-      .sort();
-    return types.length > 0 ? types : [...FALLBACK_AGENT_TYPES];
-  } catch {
-    return [...FALLBACK_AGENT_TYPES];
+export function discoverAgentTypes(agentsDirOrRegistry?: string | AgentRegistry): string[] {
+  // Support legacy callers that pass a directory path
+  if (typeof agentsDirOrRegistry === 'string') {
+    const { createAgentRegistry } = require('../agent-registry');
+    const registry = createAgentRegistry({ agentsDir: agentsDirOrRegistry }) as AgentRegistry;
+    const names = registry.getNames();
+    return names.length > 0 ? names : [...FALLBACK_AGENT_TYPES];
   }
+
+  const registry = agentsDirOrRegistry ?? getDefaultRegistry();
+  const names = registry.getNames();
+  return names.length > 0 ? names : [...FALLBACK_AGENT_TYPES];
 }
 
 let _cachedAgentTypes: string[] | undefined;
 
 /**
  * Get available agent types (cached after first call).
- * Discovers from disk, falls back to hardcoded list.
+ * Discovers from .claude/agents/ via AgentRegistry.
  */
 export function getAgentTypes(): string[] {
   if (!_cachedAgentTypes) {
     _cachedAgentTypes = discoverAgentTypes();
   }
   return _cachedAgentTypes;
+}
+
+/**
+ * Reset cached agent types (for testing).
+ */
+export function resetAgentTypesCache(): void {
+  _cachedAgentTypes = undefined;
 }
 
 /** @deprecated Use getAgentTypes() for dynamic discovery */
