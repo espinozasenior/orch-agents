@@ -1,0 +1,296 @@
+[
+  {
+    "key": "quick-fix",
+    "name": "Quick Fix",
+    "description": "Fast single-phase fix for low-complexity tasks",
+    "methodology": "adhoc",
+    "topology": "mesh",
+    "consensus": "gossip",
+    "swarmStrategy": "balanced",
+    "maxAgents": 2,
+    "agents": [
+      { "role": "implementer", "type": "coder", "tier": 2, "required": true },
+      { "role": "validator", "type": "tester", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "refinement", "agents": ["coder"], "gate": "tests-pass", "skippable": false }
+    ],
+    "estimatedDuration": 5,
+    "estimatedCost": 0.01
+  },
+  {
+    "key": "research-sprint",
+    "name": "Research Sprint",
+    "description": "Deep investigation and analysis tasks",
+    "methodology": "adhoc",
+    "topology": "mesh",
+    "consensus": "gossip",
+    "swarmStrategy": "balanced",
+    "maxAgents": 3,
+    "agents": [
+      { "role": "lead-researcher", "type": "researcher", "tier": 3, "required": true },
+      { "role": "analyst", "type": "analyst", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["researcher"], "gate": "research-complete", "skippable": false }
+    ],
+    "estimatedDuration": 15,
+    "estimatedCost": 0.03
+  },
+  {
+    "key": "feature-build",
+    "name": "Feature Build",
+    "description": "Full SPARC methodology for new features",
+    "methodology": "sparc-full",
+    "topology": "hierarchical",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 5,
+    "agents": [
+      { "role": "lead", "type": "architect", "tier": 3, "required": true },
+      { "role": "implementer", "type": "coder", "tier": 3, "required": true },
+      { "role": "validator", "type": "tester", "tier": 2, "required": true },
+      { "role": "reviewer", "type": "reviewer", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["architect", "researcher"], "gate": "spec-approved", "skippable": false },
+      { "type": "pseudocode", "agents": ["architect"], "gate": "pseudocode-reviewed", "skippable": false },
+      { "type": "architecture", "agents": ["architect", "security-architect"], "gate": "arch-approved", "skippable": false },
+      { "type": "refinement", "agents": ["coder", "tester"], "gate": "tests-pass", "skippable": false },
+      { "type": "completion", "agents": ["reviewer", "coder"], "gate": "review-approved", "skippable": false }
+    ],
+    "estimatedDuration": 45,
+    "estimatedCost": 0.10
+  },
+  {
+    "key": "sparc-full-cycle",
+    "name": "SPARC Full Cycle",
+    "description": "Complete SPARC methodology with dedicated phase agents",
+    "methodology": "sparc-full",
+    "topology": "hierarchical",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 8,
+    "agents": [
+      { "role": "orchestrator", "type": "sparc-coord", "tier": 3, "required": true },
+      { "role": "spec-writer", "type": "specification", "tier": 3, "required": true },
+      { "role": "pseudocoder", "type": "pseudocode", "tier": 3, "required": true },
+      { "role": "architect", "type": "architecture", "tier": 3, "required": true },
+      { "role": "implementer", "type": "sparc-coder", "tier": 3, "required": true },
+      { "role": "validator", "type": "tester", "tier": 2, "required": true },
+      { "role": "reviewer", "type": "reviewer", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["specification"], "gate": "spec-approved", "skippable": false },
+      { "type": "pseudocode", "agents": ["pseudocode"], "gate": "pseudocode-reviewed", "skippable": false },
+      { "type": "architecture", "agents": ["architecture"], "gate": "arch-approved", "skippable": false },
+      { "type": "refinement", "agents": ["sparc-coder", "tester"], "gate": "tests-pass", "skippable": false },
+      { "type": "completion", "agents": ["reviewer"], "gate": "review-approved", "skippable": false }
+    ],
+    "estimatedDuration": 60,
+    "estimatedCost": 0.15
+  },
+  {
+    "key": "testing-sprint",
+    "name": "Testing Sprint",
+    "description": "Test-driven development for bug fixes and coverage",
+    "methodology": "tdd",
+    "topology": "hierarchical",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 4,
+    "agents": [
+      { "role": "lead", "type": "tester", "tier": 3, "required": true },
+      { "role": "implementer", "type": "coder", "tier": 2, "required": true },
+      { "role": "reviewer", "type": "reviewer", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["tester"], "gate": "test-written", "skippable": false },
+      { "type": "refinement", "agents": ["coder"], "gate": "tests-pass", "skippable": false },
+      { "type": "completion", "agents": ["reviewer"], "gate": "review-approved", "skippable": false }
+    ],
+    "estimatedDuration": 20,
+    "estimatedCost": 0.04
+  },
+  {
+    "key": "security-audit",
+    "name": "Security Audit",
+    "description": "Security review, vulnerability analysis, and compliance",
+    "methodology": "sparc-partial",
+    "topology": "hierarchical",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 5,
+    "agents": [
+      { "role": "lead", "type": "security-architect", "tier": 3, "required": true },
+      { "role": "auditor", "type": "security-auditor", "tier": 3, "required": true },
+      { "role": "reviewer", "type": "reviewer", "tier": 2, "required": true },
+      { "role": "validator", "type": "tester", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["security-architect"], "gate": "threat-model-approved", "skippable": false },
+      { "type": "refinement", "agents": ["security-auditor", "tester"], "gate": "audit-pass", "skippable": false },
+      { "type": "completion", "agents": ["reviewer"], "gate": "review-approved", "skippable": false }
+    ],
+    "estimatedDuration": 30,
+    "estimatedCost": 0.08
+  },
+  {
+    "key": "performance-sprint",
+    "name": "Performance Sprint",
+    "description": "Performance optimization, profiling, and benchmarking",
+    "methodology": "sparc-partial",
+    "topology": "hierarchical",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 4,
+    "agents": [
+      { "role": "lead", "type": "performance-engineer", "tier": 3, "required": true },
+      { "role": "analyzer", "type": "perf-analyzer", "tier": 3, "required": true },
+      { "role": "implementer", "type": "coder", "tier": 3, "required": true },
+      { "role": "validator", "type": "tester", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["performance-engineer"], "gate": "benchmark-baseline", "skippable": false },
+      { "type": "refinement", "agents": ["coder", "perf-analyzer"], "gate": "perf-improved", "skippable": false },
+      { "type": "completion", "agents": ["tester"], "gate": "benchmark-pass", "skippable": false }
+    ],
+    "estimatedDuration": 25,
+    "estimatedCost": 0.06
+  },
+  {
+    "key": "release-pipeline",
+    "name": "Release Pipeline",
+    "description": "Release coordination, PR management, and deployment",
+    "methodology": "sparc-partial",
+    "topology": "hierarchical-mesh",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 6,
+    "agents": [
+      { "role": "lead", "type": "release-manager", "tier": 3, "required": true },
+      { "role": "pr-handler", "type": "pr-manager", "tier": 2, "required": true },
+      { "role": "reviewer", "type": "code-review-swarm", "tier": 2, "required": true },
+      { "role": "validator", "type": "tester", "tier": 2, "required": true },
+      { "role": "deployer", "type": "cicd-engineer", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "refinement", "agents": ["code-review-swarm", "tester"], "gate": "review-pass", "skippable": false },
+      { "type": "completion", "agents": ["release-manager", "cicd-engineer"], "gate": "deploy-verified", "skippable": false }
+    ],
+    "estimatedDuration": 20,
+    "estimatedCost": 0.05
+  },
+  {
+    "key": "fullstack-swarm",
+    "name": "Full Stack Swarm",
+    "description": "Large-scale cross-cutting work requiring multiple specialists",
+    "methodology": "sparc-full",
+    "topology": "hierarchical-mesh",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 8,
+    "agents": [
+      { "role": "lead", "type": "hierarchical-coordinator", "tier": 3, "required": true },
+      { "role": "architect", "type": "system-architect", "tier": 3, "required": true },
+      { "role": "backend", "type": "backend-dev", "tier": 3, "required": true },
+      { "role": "frontend", "type": "coder", "tier": 3, "required": true },
+      { "role": "validator", "type": "tester", "tier": 2, "required": true },
+      { "role": "reviewer", "type": "reviewer", "tier": 2, "required": true },
+      { "role": "security", "type": "security-auditor", "tier": 2, "required": false }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["system-architect"], "gate": "spec-approved", "skippable": false },
+      { "type": "architecture", "agents": ["system-architect", "security-auditor"], "gate": "arch-approved", "skippable": false },
+      { "type": "refinement", "agents": ["backend-dev", "coder", "tester"], "gate": "tests-pass", "skippable": false },
+      { "type": "completion", "agents": ["reviewer"], "gate": "review-approved", "skippable": false }
+    ],
+    "estimatedDuration": 60,
+    "estimatedCost": 0.15
+  },
+  {
+    "key": "cicd-pipeline",
+    "name": "CI/CD Pipeline",
+    "description": "Validate code on push to default branch",
+    "methodology": "sparc-partial",
+    "topology": "hierarchical",
+    "consensus": "raft",
+    "swarmStrategy": "minimal",
+    "maxAgents": 4,
+    "agents": [
+      { "role": "validator", "type": "tester", "tier": 2, "required": true },
+      { "role": "reviewer", "type": "reviewer", "tier": 2, "required": false },
+      { "role": "deployer", "type": "coder", "tier": 2, "required": true }
+    ],
+    "phases": [
+      { "type": "refinement", "agents": ["tester", "reviewer"], "gate": "tests-pass", "skippable": false },
+      { "type": "completion", "agents": ["coder"], "gate": "build-pass", "skippable": false }
+    ],
+    "estimatedDuration": 10,
+    "estimatedCost": 0.02
+  },
+  {
+    "key": "github-ops",
+    "name": "GitHub Operations",
+    "description": "PR review, issue triage, and GitHub-specific workflows",
+    "methodology": "sparc-partial",
+    "topology": "hierarchical",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 5,
+    "agents": [
+      { "role": "lead", "type": "architect", "tier": 3, "required": false },
+      { "role": "reviewer", "type": "reviewer", "tier": 2, "required": true },
+      { "role": "implementer", "type": "coder", "tier": 2, "required": true }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["architect"], "gate": "spec-approved", "skippable": true },
+      { "type": "refinement", "agents": ["reviewer", "coder"], "gate": "review-approved", "skippable": false }
+    ],
+    "estimatedDuration": 15,
+    "estimatedCost": 0.03
+  },
+  {
+    "key": "tdd-workflow",
+    "name": "TDD Workflow",
+    "description": "Test-driven development for bug fixes",
+    "methodology": "tdd",
+    "topology": "hierarchical",
+    "consensus": "raft",
+    "swarmStrategy": "specialized",
+    "maxAgents": 5,
+    "agents": [
+      { "role": "test-writer", "type": "tester", "tier": 2, "required": true },
+      { "role": "implementer", "type": "coder", "tier": 3, "required": true },
+      { "role": "reviewer", "type": "reviewer", "tier": 2, "required": true }
+    ],
+    "phases": [
+      { "type": "specification", "agents": ["tester"], "gate": "test-written", "skippable": false },
+      { "type": "refinement", "agents": ["coder"], "gate": "tests-pass", "skippable": false },
+      { "type": "completion", "agents": ["reviewer"], "gate": "review-approved", "skippable": false }
+    ],
+    "estimatedDuration": 20,
+    "estimatedCost": 0.04
+  },
+  {
+    "key": "monitoring-alerting",
+    "name": "Monitoring & Alerting",
+    "description": "Incident response for deployment failures",
+    "methodology": "adhoc",
+    "topology": "star",
+    "consensus": "none",
+    "swarmStrategy": "minimal",
+    "maxAgents": 4,
+    "agents": [
+      { "role": "incident-lead", "type": "architect", "tier": 3, "required": true },
+      { "role": "fixer", "type": "coder", "tier": 3, "required": true },
+      { "role": "validator", "type": "tester", "tier": 2, "required": true }
+    ],
+    "phases": [
+      { "type": "refinement", "agents": ["coder", "tester"], "gate": "fix-verified", "skippable": false },
+      { "type": "completion", "agents": ["coder"], "gate": "deploy-verified", "skippable": false }
+    ],
+    "estimatedDuration": 15,
+    "estimatedCost": 0.03
+  }
+]
