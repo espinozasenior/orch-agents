@@ -92,7 +92,7 @@ describe('Presets', () => {
 
   it('applyPreset("full-sparc") enables all discovered agents and all events', () => {
     const config = applyPreset('full-sparc');
-    // All agents should be enabled (count depends on agents/*.yaml on disk)
+    // All agents should be enabled (count depends on .claude/agents/**/*.md on disk)
     assert.ok(config.activeAgents.every(a => a.enabled), 'all agents should be enabled');
     assert.ok(config.activeAgents.length >= 5, 'should have at least 5 agents');
     assert.equal(config.githubEvents.filter(e => e.enabled).length, 14);

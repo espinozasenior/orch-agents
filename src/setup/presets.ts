@@ -9,7 +9,7 @@ import type {
   SetupConfig, PresetKey, AgentToggle, EventToggle,
   TopologyChoice, ConsensusChoice, StrategyChoice,
 } from './types';
-import { getDefaultRegistry, type AgentRegistry } from '../agent-registry';
+import { getDefaultRegistry, createAgentRegistry, type AgentRegistry } from '../agent-registry';
 
 // ---------------------------------------------------------------------------
 // Agent type discovery from .claude/agents/**/*.md (via AgentRegistry)
@@ -29,8 +29,7 @@ const FALLBACK_AGENT_TYPES = [
 export function discoverAgentTypes(agentsDirOrRegistry?: string | AgentRegistry): string[] {
   // Support legacy callers that pass a directory path
   if (typeof agentsDirOrRegistry === 'string') {
-    const { createAgentRegistry } = require('../agent-registry');
-    const registry = createAgentRegistry({ agentsDir: agentsDirOrRegistry }) as AgentRegistry;
+    const registry = createAgentRegistry({ agentsDir: agentsDirOrRegistry });
     const names = registry.getNames();
     return names.length > 0 ? names : [...FALLBACK_AGENT_TYPES];
   }

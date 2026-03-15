@@ -37,6 +37,7 @@ export interface WorktreeManagerDeps {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// eslint-disable-next-line no-control-regex -- intentional null-byte check for path traversal prevention
 const PATH_TRAVERSAL_RE = /\.\.|^\/|[\x00]/;
 
 function validatePlanId(planId: string): void {
@@ -57,6 +58,7 @@ function validatePlanId(planId: string): void {
  * - strings starting with `-` (prevents argument injection)
  * - strings starting with `/` or ending with `/`, `.lock`, or `.`
  */
+// eslint-disable-next-line no-control-regex -- intentional null-byte and DEL check for git ref validation
 const BRANCH_INVALID_CHARS_RE = /[\x00 ~^:?*[\\\x7f]/;
 
 function validateBranchName(name: string, label: string): void {
