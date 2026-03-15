@@ -12,6 +12,7 @@
 import { resolve as pathResolve } from 'node:path';
 import type { Logger } from '../shared/logger';
 import type { TaskExecutionResult } from './task-executor';
+import { buildSafeEnv } from './cli-client';
 
 // ---------------------------------------------------------------------------
 // Re-export for backward compatibility
@@ -120,7 +121,7 @@ export function createInteractiveExecutor(
           const child = resolvedSpawn!(cliBin, args, {
             cwd: request.worktreePath,
             timeout,
-            env: { ...process.env, FORCE_COLOR: '0' },
+            env: buildSafeEnv(),
             stdio: ['pipe', 'pipe', 'pipe'],
           });
 

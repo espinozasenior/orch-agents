@@ -12,6 +12,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Logger } from '../shared/logger';
 import { ExecutionError } from '../shared/errors';
+import { buildSafeEnv } from '../execution/cli-client';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,7 +96,7 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
         timeout: 30_000,
         cwd: opts?.cwd,
         env: {
-          ...process.env,
+          ...buildSafeEnv(),
           ...(deps.token ? { GH_TOKEN: deps.token } : {}),
         },
       }));

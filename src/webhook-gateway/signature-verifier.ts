@@ -21,9 +21,14 @@ export function verifySignature(
   signature: string,
   secret: string,
 ): void {
-  // Dev mode: skip verification when no secret is configured
+  // SECURITY: Require explicit opt-in to skip verification
   if (!secret) {
-    return;
+    if (process.env.SKIP_SIGNATURE_VERIFICATION === 'true') {
+      return;
+    }
+    throw new AuthenticationError(
+      'Webhook secret is not configured. Set WEBHOOK_SECRET or explicitly set SKIP_SIGNATURE_VERIFICATION=true for development.',
+    );
   }
 
   if (!signature) {

@@ -31,9 +31,26 @@ describe('verifySignature', () => {
     );
   });
 
-  it('should skip verification when secret is empty (dev mode)', () => {
-    // Should not throw even with garbage signature
-    verifySignature(payload, 'garbage', '');
+  it('should throw when secret is empty and SKIP_SIGNATURE_VERIFICATION is not set', () => {
+    delete process.env.SKIP_SIGNATURE_VERIFICATION;
+    assert.throws(
+      () => verifySignature(payload, 'garbage', ''),
+      (err: unknown) => {
+        assert.ok(err instanceof AuthenticationError);
+        assert.match(err.message, /Webhook secret is not configured/);
+        return true;
+      },
+    );
+  });
+
+  it('should skip verification when SKIP_SIGNATURE_VERIFICATION=true and secret is empty', () => {
+    process.env.SKIP_SIGNATURE_VERIFICATION = 'true';
+    try {
+      // Should not throw even with garbage signature
+      verifySignature(payload, 'garbage', '');
+    } finally {
+      delete process.env.SKIP_SIGNATURE_VERIFICATION;
+    }
   });
 
   it('should throw when signature header is missing and secret is set', () => {
