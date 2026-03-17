@@ -382,6 +382,63 @@ describe('InteractiveStrategy', () => {
     assert.ok(result.artifacts.length > 0, 'Should still produce artifacts');
   });
 
+  describe('dynamic bot marker via BOT_USERNAME', () => {
+    it('uses custom BOT_USERNAME for PR comment marker', async () => {
+      const originalEnv = process.env.BOT_USERNAME;
+      process.env.BOT_USERNAME = 'automata';
+
+      try {
+        const postPRComment = mock.fn(async () => {});
+        const mockGithubClient = { postPRComment };
+
+        const deps = makeStrategyDeps({ githubClient: mockGithubClient as StrategyDeps['githubClient'] });
+        const plan = makePlan();
+        const phase = plan.phases[0];
+        const intake = makeIntakeEvent();
+
+        await strategy.run(plan, phase, deps, deps.logger, intake);
+
+        assert.equal(postPRComment.mock.calls.length, 1, 'Should post PR comment');
+        const commentBody = postPRComment.mock.calls[0].arguments[2] as string;
+        assert.ok(commentBody.includes('<!-- automata-bot -->'), `Expected automata-bot marker, got: ${commentBody}`);
+        assert.ok(!commentBody.includes('<!-- orch-agents-bot -->'), 'Should NOT contain default marker');
+      } finally {
+        if (originalEnv === undefined) {
+          delete process.env.BOT_USERNAME;
+        } else {
+          process.env.BOT_USERNAME = originalEnv;
+        }
+      }
+    });
+
+    it('falls back to orch-agents-bot when BOT_USERNAME is not set', async () => {
+      const originalEnv = process.env.BOT_USERNAME;
+      delete process.env.BOT_USERNAME;
+
+      try {
+        const postPRComment = mock.fn(async () => {});
+        const mockGithubClient = { postPRComment };
+
+        const deps = makeStrategyDeps({ githubClient: mockGithubClient as StrategyDeps['githubClient'] });
+        const plan = makePlan();
+        const phase = plan.phases[0];
+        const intake = makeIntakeEvent();
+
+        await strategy.run(plan, phase, deps, deps.logger, intake);
+
+        assert.equal(postPRComment.mock.calls.length, 1, 'Should post PR comment');
+        const commentBody = postPRComment.mock.calls[0].arguments[2] as string;
+        assert.ok(commentBody.includes('<!-- orch-agents-bot -->'), `Expected default marker, got: ${commentBody}`);
+      } finally {
+        if (originalEnv === undefined) {
+          delete process.env.BOT_USERNAME;
+        } else {
+          process.env.BOT_USERNAME = originalEnv;
+        }
+      }
+    });
+  });
+
   it('does not emit ArtifactsApplied when no commit SHA returned', async () => {
     const mockApplier: ArtifactApplier = {
       apply: mock.fn(async () => ({

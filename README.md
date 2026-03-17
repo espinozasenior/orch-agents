@@ -184,6 +184,20 @@ Edit `config/workflow-templates.json`, find `quick-fix`, and the `phases` array 
 
 The `"skippable": true` means it won't block the pipeline if the gate fails.
 
+### "Prevent the bot from responding to its own comments"
+
+Set the `BOT_USERNAME` environment variable to your bot's GitHub username:
+
+```bash
+BOT_USERNAME=my-bot-account npm start
+```
+
+This does two things:
+1. Drops any webhook where the sender matches the bot username (prevents infinite loops)
+2. Makes `mentions_bot` routing rules only match comments that contain `@my-bot-account`
+
+Without this, every `issue_comment` event will match — including the bot's own replies.
+
 ### "Ignore issue comments entirely"
 
 Edit `config/github-routing.json`, remove the entry with `"event": "issue_comment"`.
@@ -196,6 +210,7 @@ Edit `config/github-routing.json`, remove the entry with `"event": "issue_commen
 | `LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 | `ENABLE_TASK_AGENTS` | `false` | Enable real AI agent execution (otherwise runs in stub mode) |
 | `ENABLE_AGENTS` | `false` | Enable CLI lifecycle agents (legacy mode) |
+| `BOT_USERNAME` | *(none)* | GitHub username of the bot. Prevents the bot from processing its own comments (infinite loop prevention). Also makes `mentions_bot` routing rules require an actual `@<username>` mention instead of matching all comments. |
 | `NODE_ENV` | `development` | Set to `production` for production logging |
 
 ## Build and Test

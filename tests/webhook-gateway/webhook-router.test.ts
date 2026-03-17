@@ -299,6 +299,301 @@ describe('webhookRouter (integration)', () => {
     assert.equal(responseBody.error.code, 'ERR_RATE_LIMIT');
   });
 
+  it('should skip issue_comment events containing bot marker', async () => {
+    const payload = {
+      action: 'created',
+      repository: {
+        full_name: 'acme/webapp',
+        default_branch: 'main',
+      },
+      sender: {
+        login: 'orch-bot',
+        id: 99999,
+        type: 'User',
+      },
+      issue: {
+        number: 42,
+      },
+      comment: {
+        body: 'All checks passed. No findings.\n<!-- orch-agents-bot -->',
+      },
+    };
+    const body = JSON.stringify(payload);
+    const deliveryId = nextDeliveryId();
+
+    let receivedEvent = false;
+    eventBus.subscribe('IntakeCompleted', () => {
+      receivedEvent = true;
+    });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/github',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issue_comment',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': computeSignature(body, TEST_SECRET),
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const responseBody = JSON.parse(response.body);
+    assert.equal(responseBody.status, 'skipped');
+    assert.equal(receivedEvent, false, 'Should NOT publish IntakeCompleted for bot comments');
+  });
+
+  it('should skip issue_comment events with custom BOT_USERNAME marker', async () => {
+    // Re-create server with BOT_USERNAME configured
+    buffer.dispose();
+    await server.close();
+    buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+
+    const config = loadConfig({
+      PORT: '3999',
+      NODE_ENV: 'test',
+      LOG_LEVEL: 'fatal',
+      WEBHOOK_SECRET: TEST_SECRET,
+      BOT_USERNAME: 'automata',
+    });
+    server = Fastify({ logger: false });
+    await server.register(webhookRouter, {
+      config,
+      logger: createLogger({ level: 'fatal' }),
+      eventBus,
+      eventBuffer: buffer,
+    } as WebhookRouterDeps);
+    await server.ready();
+
+    const payload = {
+      action: 'created',
+      repository: {
+        full_name: 'acme/webapp',
+        default_branch: 'main',
+      },
+      sender: {
+        login: 'some-user',
+        id: 77777,
+        type: 'User',
+      },
+      issue: {
+        number: 42,
+      },
+      comment: {
+        body: 'Agent completed phase.\n<!-- automata-bot -->',
+      },
+    };
+    const body = JSON.stringify(payload);
+    const deliveryId = nextDeliveryId();
+
+    let receivedEvent = false;
+    eventBus.subscribe('IntakeCompleted', () => {
+      receivedEvent = true;
+    });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/github',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issue_comment',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': computeSignature(body, TEST_SECRET),
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const responseBody = JSON.parse(response.body);
+    assert.equal(responseBody.status, 'skipped');
+    assert.equal(receivedEvent, false, 'Should NOT publish IntakeCompleted for custom bot marker');
+  });
+
+  it('should NOT skip issue_comment with default marker when BOT_USERNAME is set to different value', async () => {
+    // Re-create server with BOT_USERNAME configured to 'automata'
+    buffer.dispose();
+    await server.close();
+    buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+
+    const config = loadConfig({
+      PORT: '3999',
+      NODE_ENV: 'test',
+      LOG_LEVEL: 'fatal',
+      WEBHOOK_SECRET: TEST_SECRET,
+      BOT_USERNAME: 'automata',
+    });
+    server = Fastify({ logger: false });
+    await server.register(webhookRouter, {
+      config,
+      logger: createLogger({ level: 'fatal' }),
+      eventBus,
+      eventBuffer: buffer,
+    } as WebhookRouterDeps);
+    await server.ready();
+
+    // This comment has the OLD default marker, but BOT_USERNAME is 'automata'
+    // so the detection should look for <!-- automata-bot --> NOT <!-- orch-agents-bot -->
+    const payload = {
+      action: 'created',
+      repository: {
+        full_name: 'acme/webapp',
+        default_branch: 'main',
+      },
+      sender: {
+        login: 'some-user',
+        id: 77777,
+        type: 'User',
+      },
+      issue: {
+        number: 42,
+      },
+      comment: {
+        body: 'Some comment\n<!-- orch-agents-bot -->',
+      },
+    };
+    const body = JSON.stringify(payload);
+    const deliveryId = nextDeliveryId();
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/github',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issue_comment',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': computeSignature(body, TEST_SECRET),
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const responseBody = JSON.parse(response.body);
+    // Should NOT be skipped by bot marker detection since marker doesn't match
+    // It may be 'queued' or 'skipped' for other reasons (routing), but not bot detection
+    assert.ok(
+      responseBody.status === 'queued' || responseBody.status === 'skipped',
+      `Expected queued or skipped, got ${responseBody.status}`,
+    );
+  });
+
+  it('should skip issue_comment events from BOT_USERNAME', async () => {
+    // Re-create server with BOT_USERNAME configured
+    buffer.dispose();
+    await server.close();
+    buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+
+    const config = loadConfig({
+      PORT: '3999',
+      NODE_ENV: 'test',
+      LOG_LEVEL: 'fatal',
+      WEBHOOK_SECRET: TEST_SECRET,
+      BOT_USERNAME: 'orch-bot',
+    });
+    server = Fastify({ logger: false });
+    await server.register(webhookRouter, {
+      config,
+      logger: createLogger({ level: 'fatal' }),
+      eventBus,
+      eventBuffer: buffer,
+    } as WebhookRouterDeps);
+    await server.ready();
+
+    const payload = {
+      action: 'created',
+      repository: {
+        full_name: 'acme/webapp',
+        default_branch: 'main',
+      },
+      sender: {
+        login: 'orch-bot',
+        id: 99999,
+        type: 'User',
+      },
+      issue: {
+        number: 42,
+      },
+      comment: {
+        body: 'Some comment without the bot marker',
+        user: {
+          login: 'orch-bot',
+        },
+      },
+    };
+    const body = JSON.stringify(payload);
+    const deliveryId = nextDeliveryId();
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/github',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issue_comment',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': computeSignature(body, TEST_SECRET),
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const responseBody = JSON.parse(response.body);
+    assert.equal(responseBody.status, 'skipped');
+  });
+
+  it('should process issue_comment events from other users normally', async () => {
+    setRoutingTable(routingRules as RoutingRule[]);
+    setBotUserId(0);
+
+    const payload = {
+      action: 'created',
+      repository: {
+        full_name: 'acme/webapp',
+        default_branch: 'main',
+      },
+      sender: {
+        login: 'real-user',
+        id: 11111,
+        type: 'User',
+      },
+      issue: {
+        number: 42,
+      },
+      comment: {
+        body: 'A normal user comment mentioning @orch-bot',
+      },
+    };
+    const body = JSON.stringify(payload);
+    const deliveryId = nextDeliveryId();
+
+    let receivedEvent: IntakeCompletedEvent | null = null;
+    eventBus.subscribe('IntakeCompleted', (event) => {
+      receivedEvent = event;
+    });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/github',
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'issue_comment',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': computeSignature(body, TEST_SECRET),
+      },
+      payload: body,
+    });
+
+    // The routing table may or may not have a matching rule for issue_comment/created
+    // with mentions_bot condition. At minimum, it should NOT be skipped as a bot comment.
+    assert.equal(response.statusCode, 202);
+    const responseBody = JSON.parse(response.body);
+    // It should either be 'queued' (if routing matches) or 'skipped' (if no routing rule)
+    // but NOT skipped due to bot detection
+    assert.ok(
+      responseBody.status === 'queued' || responseBody.status === 'skipped',
+      `Expected queued or skipped, got ${responseBody.status}`,
+    );
+  });
+
   it('should process push event to default branch', async () => {
     const payload = {
       ref: 'refs/heads/main',

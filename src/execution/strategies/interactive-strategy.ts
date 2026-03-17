@@ -187,10 +187,12 @@ export function createInteractiveStrategy(opts: InteractiveStrategyOptions = {})
         // 6. Post PR comment if passed and GitHub client available
         if (fixItPassed && deps.githubClient && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
           try {
+            const commentBody = fixItSummary ?? `Agent ${agent.role} completed ${phase.type} phase.`;
+            const botName = process.env.BOT_USERNAME ?? 'orch-agents';
             await deps.githubClient.postPRComment(
               intakeEvent.entities.repo,
               intakeEvent.entities.prNumber,
-              fixItSummary ?? `Agent ${agent.role} completed ${phase.type} phase.`,
+              `${commentBody}\n<!-- ${botName}-bot -->`,
             );
           } catch (ghErr) {
             logger?.warn('Failed to post PR comment', {

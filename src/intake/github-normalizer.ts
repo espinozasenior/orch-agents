@@ -61,6 +61,7 @@ export function resetRoutingTable(): void {
 // ---------------------------------------------------------------------------
 
 let _botUserId: number = 0;
+let _botUsername: string = '';
 
 /**
  * Set the bot user ID for loop prevention.
@@ -68,6 +69,15 @@ let _botUserId: number = 0;
  */
 export function setBotUserId(id: number): void {
   _botUserId = id;
+}
+
+/**
+ * Set the bot username for loop prevention.
+ * Events from this sender will be skipped, and mentions_bot
+ * will only match comments containing @username.
+ */
+export function setBotUsername(name: string): void {
+  _botUsername = name;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,11 +98,13 @@ export function normalizeGitHubEvent(
   parsed: ParsedGitHubEvent,
 ): IntakeEvent | null {
   // Bot loop prevention
+  if (_botUsername && parsed.sender === _botUsername) {
+    return null;
+  }
   if (_botUserId > 0 && parsed.senderId === _botUserId) {
     return null;
   }
   if (parsed.senderIsBot && _botUserId === 0) {
-    // If no bot user ID is configured, skip all bot senders
     return null;
   }
 
@@ -175,9 +187,9 @@ function matchesCondition(rule: RoutingRule, parsed: ParsedGitHubEvent): boolean
       return parsed.labels.includes('enhancement');
 
     case 'mentions_bot':
-      // For now, all issue_comment created events match.
-      // A more refined check can be added when bot username is configured.
-      return parsed.commentBody !== null;
+      if (!parsed.commentBody) return false;
+      if (_botUsername) return parsed.commentBody.includes(`@${_botUsername}`);
+      return true;
 
     case 'changes_requested':
       return parsed.reviewState === 'changes_requested';

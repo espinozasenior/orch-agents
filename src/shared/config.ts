@@ -19,6 +19,8 @@ export interface AppConfig {
   readonly webhookSecret: string;
   /** GitHub personal access token */
   readonly githubToken: string;
+  /** Bot username for loop prevention (optional) */
+  readonly botUsername?: string;
 }
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = [
@@ -52,12 +54,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new Error('GITHUB_TOKEN is required in production');
   }
 
+  const botUsername = env.BOT_USERNAME ?? undefined;
+
   return Object.freeze({
     port,
     nodeEnv,
     logLevel,
     webhookSecret,
     githubToken,
+    botUsername,
   });
 }
 

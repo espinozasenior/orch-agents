@@ -11,6 +11,7 @@ import type { AppConfig } from './shared/config';
 import type { Logger } from './shared/logger';
 import type { EventBus } from './shared/event-bus';
 import { webhookRouter } from './webhook-gateway/webhook-router';
+import { setBotUsername } from './intake/github-normalizer';
 
 export interface ServerDependencies {
   config: AppConfig;
@@ -25,7 +26,11 @@ export interface ServerDependencies {
  * This factory pattern enables testing without binding to a port.
  */
 export async function buildServer(deps: ServerDependencies): Promise<FastifyInstance> {
-  const { logger } = deps;
+  const { config, logger } = deps;
+
+  if (config.botUsername) {
+    setBotUsername(config.botUsername);
+  }
 
   const server = Fastify({
     logger: false, // We use our own logger
