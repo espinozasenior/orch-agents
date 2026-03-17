@@ -138,8 +138,23 @@ export function createWorktreeManager(deps: WorktreeManagerDeps = {}): WorktreeM
         await run('git', ['worktree', 'add', worktreePath, '-b', workBranch, baseBranch]);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        logger?.error('Failed to create worktree', { planId, error: message });
-        throw new ExecutionError(`Worktree create failed: ${message}`, { cause: err });
+
+        // If the branch already exists (e.g., from a previous failed run),
+        // delete it and retry once.
+        if (message.includes('already exists')) {
+          logger?.warn('Branch already exists, deleting and retrying', { planId, workBranch });
+          try {
+            await run('git', ['branch', '-D', workBranch]);
+            await run('git', ['worktree', 'add', worktreePath, '-b', workBranch, baseBranch]);
+          } catch (retryErr) {
+            const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            logger?.error('Retry after branch cleanup also failed', { planId, error: retryMessage });
+            throw new ExecutionError(`Worktree create failed after branch cleanup: ${retryMessage}`, { cause: retryErr });
+          }
+        } else {
+          logger?.error('Failed to create worktree', { planId, error: message });
+          throw new ExecutionError(`Worktree create failed: ${message}`, { cause: err });
+        }
       }
 
       const handle: WorktreeHandle = {
@@ -240,6 +255,17 @@ export function createWorktreeManager(deps: WorktreeManagerDeps = {}): WorktreeM
             error: rmErr instanceof Error ? rmErr.message : String(rmErr),
           });
         }
+      }
+
+      // Clean up the agent branch so retries with `git worktree add -b` don't fail
+      try {
+        await run('git', ['branch', '-D', handle.branch]);
+      } catch (branchErr) {
+        logger?.warn('Branch deletion failed (may already be gone)', {
+          planId: handle.planId,
+          branch: handle.branch,
+          error: branchErr instanceof Error ? branchErr.message : String(branchErr),
+        });
       }
 
       handle.status = 'disposed';

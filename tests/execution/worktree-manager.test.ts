@@ -510,7 +510,7 @@ describe('WorktreeManager', () => {
   });
 
   describe('dispose()', () => {
-    it('removes worktree and updates status', async () => {
+    it('removes worktree and deletes branch and updates status', async () => {
       const { exec, calls } = mockExec();
       const manager = createWorktreeManager(makeDeps({ exec }));
 
@@ -524,10 +524,14 @@ describe('WorktreeManager', () => {
 
       await manager.dispose(handle);
 
-      assert.equal(calls.length, 1);
+      assert.equal(calls.length, 2);
       assert.equal(calls[0].cmd, 'git');
       assert.deepEqual(calls[0].args, [
         'worktree', 'remove', '/tmp/orch-agents/plan-dispose', '--force',
+      ]);
+      assert.equal(calls[1].cmd, 'git');
+      assert.deepEqual(calls[1].args, [
+        'branch', '-D', 'work/plan-dispose',
       ]);
       assert.equal(handle.status, 'disposed');
     });
@@ -541,7 +545,7 @@ describe('WorktreeManager', () => {
             // First call: git worktree remove fails
             throw new Error('fatal: worktree is dirty');
           }
-          // Second call: rm -rf succeeds
+          // Subsequent calls: rm -rf and branch -D succeed
           return { stdout: '', stderr: '' };
         },
       });
@@ -558,13 +562,16 @@ describe('WorktreeManager', () => {
       // Should NOT throw — fallback handles cleanup
       await manager.dispose(handle);
 
-      assert.equal(calls.length, 2);
+      assert.equal(calls.length, 3);
       assert.equal(calls[0].cmd, 'git');
       assert.deepEqual(calls[0].args, [
         'worktree', 'remove', '/tmp/orch-agents/plan-dirty', '--force',
       ]);
       assert.equal(calls[1].cmd, 'rm');
       assert.deepEqual(calls[1].args, ['-rf', '/tmp/orch-agents/plan-dirty']);
+      assert.deepEqual(calls[2].args, [
+        'branch', '-D', 'work/plan-dirty',
+      ]);
       assert.equal(handle.status, 'disposed');
     });
 
@@ -585,6 +592,126 @@ describe('WorktreeManager', () => {
       // Should NOT throw even when both fail
       await manager.dispose(handle);
       assert.equal(handle.status, 'disposed');
+    });
+
+    it('deletes the branch after removing the worktree', async () => {
+      const { exec, calls } = mockExec();
+      const manager = createWorktreeManager(makeDeps({ exec }));
+
+      const handle: WorktreeHandle = {
+        planId: 'plan-branch-cleanup',
+        path: '/tmp/orch-agents/plan-branch-cleanup',
+        branch: 'agent/plan-branch-cleanup',
+        baseBranch: 'main',
+        status: 'active',
+      };
+
+      await manager.dispose(handle);
+
+      // Should have called git worktree remove AND git branch -D
+      assert.equal(calls.length, 2);
+      assert.deepEqual(calls[0].args, [
+        'worktree', 'remove', '/tmp/orch-agents/plan-branch-cleanup', '--force',
+      ]);
+      assert.deepEqual(calls[1].args, [
+        'branch', '-D', 'agent/plan-branch-cleanup',
+      ]);
+      assert.equal(handle.status, 'disposed');
+    });
+
+    it('still disposes even when branch deletion fails', async () => {
+      let callCount = 0;
+      const { exec, calls } = mockExec({
+        handler: (_cmd, args) => {
+          callCount++;
+          // worktree remove succeeds, branch -D fails
+          if (args.includes('-D')) {
+            throw new Error('error: branch not found');
+          }
+          return { stdout: '', stderr: '' };
+        },
+      });
+      const manager = createWorktreeManager(makeDeps({ exec }));
+
+      const handle: WorktreeHandle = {
+        planId: 'plan-no-branch',
+        path: '/tmp/orch-agents/plan-no-branch',
+        branch: 'agent/plan-no-branch',
+        baseBranch: 'main',
+        status: 'active',
+      };
+
+      // Should NOT throw even when branch delete fails
+      await manager.dispose(handle);
+      assert.equal(handle.status, 'disposed');
+      assert.equal(calls.length, 2);
+    });
+  });
+
+  describe('create() — pre-existing branch handling', () => {
+    it('deletes pre-existing branch and retries when git worktree add fails with branch exists error', async () => {
+      let worktreeAddAttempts = 0;
+      const { exec, calls } = mockExec({
+        handler: (_cmd, args) => {
+          if (args.includes('worktree') && args.includes('add')) {
+            worktreeAddAttempts++;
+            if (worktreeAddAttempts === 1) {
+              throw new Error("fatal: a branch named 'agent/plan-retry' already exists");
+            }
+            return { stdout: '', stderr: '' };
+          }
+          // git branch -D succeeds
+          return { stdout: '', stderr: '' };
+        },
+      });
+      const manager = createWorktreeManager(makeDeps({ exec }));
+
+      const handle = await manager.create('plan-retry', 'main', 'agent/plan-retry');
+
+      // Should have called: worktree add (fail), branch -D, worktree add (success)
+      assert.equal(calls.length, 3);
+      assert.deepEqual(calls[0].args, [
+        'worktree', 'add', '/tmp/orch-agents/plan-retry', '-b', 'agent/plan-retry', 'main',
+      ]);
+      assert.deepEqual(calls[1].args, [
+        'branch', '-D', 'agent/plan-retry',
+      ]);
+      assert.deepEqual(calls[2].args, [
+        'worktree', 'add', '/tmp/orch-agents/plan-retry', '-b', 'agent/plan-retry', 'main',
+      ]);
+
+      assert.equal(handle.planId, 'plan-retry');
+      assert.equal(handle.status, 'active');
+    });
+
+    it('still works normally when no pre-existing branch exists', async () => {
+      const { exec, calls } = mockExec();
+      const manager = createWorktreeManager(makeDeps({ exec }));
+
+      const handle = await manager.create('plan-fresh', 'main', 'agent/plan-fresh');
+
+      // Should have called only worktree add (no branch cleanup needed)
+      assert.equal(calls.length, 1);
+      assert.deepEqual(calls[0].args, [
+        'worktree', 'add', '/tmp/orch-agents/plan-fresh', '-b', 'agent/plan-fresh', 'main',
+      ]);
+      assert.equal(handle.status, 'active');
+    });
+
+    it('throws ExecutionError when worktree add fails for non-branch-exists reason', async () => {
+      const { exec } = mockExec({
+        handler: () => { throw new Error('fatal: some other error'); },
+      });
+      const manager = createWorktreeManager(makeDeps({ exec }));
+
+      await assert.rejects(
+        () => manager.create('plan-other-err', 'main', 'agent/plan-other-err'),
+        (err: unknown) => {
+          assert.ok(err instanceof ExecutionError);
+          assert.match(err.message, /some other error/);
+          return true;
+        },
+      );
     });
   });
 });
