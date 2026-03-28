@@ -24,6 +24,7 @@ import { createSimpleExecutor, type SimpleExecutor } from './execution/simple-ex
 import { getDefaultRegistry } from './agent-registry/agent-registry';
 import { parseWorkflowMd, type WorkflowConfig } from './integration/linear/workflow-parser';
 import { resolve as pathResolve } from 'node:path';
+import { createGitHubAppTokenProvider, type GitHubTokenProvider } from './integration/github-app-auth';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -54,6 +55,35 @@ async function main(): Promise<void> {
       error: err instanceof Error ? err.message : String(err),
     });
     process.exit(1);
+  }
+
+  // GitHub App authentication — prefer over PAT for bot identity
+  let tokenProvider: GitHubTokenProvider | undefined;
+  let effectiveGithubToken: string | undefined = config.githubToken || undefined;
+
+  if ((config.githubAppId || config.githubAppPrivateKeyPath || config.githubAppInstallationId)
+      && !(config.githubAppId && config.githubAppPrivateKeyPath && config.githubAppInstallationId)) {
+    logger.warn('Partial GitHub App config detected — all 3 vars required (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_PATH, GITHUB_APP_INSTALLATION_ID)', {
+      hasAppId: !!config.githubAppId,
+      hasPrivateKeyPath: !!config.githubAppPrivateKeyPath,
+      hasInstallationId: !!config.githubAppInstallationId,
+    });
+  }
+
+  if (config.githubAppId && config.githubAppPrivateKeyPath && config.githubAppInstallationId) {
+    tokenProvider = createGitHubAppTokenProvider({
+      appId: config.githubAppId,
+      privateKeyPath: config.githubAppPrivateKeyPath,
+      installationId: config.githubAppInstallationId,
+      logger,
+    });
+    // Token provider handles caching internally — no eager fetch needed.
+    // The provider will acquire and cache a token on the first API call.
+    logger.info('GitHub App authentication enabled', { appId: config.githubAppId });
+  } else if (effectiveGithubToken) {
+    logger.info('Using personal access token for GitHub');
+  } else {
+    logger.warn('No GitHub authentication configured');
   }
 
   // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
@@ -154,8 +184,12 @@ async function main(): Promise<void> {
     });
 
     let githubClient: ReturnType<typeof createGitHubClient> | undefined;
-    if (process.env.GITHUB_TOKEN) {
-      githubClient = createGitHubClient({ logger: execLogger, token: process.env.GITHUB_TOKEN });
+    if (tokenProvider) {
+      // App auth — tokenProvider resolves fresh tokens on each call
+      githubClient = createGitHubClient({ logger: execLogger, tokenProvider });
+    } else if (effectiveGithubToken) {
+      // PAT fallback — static token
+      githubClient = createGitHubClient({ logger: execLogger, token: effectiveGithubToken });
     }
 
     // Wire SimpleExecutor
@@ -175,7 +209,8 @@ async function main(): Promise<void> {
     logger.info('Interactive agent execution enabled', {
       worktreeBasePath,
       maxFixAttempts,
-      hasGitHubToken: !!process.env.GITHUB_TOKEN,
+      hasGitHubToken: !!effectiveGithubToken,
+      hasGitHubApp: !!tokenProvider,
       simpleExecutor: true,
     });
   }
