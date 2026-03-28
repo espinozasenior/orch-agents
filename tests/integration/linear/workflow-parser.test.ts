@@ -21,12 +21,12 @@ tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
   team: my-team
-  active_states:
-    - Todo
-    - In Progress
-  terminal_states:
-    - Done
-    - Cancelled
+  active_types:
+    - unstarted
+    - started
+  terminal_types:
+    - completed
+    - canceled
 
 agents:
   max_concurrent: 8
@@ -79,10 +79,11 @@ describe('WorkflowParser', () => {
     assert.equal(config.tracker.kind, 'linear');
     assert.equal(config.tracker.apiKey, 'test-api-key-123');
     assert.equal(config.tracker.team, 'my-team');
-    assert.deepEqual(config.tracker.activeStates, ['Todo', 'In Progress']);
-    assert.deepEqual(config.tracker.terminalStates, ['Done', 'Cancelled']);
     assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
     assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
+    // No active_states/terminal_states in YAML → defaults to empty
+    assert.deepEqual(config.tracker.activeStates, []);
+    assert.deepEqual(config.tracker.terminalStates, []);
   });
 
   it('should parse agents section correctly', () => {
@@ -151,7 +152,7 @@ Prompt here.
     assert.equal(config.agents.maxConcurrent, 8);
   });
 
-  it('should use default active/terminal states when not specified', () => {
+  it('should use default active/terminal types when not specified', () => {
     const minimal = `---
 tracker:
   kind: linear
@@ -164,9 +165,36 @@ agents:
 `;
     const config = parseWorkflowMdString(minimal);
 
+    // Type defaults are always populated
+    assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
+    assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
+    // No name-based states → empty (deprecated)
+    assert.deepEqual(config.tracker.activeStates, []);
+    assert.deepEqual(config.tracker.terminalStates, []);
+  });
+
+  it('should still parse legacy active_states/terminal_states for backward compat', () => {
+    const legacy = `---
+tracker:
+  kind: linear
+  team: my-team
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Cancelled
+
+agents:
+  routing:
+    default: quick-fix
+---
+`;
+    const config = parseWorkflowMdString(legacy);
+
     assert.deepEqual(config.tracker.activeStates, ['Todo', 'In Progress']);
     assert.deepEqual(config.tracker.terminalStates, ['Done', 'Cancelled']);
-    // Type defaults are always populated
+    // Types still get defaults
     assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
     assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
   });

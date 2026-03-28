@@ -24,10 +24,10 @@ const TEST_WORKFLOW_CONFIG: WorkflowConfig = {
     kind: 'linear',
     apiKey: '',
     team: 'ENG',
-    activeStates: ['Todo', 'In Progress'],
-    terminalStates: ['Done', 'Cancelled'],
     activeTypes: ['unstarted', 'started'],
     terminalTypes: ['completed', 'canceled'],
+    activeStates: [],
+    terminalStates: [],
   },
   agents: {
     maxConcurrent: 8,

@@ -36,10 +36,10 @@ const DEFAULT_WORKFLOW_CONFIG: WorkflowConfig = {
     kind: 'linear',
     apiKey: '',
     team: '',
-    activeStates: ['todo', 'in progress'],
-    terminalStates: ['done', 'cancelled'],
     activeTypes: ['unstarted', 'started'],
     terminalTypes: ['completed', 'canceled'],
+    activeStates: [],
+    terminalStates: [],
   },
   agents: {
     maxConcurrent: 8,

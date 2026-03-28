@@ -54,10 +54,10 @@ function makeWorkflowConfig(overrides?: Partial<WorkflowConfig>): WorkflowConfig
       kind: 'linear',
       apiKey: 'test-key',
       team: 'test-team',
-      activeStates: ['Todo', 'In Progress'],
-      terminalStates: ['Done', 'Cancelled'],
       activeTypes: ['unstarted', 'started'],
       terminalTypes: ['completed', 'canceled'],
+      activeStates: [],
+      terminalStates: [],
     },
     github: {
       events: {

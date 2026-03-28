@@ -33,7 +33,7 @@ function makeWorkflowConfig(): WorkflowConfig {
       'feature-build': ['.claude/agents/core/architect.md', '.claude/agents/core/coder.md', '.claude/agents/core/reviewer.md'],
       'security-audit': ['.claude/agents/v3/security-architect.md'],
     },
-    tracker: { kind: 'linear', apiKey: '', team: 'test', activeStates: ['Todo'], terminalStates: ['Done'], activeTypes: ['unstarted', 'started'], terminalTypes: ['completed', 'canceled'] },
+    tracker: { kind: 'linear', apiKey: '', team: 'test', activeTypes: ['unstarted', 'started'], terminalTypes: ['completed', 'canceled'], activeStates: [], terminalStates: [] },
     agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },
     polling: { intervalMs: 30000, enabled: false },
     stall: { timeoutMs: 300000 },

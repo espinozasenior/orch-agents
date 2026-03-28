@@ -279,10 +279,11 @@ function buildConfig(flat: FlatMap, body: string): WorkflowConfig {
       kind: 'linear',
       apiKey: resolveEnv(getStringOptional(flat, 'tracker.api_key') ?? ''),
       team,
-      activeStates: getArray(flat, 'tracker.active_states') ?? ['Todo', 'In Progress'],
-      terminalStates: getArray(flat, 'tracker.terminal_states') ?? ['Done', 'Cancelled'],
       activeTypes: (getArray(flat, 'tracker.active_types') ?? ['unstarted', 'started']) as LinearStateType[],
       terminalTypes: (getArray(flat, 'tracker.terminal_types') ?? ['completed', 'canceled']) as LinearStateType[],
+      // Deprecated: kept for backward compat. Falls back to empty when only types are specified.
+      activeStates: getArray(flat, 'tracker.active_states') ?? [],
+      terminalStates: getArray(flat, 'tracker.terminal_states') ?? [],
     },
     ...(githubEvents ? { github: { events: githubEvents } } : {}),
     agents: {
