@@ -1,0 +1,42 @@
+{
+  "name": "orch-agents",
+  "version": "0.2.0",
+  "description": "Autonomous Development Agency System - orchestrates AI agent swarms for software development workflows",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --env-file=.env dist/index.js",
+    "test": "node --test tests/tech-lead-router.test.cjs && node --import tsx --test tests/*.test.ts tests/**/*.test.ts",
+    "test:ts": "node --import tsx --test tests/*.test.ts tests/**/*.test.ts",
+    "test:cjs": "node --test tests/**/*.test.cjs",
+    "test:all": "node --test tests/**/*.test.cjs && node --import tsx --test tests/**/*.test.ts",
+    "test:integration": "node --import tsx --test tests/integration/*.test.ts",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "typecheck": "tsc --noEmit",
+    "setup": "node --import tsx src/setup/cli.ts"
+  },
+  "keywords": [
+    "orchestration",
+    "agents",
+    "sparc",
+    "claude-flow",
+    "autonomous-development"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "@types/node": "^22.19.15",
+    "eslint": "^9.22.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.27.0"
+  },
+  "dependencies": {
+    "fastify": "^5.8.2"
+  }
+}
