@@ -243,6 +243,33 @@ describe('GitHubClient', () => {
         },
       );
     });
+
+    it('uses refspec when remoteBranch option is provided', async () => {
+      const { exec, calls } = createMockExec();
+      const client = createGitHubClient({ exec });
+
+      await client.pushBranch('/tmp/wt', 'agent/plan-1/coder', {
+        remoteBranch: 'feature-branch',
+      });
+
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].command, 'git');
+      assert.deepEqual(calls[0].args, [
+        '-C', '/tmp/wt', 'push', 'origin', 'agent/plan-1/coder:feature-branch',
+      ]);
+    });
+
+    it('uses simple push when no remoteBranch option', async () => {
+      const { exec, calls } = createMockExec();
+      const client = createGitHubClient({ exec });
+
+      await client.pushBranch('/tmp/wt', 'main');
+
+      assert.equal(calls.length, 1);
+      assert.deepEqual(calls[0].args, [
+        '-C', '/tmp/wt', 'push', '-u', 'origin', 'main',
+      ]);
+    });
   });
 
   // ---------------------------------------------------------------------------

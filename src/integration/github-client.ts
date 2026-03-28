@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import type { Logger } from '../shared/logger';
 import { ExecutionError } from '../shared/errors';
 import { buildSafeEnv } from '../shared/safe-env';
+import type { GitHubTokenProvider } from './github-app-auth';
 
 const execFileAsync = promisify(execFile);
 
@@ -32,8 +33,8 @@ export interface GitHubClient {
     body: string,
     commitSha: string,
   ): Promise<void>;
-  /** Push a branch from a worktree to remote. */
-  pushBranch(worktreePath: string, branch: string): Promise<void>;
+  /** Push a branch from a worktree to remote. Supports refspec for cross-branch push. */
+  pushBranch(worktreePath: string, branch: string, opts?: PushOpts): Promise<void>;
   /** Submit a review (approve or request changes). */
   submitReview(
     repo: string,
@@ -41,6 +42,13 @@ export interface GitHubClient {
     verdict: 'APPROVE' | 'REQUEST_CHANGES',
     body: string,
   ): Promise<void>;
+}
+
+export interface PushOpts {
+  /** Remote branch name (if different from local branch). Uses refspec push. */
+  remoteBranch?: string;
+  /** Repository slug (owner/name). Required when using token-authenticated HTTPS push. */
+  repo?: string;
 }
 
 export interface GitHubClientDeps {
@@ -53,6 +61,8 @@ export interface GitHubClientDeps {
   ) => Promise<{ stdout: string; stderr: string }>;
   /** GitHub token. If not provided, relies on gh CLI being authenticated. */
   token?: string;
+  /** GitHub App token provider. If set, takes precedence over static token. */
+  tokenProvider?: GitHubTokenProvider;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,17 +99,11 @@ function validateBody(body: string): void {
 
 export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
   const log = deps.logger;
-  const exec =
-    deps.exec ??
-    ((command: string, args: string[], opts?: { cwd?: string }) =>
-      execFileAsync(command, args, {
-        timeout: 30_000,
-        cwd: opts?.cwd,
-        env: {
-          ...buildSafeEnv(),
-          ...(deps.token ? { GH_TOKEN: deps.token } : {}),
-        },
-      }));
+
+  async function getEffectiveToken(): Promise<string | undefined> {
+    if (deps.tokenProvider) return deps.tokenProvider.getToken();
+    return deps.token;
+  }
 
   async function run(
     command: string,
@@ -108,7 +112,18 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
   ): Promise<{ stdout: string; stderr: string }> {
     try {
       log?.debug('github-client exec', { command, args });
-      return await exec(command, args, opts);
+      if (deps.exec) {
+        return await deps.exec(command, args, opts);
+      }
+      const token = await getEffectiveToken();
+      return await execFileAsync(command, args, {
+        timeout: 30_000,
+        cwd: opts?.cwd,
+        env: {
+          ...buildSafeEnv(),
+          ...(token ? { GH_TOKEN: token } : {}),
+        },
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log?.error('github-client exec failed', { command, args, error: message });
@@ -148,7 +163,7 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
       ]);
     },
 
-    async pushBranch(worktreePath, branch) {
+    async pushBranch(worktreePath, branch, opts?) {
       // M3: Validate inputs
       if (!branch || branch.startsWith('-')) {
         throw new ExecutionError(
@@ -160,7 +175,37 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
           `Invalid worktreePath '${worktreePath}'. Must be a non-empty absolute path.`,
         );
       }
-      await run('git', ['-C', worktreePath, 'push', '-u', 'origin', branch]);
+
+      const remoteBranch = opts?.remoteBranch;
+      const repo = opts?.repo;
+
+      // Token-authenticated HTTPS push with refspec
+      if (remoteBranch) {
+        const refspec = `${branch}:${remoteBranch}`;
+        const token = await getEffectiveToken();
+
+        if (token && repo) {
+          // Push via token-embedded URL (works regardless of remote format)
+          const tokenUrl = `https://x-access-token:${token}@github.com/${repo}.git`;
+          log?.debug('Pushing with refspec (token auth)', { worktreePath, refspec });
+          try {
+            await execFileAsync('git', ['-C', worktreePath, 'push', tokenUrl, refspec], {
+              timeout: 30_000,
+              env: { ...buildSafeEnv() },
+            });
+          } catch (err) {
+            // Redact token from error messages to prevent leaking to logs
+            const message = err instanceof Error ? err.message : String(err);
+            const redacted = message.replace(/x-access-token:[^@]+@/g, 'x-access-token:***@');
+            throw new ExecutionError(`Git push failed: ${redacted}`, { cause: err });
+          }
+        } else {
+          log?.debug('Pushing with refspec (origin)', { worktreePath, refspec });
+          await run('git', ['-C', worktreePath, 'push', 'origin', refspec]);
+        }
+      } else {
+        await run('git', ['-C', worktreePath, 'push', '-u', 'origin', branch]);
+      }
     },
 
     async submitReview(repo, prNumber, verdict, body) {
