@@ -346,6 +346,12 @@ async function pushWithRefspec(
   remoteBranch: string,
   logger?: Logger,
 ): Promise<void> {
+  // Validate branch names to prevent argument injection
+  for (const [label, name] of [['localBranch', localBranch], ['remoteBranch', remoteBranch]] as const) {
+    if (!name || name.startsWith('-')) {
+      throw new Error(`Invalid ${label} '${name}': must be non-empty and must not start with '-'`);
+    }
+  }
   // git push origin localBranch:remoteBranch
   const refspec = `${localBranch}:${remoteBranch}`;
   logger?.debug('Pushing with refspec', { worktreePath, refspec });

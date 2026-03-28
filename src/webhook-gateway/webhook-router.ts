@@ -157,7 +157,8 @@ export async function webhookRouter(
           const botNameForStop = config.botUsername ?? 'orch-agents';
           const commentTrimmed = parsed.commentBody.trim().toLowerCase();
           const isDirectCommand = commentTrimmed === 'stop' || commentTrimmed === 'cancel' || commentTrimmed === 'abort';
-          const mentionStop = new RegExp(`@${botNameForStop}\\s+(?:stop|cancel|abort)`, 'i');
+          const escapedBotName = botNameForStop.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const mentionStop = new RegExp(`@${escapedBotName}\\s+(?:stop|cancel|abort)`, 'i');
           const isMentionCommand = mentionStop.test(parsed.commentBody);
 
           if (isDirectCommand || isMentionCommand) {
