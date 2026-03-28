@@ -181,15 +181,16 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             findings = fixResult.finalVerdict.findings;
           }
 
-          // 7. Push branch to remote
+          // 7. Push branch to remote (use PR branch if available)
+          const pushBranch = intakeEvent.entities.branch ?? handle.branch;
           if (deps.githubClient && applyResult.commitSha) {
             try {
-              await deps.githubClient.pushBranch(handle.path, handle.branch);
-              deps.logger.info('Branch pushed', { planId: plan.id, branch: handle.branch });
+              await deps.githubClient.pushBranch(handle.path, pushBranch);
+              deps.logger.info('Branch pushed', { planId: plan.id, branch: pushBranch });
             } catch (pushErr) {
               deps.logger.warn('Failed to push branch', {
                 planId: plan.id,
-                branch: handle.branch,
+                branch: pushBranch,
                 error: pushErr instanceof Error ? pushErr.message : String(pushErr),
               });
             }
@@ -205,9 +206,15 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             const fileLines = changedFiles.length > 0
               ? `\n\n**Files (${changedFiles.length}):**\n${changedFiles.slice(0, 10).map(f => `- \`${f}\``).join('\n')}${changedFiles.length > 10 ? `\n- ... and ${changedFiles.length - 10} more` : ''}`
               : '';
-            const outputPreview = execResult.output
-              ? `\n\n**Output:**\n${execResult.output.slice(0, 500)}${execResult.output.length > 500 ? '...' : ''}`
-              : '';
+            const maxOutputLen = 2000;
+            let outputText = execResult.output ?? '';
+            if (outputText.length > maxOutputLen) {
+              const truncated = outputText.slice(0, maxOutputLen);
+              const lastNewline = truncated.lastIndexOf('\n');
+              outputText = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
+              outputText += '\n\n_(truncated)_';
+            }
+            const outputPreview = outputText ? `\n\n**Output:**\n${outputText}` : '';
 
             const summary = [
               `**${agent.type}** completed in ${duration}s`,

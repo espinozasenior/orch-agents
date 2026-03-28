@@ -105,6 +105,18 @@ export async function webhookRouter(
         const payload = request.body as Record<string, unknown>;
         const parsed = parseGitHubEvent(eventType, deliveryId, payload);
 
+        // Skip push events from agent branches (prevents feedback loop)
+        if (eventType === 'push' && parsed.branch?.startsWith('agent/')) {
+          log.info('Skipping push from agent branch', { branch: parsed.branch, deliveryId });
+          return reply.status(202).send({ id: deliveryId, status: 'skipped' });
+        }
+
+        // Skip create events for agent branches
+        if (eventType === 'create' && parsed.branch?.startsWith('agent/')) {
+          log.info('Skipping create for agent branch', { branch: parsed.branch, deliveryId });
+          return reply.status(202).send({ id: deliveryId, status: 'skipped' });
+        }
+
         // Step 2.5: Self-comment loop prevention for issue_comment events
         if (eventType === 'issue_comment' && parsed.commentBody) {
           const botUsername = config.botUsername;
