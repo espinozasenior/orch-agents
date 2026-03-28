@@ -44,12 +44,16 @@ describe('verifySignature', () => {
   });
 
   it('should skip verification when SKIP_SIGNATURE_VERIFICATION=true and secret is empty', () => {
+    const prevNodeEnv = process.env.NODE_ENV;
     process.env.SKIP_SIGNATURE_VERIFICATION = 'true';
+    process.env.NODE_ENV = 'test';
     try {
       // Should not throw even with garbage signature
       verifySignature(payload, 'garbage', '');
     } finally {
       delete process.env.SKIP_SIGNATURE_VERIFICATION;
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevNodeEnv;
     }
   });
 

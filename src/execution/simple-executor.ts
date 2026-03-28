@@ -67,6 +67,20 @@ export interface AgentResult {
 // ---------------------------------------------------------------------------
 
 export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
+  function emitPhaseCompleted(planId: string, status: 'completed' | 'failed', agentStart: number): void {
+    if (!deps.eventBus) return;
+    deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
+      phaseResult: {
+        phaseId: randomUUID(),
+        planId,
+        phaseType: 'refinement' as const,
+        status,
+        artifacts: [],
+        metrics: { duration: Date.now() - agentStart, agentUtilization: 1, modelCost: 0 },
+      },
+    }));
+  }
+
   return {
     async execute(plan, intakeEvent): Promise<ExecutionResult> {
       const startTime = Date.now();
@@ -120,19 +134,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               findings: [],
               duration: Date.now() - agentStart,
             });
-            // AIG: Emit PhaseCompleted (failed) event
-            if (deps.eventBus) {
-              deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
-                phaseResult: {
-                  phaseId: randomUUID(),
-                  planId: plan.id,
-                  phaseType: 'refinement' as const,
-                  status: 'failed' as const,
-                  artifacts: [],
-                  metrics: { duration: Date.now() - agentStart, agentUtilization: 1, modelCost: 0 },
-                },
-              }));
-            }
+            emitPhaseCompleted(plan.id, 'failed', agentStart);
             await deps.worktreeManager.dispose(handle);
             continue;
           }
@@ -150,19 +152,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               findings: [],
               duration: Date.now() - agentStart,
             });
-            // AIG: Emit PhaseCompleted (failed) event
-            if (deps.eventBus) {
-              deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
-                phaseResult: {
-                  phaseId: randomUUID(),
-                  planId: plan.id,
-                  phaseType: 'refinement' as const,
-                  status: 'failed' as const,
-                  artifacts: [],
-                  metrics: { duration: Date.now() - agentStart, agentUtilization: 1, modelCost: 0 },
-                },
-              }));
-            }
+            emitPhaseCompleted(plan.id, 'failed', agentStart);
             await deps.worktreeManager.dispose(handle);
             continue;
           }
@@ -248,19 +238,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             duration: Date.now() - agentStart,
           });
 
-          // AIG: Emit PhaseCompleted event after agent completes
-          if (deps.eventBus) {
-            deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
-              phaseResult: {
-                phaseId: randomUUID(),
-                planId: plan.id,
-                phaseType: 'refinement' as const,
-                status: 'completed' as const,
-                artifacts: [],
-                metrics: { duration: Date.now() - agentStart, agentUtilization: 1, modelCost: 0 },
-              },
-            }));
-          }
+          emitPhaseCompleted(plan.id, 'completed', agentStart);
 
           // 8. Cleanup worktree
           await deps.worktreeManager.dispose(handle);
@@ -280,19 +258,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             findings: [],
             duration: Date.now() - agentStart,
           });
-          // AIG: Emit PhaseCompleted (failed) event
-          if (deps.eventBus) {
-            deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
-              phaseResult: {
-                phaseId: randomUUID(),
-                planId: plan.id,
-                phaseType: 'refinement' as const,
-                status: 'failed' as const,
-                artifacts: [],
-                metrics: { duration: Date.now() - agentStart, agentUtilization: 1, modelCost: 0 },
-              },
-            }));
-          }
+          emitPhaseCompleted(plan.id, 'failed', agentStart);
         }
       }
 
