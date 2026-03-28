@@ -90,6 +90,56 @@ describe('LinearStateReconciler', () => {
       assert.equal(changes[0].to, 'unstarted');
     });
 
+    it('detects state change by type even when name is renamed', () => {
+      const cached: LinearIssueSnapshot = {
+        id: 'issue-1',
+        state: 'Ready',       // Was renamed from "Backlog"
+        stateId: 'state-1',
+        stateType: 'backlog',  // Type never changes
+        labels: [],
+        labelIds: [],
+        assigneeId: null,
+        priority: 2,
+        updatedAt: '2026-01-01T00:00:00Z',
+      };
+
+      // State renamed from "Todo" to "Up Next", but type is still "unstarted"
+      const current = makeIssue({
+        state: { id: 'state-2', name: 'Up Next', type: 'unstarted' },
+      });
+
+      const changes = detectChanges(cached, current);
+
+      assert.equal(changes.length, 1);
+      assert.equal(changes[0].field, 'state');
+      assert.equal(changes[0].from, 'backlog');
+      assert.equal(changes[0].to, 'unstarted');
+    });
+
+    it('reports no state change when only name changes but type stays the same', () => {
+      const cached: LinearIssueSnapshot = {
+        id: 'issue-1',
+        state: 'Todo',
+        stateId: 'state-1',
+        stateType: 'unstarted',
+        labels: [],
+        labelIds: [],
+        assigneeId: null,
+        priority: 2,
+        updatedAt: '2026-01-01T00:00:00Z',
+      };
+
+      // Name changed from "Todo" to "Ready" but type is still "unstarted"
+      const current = makeIssue({
+        state: { id: 'state-1', name: 'Ready', type: 'unstarted' },
+      });
+
+      const changes = detectChanges(cached, current);
+
+      // No state change detected — type is still "unstarted"
+      assert.equal(changes.length, 0);
+    });
+
     it('detects label change (added)', () => {
       const cached: LinearIssueSnapshot = {
         id: 'issue-1',
