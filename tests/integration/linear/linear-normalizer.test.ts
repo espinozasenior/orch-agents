@@ -24,8 +24,10 @@ const TEST_WORKFLOW_CONFIG: WorkflowConfig = {
     kind: 'linear',
     apiKey: '',
     team: 'ENG',
-    activeStates: ['Todo', 'In Progress'],
-    terminalStates: ['Done', 'Cancelled'],
+    activeTypes: ['unstarted', 'started'],
+    terminalTypes: ['completed', 'canceled'],
+    activeStates: [],
+    terminalStates: [],
   },
   agents: {
     maxConcurrent: 8,
@@ -62,7 +64,7 @@ function makeLinearPayload(
       description: 'Something is broken',
       url: 'https://linear.app/team/issue/ENG-42',
       priority: 2,
-      state: { id: 'state-1', name: 'Todo' },
+      state: { id: 'state-1', name: 'Todo', type: 'unstarted' },
       labels: [],
       assignee: null,
       creator: { id: 'creator-1', name: 'Jane' },
@@ -101,7 +103,7 @@ describe('LinearNormalizer', () => {
 
   it('should produce IntakeEvent for state change to In Progress', () => {
     const payload = makeLinearPayload({}, {
-      state: { id: 'state-2', name: 'In Progress' },
+      state: { id: 'state-2', name: 'In Progress', type: 'started' },
     });
     const updatedFrom = { state: { id: 'state-1' } };
 
@@ -243,7 +245,7 @@ describe('LinearNormalizer', () => {
 
   it('should return null for terminal state (Done)', () => {
     const payload = makeLinearPayload({}, {
-      state: { id: 'state-x', name: 'Done' },
+      state: { id: 'state-x', name: 'Done', type: 'completed' },
     });
     const updatedFrom = { state: { id: 'old-state' } };
 
@@ -254,7 +256,7 @@ describe('LinearNormalizer', () => {
 
   it('should return null for terminal state (Cancelled)', () => {
     const payload = makeLinearPayload({}, {
-      state: { id: 'state-x', name: 'Cancelled' },
+      state: { id: 'state-x', name: 'Cancelled', type: 'canceled' },
     });
     const updatedFrom = { state: { id: 'old-state' } };
 
@@ -265,7 +267,7 @@ describe('LinearNormalizer', () => {
 
   it('should return null when state changed to non-active, non-terminal state', () => {
     const payload = makeLinearPayload({}, {
-      state: { id: 'state-x', name: 'Backlog' },
+      state: { id: 'state-x', name: 'Backlog', type: 'backlog' },
     });
     const updatedFrom = { state: { id: 'old-state' } };
 

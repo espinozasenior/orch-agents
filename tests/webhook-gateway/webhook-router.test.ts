@@ -42,7 +42,7 @@ function makeTestWorkflowConfig(): WorkflowConfig {
         'deployment_status.failure': 'quick-fix',
       },
     },
-    tracker: { kind: 'linear', apiKey: '', team: 'test', activeStates: ['Todo'], terminalStates: ['Done'] },
+    tracker: { kind: 'linear', apiKey: '', team: 'test', activeTypes: ['unstarted', 'started'], terminalTypes: ['completed', 'canceled'], activeStates: [], terminalStates: [] },
     agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },
     polling: { intervalMs: 30000, enabled: false },
     stall: { timeoutMs: 300000 },

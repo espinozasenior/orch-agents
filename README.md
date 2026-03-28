@@ -94,8 +94,8 @@ tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
   team: $LINEAR_TEAM_ID
-  active_states: [Todo, In Progress]
-  terminal_states: [Done, Cancelled]
+  active_types: [unstarted, started]       # Match by state type, not name
+  terminal_types: [completed, canceled]    # Resilient to renaming states
 
 # Timeouts
 stall:
@@ -155,8 +155,8 @@ tracker:
   kind: linear
   api_key: $LINEAR_API_KEY             # $VAR syntax reads from env
   team: $LINEAR_TEAM_ID
-  active_states: [Todo, In Progress]   # Agents work on these
-  terminal_states: [Done, Cancelled]   # Agents stop on these
+  active_types: [unstarted, started]    # Agents work on these (match by type, not name)
+  terminal_types: [completed, canceled] # Agents stop on these
 ```
 
 Set up the Linear webhook: Settings > API > Webhooks > URL: `https://your-server/webhooks/linear`

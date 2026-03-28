@@ -20,14 +20,23 @@ import { AppError } from '../../shared/errors';
 // Types
 // ---------------------------------------------------------------------------
 
+/** Valid Linear workflow state types (immutable regardless of display name). */
+export type LinearStateType = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled';
+
 export interface WorkflowConfig {
   templates: Record<string, string[]>;
   tracker: {
     kind: 'linear';
     apiKey: string;
     team: string;
+    /** @deprecated Use activeTypes instead. Kept for backward compat. */
     activeStates: string[];
+    /** @deprecated Use terminalTypes instead. Kept for backward compat. */
     terminalStates: string[];
+    /** State types that represent actionable work (preferred over activeStates). */
+    activeTypes: LinearStateType[];
+    /** State types that represent finished work (preferred over terminalTypes). */
+    terminalTypes: LinearStateType[];
   };
   github?: {
     events: Record<string, string>;
@@ -115,12 +124,12 @@ interface FlatMap {
  * Example:
  *   tracker:
  *     kind: linear
- *     active_states:
- *       - Todo
- *       - In Progress
+ *     active_types:
+ *       - unstarted
+ *       - started
  *
  * Produces:
- *   { 'tracker.kind': 'linear', 'tracker.active_states': ['Todo', 'In Progress'] }
+ *   { 'tracker.kind': 'linear', 'tracker.active_types': ['unstarted', 'started'] }
  */
 function parseFlatYaml(yaml: string): FlatMap {
   const result: FlatMap = {};
@@ -270,8 +279,11 @@ function buildConfig(flat: FlatMap, body: string): WorkflowConfig {
       kind: 'linear',
       apiKey: resolveEnv(getStringOptional(flat, 'tracker.api_key') ?? ''),
       team,
-      activeStates: getArray(flat, 'tracker.active_states') ?? ['Todo', 'In Progress'],
-      terminalStates: getArray(flat, 'tracker.terminal_states') ?? ['Done', 'Cancelled'],
+      activeTypes: (getArray(flat, 'tracker.active_types') ?? ['unstarted', 'started']) as LinearStateType[],
+      terminalTypes: (getArray(flat, 'tracker.terminal_types') ?? ['completed', 'canceled']) as LinearStateType[],
+      // Deprecated: kept for backward compat. Falls back to empty when only types are specified.
+      activeStates: getArray(flat, 'tracker.active_states') ?? [],
+      terminalStates: getArray(flat, 'tracker.terminal_states') ?? [],
     },
     ...(githubEvents ? { github: { events: githubEvents } } : {}),
     agents: {
