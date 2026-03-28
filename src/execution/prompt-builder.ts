@@ -7,6 +7,7 @@
  */
 
 import type { IntakeEvent, PlannedPhase, PlannedAgent, WorkflowPlan, Finding } from '../types';
+import { sanitize, wrapUserContent, wrapSystemInstructions } from '../shared/input-sanitizer';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -65,7 +66,7 @@ export function buildPrompt(
   // 2. Work context
   sections.push('', '## Work Context');
   sections.push(`- Intent: ${intakeEvent.intent}`);
-  sections.push(`- Methodology: ${plan.methodology}`);
+  if (plan.methodology) sections.push(`- Methodology: ${plan.methodology}`);
   sections.push(`- Gate: ${phase.gate}`);
 
   const { entities } = intakeEvent;
@@ -108,15 +109,7 @@ export function buildPrompt(
     }
   }
 
-  // 5. Description / rawText
-  if (intakeEvent.rawText) {
-    const text = intakeEvent.rawText.length > MAX_RAW_TEXT_LENGTH
-      ? intakeEvent.rawText.slice(0, MAX_RAW_TEXT_LENGTH) + '\n... (truncated)'
-      : intakeEvent.rawText;
-    sections.push('', '## Description', text);
-  }
-
-  // 6. Output format
+  // 5. Output format
   sections.push('', '## Output Format');
   sections.push(
     'Respond with a JSON object containing:',
@@ -144,7 +137,20 @@ export function buildPrompt(
     '```',
   );
 
-  return sections.join('\n');
+  // Wrap system instructions with boundary markers
+  const systemContent = wrapSystemInstructions(sections.join('\n'));
+
+  // 6. Description / rawText (user content, sanitized + wrapped)
+  if (intakeEvent.rawText) {
+    const raw = intakeEvent.rawText.length > MAX_RAW_TEXT_LENGTH
+      ? intakeEvent.rawText.slice(0, MAX_RAW_TEXT_LENGTH) + '\n... (truncated)'
+      : intakeEvent.rawText;
+    const sanitizedText = sanitize(raw);
+    const userSection = wrapUserContent('## Description\n' + sanitizedText);
+    return systemContent + '\n' + userSection;
+  }
+
+  return systemContent;
 }
 
 /**
@@ -205,14 +211,24 @@ export function buildImplementationPrompt(
   // 6. Files changed
   appendFilesChanged(sections, intakeEvent);
 
-  // 7. Description
-  appendDescription(sections, intakeEvent);
-
-  // 8. Completion
+  // 7. Completion
   sections.push('', '## Completion');
   sections.push('When done, provide a brief summary of changes made.');
 
-  return sections.join('\n');
+  // Wrap system instructions
+  const systemContent = wrapSystemInstructions(sections.join('\n'));
+
+  // 8. Description / rawText (user content, sanitized + wrapped)
+  if (intakeEvent.rawText) {
+    const raw = intakeEvent.rawText.length > MAX_RAW_TEXT_LENGTH
+      ? intakeEvent.rawText.slice(0, MAX_RAW_TEXT_LENGTH) + '\n... (truncated)'
+      : intakeEvent.rawText;
+    const sanitizedText = sanitize(raw);
+    const userSection = wrapUserContent('## Description\n' + sanitizedText);
+    return systemContent + '\n' + userSection;
+  }
+
+  return systemContent;
 }
 
 /**
@@ -242,25 +258,19 @@ export function buildReviewPrompt(
   // 3. Work context (no phase needed, use a minimal context)
   sections.push('', '## Work Context');
   sections.push(`- Intent: ${intakeEvent.intent}`);
-  sections.push(`- Methodology: ${plan.methodology}`);
+  if (plan.methodology) sections.push(`- Methodology: ${plan.methodology}`);
   const { entities } = intakeEvent;
   if (entities.repo) sections.push(`- Repository: ${entities.repo}`);
   if (entities.branch) sections.push(`- Branch: ${entities.branch}`);
   if (entities.prNumber) sections.push(`- PR: #${entities.prNumber}`);
 
-  // 4. Diff
-  const diff = options.diff.length > MAX_DIFF_LENGTH
-    ? options.diff.slice(0, MAX_DIFF_LENGTH) + '\n... (truncated)'
-    : options.diff;
-  sections.push('', '## Diff', '```diff', diff, '```');
-
-  // 5. Commit
+  // 4. Commit
   sections.push('', `## Commit: ${options.commitSha}`);
 
-  // 6. Attempt
+  // 5. Attempt
   sections.push('', `## Review Attempt: ${options.attempt}`);
 
-  // 7. Output format
+  // 6. Output format
   sections.push(
     '',
     '## Output Format',
@@ -278,7 +288,16 @@ export function buildReviewPrompt(
     '```',
   );
 
-  return sections.join('\n');
+  // Wrap system instructions
+  const systemContent = wrapSystemInstructions(sections.join('\n'));
+
+  // 7. Diff as user content (NOT sanitized -- diffs must be pristine)
+  const diff = options.diff.length > MAX_DIFF_LENGTH
+    ? options.diff.slice(0, MAX_DIFF_LENGTH) + '\n... (truncated)'
+    : options.diff;
+  const diffSection = wrapUserContent('## Diff\n```diff\n' + diff + '\n```');
+
+  return systemContent + '\n' + diffSection;
 }
 
 /**
@@ -318,29 +337,33 @@ export function buildFixPrompt(
   // 4. Work context
   sections.push('', '## Work Context');
   sections.push(`- Intent: ${intakeEvent.intent}`);
-  sections.push(`- Methodology: ${plan.methodology}`);
+  if (plan.methodology) sections.push(`- Methodology: ${plan.methodology}`);
   const { entities } = intakeEvent;
   if (entities.repo) sections.push(`- Repository: ${entities.repo}`);
   if (entities.branch) sections.push(`- Branch: ${entities.branch}`);
 
-  // 5. Review feedback
-  sections.push('', '## Review Feedback', options.feedback);
-
-  // 6. Issues to fix
+  // 5. Issues to fix
   sections.push('', '## Issues to Fix');
   for (const finding of options.findings) {
     const loc = finding.location ? ` (${finding.location})` : '';
     sections.push(`- [${finding.severity}] ${finding.message}${loc}`);
   }
 
-  // 7. Completion
+  // 6. Completion
   sections.push(
     '',
     '## Completion',
     'After fixing, run tests to verify. Provide a brief summary of fixes applied.',
   );
 
-  return sections.join('\n');
+  // Wrap system instructions
+  const systemContent = wrapSystemInstructions(sections.join('\n'));
+
+  // 7. Review feedback as user content (sanitized)
+  const sanitizedFeedback = sanitize(options.feedback);
+  const feedbackSection = wrapUserContent('## Review Feedback\n' + sanitizedFeedback);
+
+  return systemContent + '\n' + feedbackSection;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +378,7 @@ function appendWorkContext(
 ): void {
   sections.push('', '## Work Context');
   sections.push(`- Intent: ${intakeEvent.intent}`);
-  sections.push(`- Methodology: ${plan.methodology}`);
+  if (plan.methodology) sections.push(`- Methodology: ${plan.methodology}`);
   sections.push(`- Gate: ${phase.gate}`);
 
   const { entities } = intakeEvent;
@@ -383,10 +406,3 @@ function appendFilesChanged(sections: string[], intakeEvent: IntakeEvent): void 
   }
 }
 
-function appendDescription(sections: string[], intakeEvent: IntakeEvent): void {
-  if (!intakeEvent.rawText) return;
-  const text = intakeEvent.rawText.length > MAX_RAW_TEXT_LENGTH
-    ? intakeEvent.rawText.slice(0, MAX_RAW_TEXT_LENGTH) + '\n... (truncated)'
-    : intakeEvent.rawText;
-  sections.push('', '## Description', text);
-}
