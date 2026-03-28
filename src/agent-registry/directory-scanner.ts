@@ -30,6 +30,8 @@ export interface AgentDefinition {
   filePath: string;
   /** Frontmatter version string */
   version: string;
+  /** Full markdown body after frontmatter — the agent's instructions */
+  body: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +79,10 @@ export function scanAgentDirectory(
       }
       seen.add(name);
 
+      // Extract markdown body (everything after frontmatter closing ---)
+      const bodyMatch = content.match(/^---[\s\S]*?---\s*\n([\s\S]*)$/);
+      const body = bodyMatch?.[1]?.trim() ?? '';
+
       results.push({
         name,
         type: frontmatter.type ?? 'generic',
@@ -86,6 +92,7 @@ export function scanAgentDirectory(
         category,
         filePath,
         version: frontmatter.version ?? '1.0.0',
+        body,
       });
     } catch (err) {
       logger?.warn('Failed to read agent file', {

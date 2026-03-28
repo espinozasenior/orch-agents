@@ -87,9 +87,9 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
         }
 
         try {
-          // 1. Get agent definition (description as instructions)
+          // 1. Get agent definition (full markdown body as instructions)
           const agentDef = deps.agentRegistry.getByName(agent.type);
-          const instructions = agentDef?.description ?? '';
+          const instructions = agentDef?.body || agentDef?.description || '';
 
           // 2. Create isolated worktree
           const baseBranch = intakeEvent.entities.branch ?? 'main';
@@ -325,6 +325,7 @@ export function buildAgentPrompt(
   const sections: string[] = [];
 
   sections.push(`You are a ${agent.type} agent with role: ${agent.role}.`);
+  sections.push('You must make concrete changes to the codebase. Read files, write code, create tests, and fix issues. Do not just analyze — act.');
   sections.push('');
 
   if (agentInstructions) {
