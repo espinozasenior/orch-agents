@@ -414,7 +414,7 @@ describe('AIG Compliance', () => {
           title: '',
           description: '',
           priority: 0,
-          body: 'Please stop this work',
+          body: 'stop',
           issueId: 'issue-42',
           team: { id: 'team-1', key: 'ENG' },
           updatedAt: '2026-01-01T00:00:00.000Z',

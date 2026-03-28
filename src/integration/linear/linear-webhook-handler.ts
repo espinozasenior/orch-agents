@@ -72,9 +72,9 @@ export async function linearWebhookHandler(
         if (payload.type === 'Comment' && payload.action === 'create') {
           const commentData = payload.data as unknown as Record<string, unknown>;
           const commentBody = (commentData.body as string) ?? '';
-          const stopPattern = /\b(?:stop|cancel|abort)\b/i;
+          const commentTrimmed = commentBody.trim().toLowerCase();
 
-          if (stopPattern.test(commentBody)) {
+          if (commentTrimmed === 'stop') {
             const issueId = (commentData.issueId as string) ?? '';
             eventBus.publish(createDomainEvent('WorkCancelled', {
               workItemId: `linear-${issueId}`,
