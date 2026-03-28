@@ -138,7 +138,8 @@ export function normalizeLinearEvent(
   const wf = _workflowConfig;
 
   // Check if anything actually changed that we care about
-  const stateChanged = fields.state !== undefined;
+  // Linear sends "stateId" (not "state") and "assigneeId" in updatedFrom
+  const stateChanged = fields.state !== undefined || fields.stateId !== undefined;
   const labelsChanged = fields.labelIds !== undefined;
   const assigneeChanged = fields.assigneeId !== undefined;
   const priorityChanged = fields.priority !== undefined;
