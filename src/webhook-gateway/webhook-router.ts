@@ -131,12 +131,14 @@ export async function webhookRouter(
             });
           }
 
-          // AIG: Stop command detection
-          const stopPattern = /\b(?:stop|cancel|abort)\b/i;
+          // AIG: Stop command detection — only explicit commands, not embedded words
           const botNameForStop = config.botUsername ?? 'orch-agents';
+          const commentTrimmed = parsed.commentBody.trim().toLowerCase();
+          const isDirectCommand = commentTrimmed === 'stop' || commentTrimmed === 'cancel' || commentTrimmed === 'abort';
           const mentionStop = new RegExp(`@${botNameForStop}\\s+(?:stop|cancel|abort)`, 'i');
+          const isMentionCommand = mentionStop.test(parsed.commentBody);
 
-          if (stopPattern.test(parsed.commentBody) || mentionStop.test(parsed.commentBody)) {
+          if (isDirectCommand || isMentionCommand) {
             const workItemId = `pr-${parsed.prNumber ?? parsed.issueNumber}`;
             const cancelEvent = createDomainEvent('WorkCancelled', {
               workItemId,

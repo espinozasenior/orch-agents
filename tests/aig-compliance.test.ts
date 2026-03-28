@@ -123,7 +123,7 @@ describe('AIG Compliance', () => {
         repository: { full_name: 'acme/webapp', default_branch: 'main' },
         sender: { login: 'human-user', id: 111, type: 'User' },
         issue: { number: 42 },
-        comment: { body: 'Please stop working on this', user: { login: 'human-user' } },
+        comment: { body: 'stop', user: { login: 'human-user' } },
       };
       const body = JSON.stringify(payload);
 
@@ -157,7 +157,7 @@ describe('AIG Compliance', () => {
         repository: { full_name: 'acme/webapp', default_branch: 'main' },
         sender: { login: 'human-user', id: 111, type: 'User' },
         issue: { number: 99 },
-        comment: { body: 'cancel this task', user: { login: 'human-user' } },
+        comment: { body: 'cancel', user: { login: 'human-user' } },
       };
       const body = JSON.stringify(payload);
 
@@ -189,7 +189,7 @@ describe('AIG Compliance', () => {
         repository: { full_name: 'acme/webapp', default_branch: 'main' },
         sender: { login: 'human-user', id: 111, type: 'User' },
         issue: { number: 50 },
-        comment: { body: 'abort please', user: { login: 'human-user' } },
+        comment: { body: 'abort', user: { login: 'human-user' } },
       };
       const body = JSON.stringify(payload);
 

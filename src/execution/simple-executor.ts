@@ -181,7 +181,21 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             findings = fixResult.finalVerdict.findings;
           }
 
-          // 7. Post PR/issue comment with work summary
+          // 7. Push branch to remote
+          if (deps.githubClient && applyResult.commitSha) {
+            try {
+              await deps.githubClient.pushBranch(handle.path, handle.branch);
+              deps.logger.info('Branch pushed', { planId: plan.id, branch: handle.branch });
+            } catch (pushErr) {
+              deps.logger.warn('Failed to push branch', {
+                planId: plan.id,
+                branch: handle.branch,
+                error: pushErr instanceof Error ? pushErr.message : String(pushErr),
+              });
+            }
+          }
+
+          // 8. Post PR/issue comment with work summary
           if (deps.githubClient && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
             const changedFiles = applyResult.changedFiles ?? [];
             const duration = Math.round((Date.now() - agentStart) / 1000);
