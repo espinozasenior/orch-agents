@@ -10,8 +10,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { WorkflowPlan, PlannedAgent, IntakeEvent, Finding } from '../types';
 import type { InteractiveTaskExecutor } from './runtime/interactive-executor';
 import type { WorktreeManager } from './workspace/worktree-manager';
@@ -185,10 +183,11 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
           if (deps.githubClient && applyResult.commitSha) {
             const targetBranch = intakeEvent.entities.branch ?? handle.branch;
             try {
-              // Use refspec to push local agent branch → remote target branch
-              // This handles the case where local branch is agent/{id}/coder
-              // but we want to push to the PR's branch (e.g., feature/my-branch)
-              await pushWithRefspec(handle.path, handle.branch, targetBranch, deps.logger);
+              // Push local agent branch → remote target branch via GitHubClient
+              await deps.githubClient.pushBranch(handle.path, handle.branch, {
+                remoteBranch: targetBranch,
+                repo: intakeEvent.entities.repo,
+              });
               deps.logger.info('Branch pushed', { planId: plan.id, localBranch: handle.branch, remoteBranch: targetBranch });
             } catch (pushErr) {
               deps.logger.warn('Failed to push branch', {
@@ -332,30 +331,4 @@ export function buildAgentPrompt(
   }
 
   return sections.join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Git push with refspec — pushes local branch to a different remote branch
-// ---------------------------------------------------------------------------
-
-const execFileAsync = promisify(execFileCb);
-
-async function pushWithRefspec(
-  worktreePath: string,
-  localBranch: string,
-  remoteBranch: string,
-  logger?: Logger,
-): Promise<void> {
-  // Validate branch names to prevent argument injection
-  for (const [label, name] of [['localBranch', localBranch], ['remoteBranch', remoteBranch]] as const) {
-    if (!name || name.startsWith('-')) {
-      throw new Error(`Invalid ${label} '${name}': must be non-empty and must not start with '-'`);
-    }
-  }
-  // git push origin localBranch:remoteBranch
-  const refspec = `${localBranch}:${remoteBranch}`;
-  logger?.debug('Pushing with refspec', { worktreePath, refspec });
-  await execFileAsync('git', ['-C', worktreePath, 'push', 'origin', refspec], {
-    timeout: 30_000,
-  });
 }

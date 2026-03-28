@@ -674,6 +674,26 @@ describe('SimpleExecutor', () => {
     assert.equal(callArgs.timeout, 60_000);
   });
 
+  // -----------------------------------------------------------------------
+  // Refspec push via GitHubClient
+  // -----------------------------------------------------------------------
+
+  it('should call githubClient.pushBranch with remoteBranch and repo opts', async () => {
+    executor = buildExecutor();
+    const plan = makePlan();
+    const intake = makeIntakeEvent();
+
+    await executor.execute(plan, intake);
+
+    const pushCalls = (mocks.githubClient.pushBranch as ReturnType<typeof mock.fn>).mock.calls;
+    assert.equal(pushCalls.length, 1);
+    const [worktreePath, branch, opts] = pushCalls[0].arguments;
+    assert.ok(typeof worktreePath === 'string');
+    assert.ok(typeof branch === 'string');
+    assert.equal(opts.remoteBranch, 'feature-branch');
+    assert.equal(opts.repo, 'owner/repo');
+  });
+
   it('should use default branch main when intakeEvent has no branch', async () => {
     executor = buildExecutor();
     const plan = makePlan();
