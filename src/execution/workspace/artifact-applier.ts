@@ -79,15 +79,17 @@ export function createArtifactApplier(deps: ArtifactApplierDeps = {}): ArtifactA
   ): Promise<ApplyResult> {
     logger?.info('Applying artifacts', { planId, worktreePath: handle.path });
 
-    // 1. Get changed files (unstaged + staged)
-    const [unstaged, staged] = await Promise.all([
+    // 1. Get changed files (unstaged + staged + untracked)
+    const [unstaged, staged, untracked] = await Promise.all([
       exec(handle.path, 'git', ['diff', '--name-only', 'HEAD']),
       exec(handle.path, 'git', ['diff', '--name-only', '--cached']),
+      exec(handle.path, 'git', ['ls-files', '--others', '--exclude-standard']),
     ]);
 
     const changedFiles = dedup([
       ...splitLines(unstaged.stdout),
       ...splitLines(staged.stdout),
+      ...splitLines(untracked.stdout),
     ]);
 
     // 2. No changes — nothing to commit is OK

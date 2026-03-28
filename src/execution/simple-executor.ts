@@ -22,7 +22,7 @@ import type { Logger } from '../shared/logger';
 import type { EventBus } from '../shared/event-bus';
 import { createDomainEvent } from '../shared/event-bus';
 import { formatAgentComment } from '../shared/agent-identity';
-import { sanitize, wrapUserContent } from '../shared/input-sanitizer';
+import { sanitize } from '../shared/input-sanitizer';
 import { trackAgentCommit } from '../shared/agent-commit-tracker';
 
 // ---------------------------------------------------------------------------
@@ -322,7 +322,7 @@ export function buildAgentPrompt(
 
   if (intakeEvent.rawText) {
     sections.push('## Description');
-    sections.push(wrapUserContent(sanitize(intakeEvent.rawText)));
+    sections.push(sanitize(intakeEvent.rawText));
   }
 
   if (intakeEvent.entities.labels?.length) {
