@@ -71,48 +71,125 @@ const RISK_SIGNALS = {
   low: /\b(local|test|draft|prototype|experiment|poc|internal|dev)\b/i,
 };
 
-// ── Team Templates (loaded from config/team-templates.json) ─────────────────
+// ── Team Templates (hardcoded) ──────────────────────────────────────────────
 
-const path = require('path');
-const fs = require('fs');
-
-function loadTeamTemplates() {
-  const filePath = path.resolve(__dirname, '..', '..', 'config', 'team-templates.json');
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const entries = JSON.parse(raw);
-    const map = {};
-    for (const entry of entries) {
-      map[entry.key] = {
-        name: entry.name,
-        topology: entry.topology,
-        strategy: entry.swarmStrategy,
-        maxAgents: entry.maxAgents,
-        consensus: entry.consensus,
-        agents: entry.agents,
-      };
-    }
-    return map;
-  } catch (err) {
-    // Fallback: if JSON file is missing, return minimal defaults
-    return {
-      'quick-fix': {
-        name: 'Quick Fix', topology: 'mesh', strategy: 'balanced', maxAgents: 2, consensus: 'gossip',
-        agents: [{ role: 'implementer', type: 'coder', tier: 2, required: true }],
-      },
-      'feature-build': {
-        name: 'Feature Build', topology: 'hierarchical', strategy: 'specialized', maxAgents: 5, consensus: 'raft',
-        agents: [
-          { role: 'lead', type: 'architect', tier: 3, required: true },
-          { role: 'implementer', type: 'coder', tier: 3, required: true },
-          { role: 'validator', type: 'tester', tier: 2, required: true },
-        ],
-      },
-    };
-  }
-}
-
-const TEAM_TEMPLATES = loadTeamTemplates();
+const TEAM_TEMPLATES = {
+  'quick-fix': {
+    name: 'Quick Fix', topology: 'mesh', strategy: 'balanced', maxAgents: 2, consensus: 'gossip',
+    agents: [
+      { role: 'implementer', type: 'coder', tier: 2, required: true },
+      { role: 'validator', type: 'tester', tier: 2, required: false },
+    ],
+  },
+  'research-sprint': {
+    name: 'Research Sprint', topology: 'mesh', strategy: 'balanced', maxAgents: 3, consensus: 'gossip',
+    agents: [
+      { role: 'lead-researcher', type: 'researcher', tier: 3, required: true },
+      { role: 'analyst', type: 'analyst', tier: 2, required: false },
+    ],
+  },
+  'feature-build': {
+    name: 'Feature Build', topology: 'hierarchical', strategy: 'specialized', maxAgents: 5, consensus: 'raft',
+    agents: [
+      { role: 'lead', type: 'architect', tier: 3, required: true },
+      { role: 'implementer', type: 'coder', tier: 3, required: true },
+      { role: 'validator', type: 'tester', tier: 2, required: true },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: false },
+    ],
+  },
+  'sparc-full-cycle': {
+    name: 'SPARC Full Cycle', topology: 'hierarchical', strategy: 'specialized', maxAgents: 8, consensus: 'raft',
+    agents: [
+      { role: 'orchestrator', type: 'sparc-coord', tier: 3, required: true },
+      { role: 'spec-writer', type: 'specification', tier: 3, required: true },
+      { role: 'pseudocoder', type: 'pseudocode', tier: 3, required: true },
+      { role: 'architect', type: 'architecture', tier: 3, required: true },
+      { role: 'implementer', type: 'sparc-coder', tier: 3, required: true },
+      { role: 'validator', type: 'tester', tier: 2, required: true },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: false },
+    ],
+  },
+  'testing-sprint': {
+    name: 'Testing Sprint', topology: 'hierarchical', strategy: 'specialized', maxAgents: 4, consensus: 'raft',
+    agents: [
+      { role: 'lead', type: 'tester', tier: 3, required: true },
+      { role: 'implementer', type: 'coder', tier: 2, required: true },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: false },
+    ],
+  },
+  'security-audit': {
+    name: 'Security Audit', topology: 'hierarchical', strategy: 'specialized', maxAgents: 5, consensus: 'raft',
+    agents: [
+      { role: 'lead', type: 'security-architect', tier: 3, required: true },
+      { role: 'auditor', type: 'security-auditor', tier: 3, required: true },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
+      { role: 'validator', type: 'tester', tier: 2, required: false },
+    ],
+  },
+  'performance-sprint': {
+    name: 'Performance Sprint', topology: 'hierarchical', strategy: 'specialized', maxAgents: 4, consensus: 'raft',
+    agents: [
+      { role: 'lead', type: 'performance-engineer', tier: 3, required: true },
+      { role: 'analyzer', type: 'perf-analyzer', tier: 3, required: true },
+      { role: 'implementer', type: 'coder', tier: 3, required: true },
+      { role: 'validator', type: 'tester', tier: 2, required: false },
+    ],
+  },
+  'release-pipeline': {
+    name: 'Release Pipeline', topology: 'hierarchical-mesh', strategy: 'specialized', maxAgents: 6, consensus: 'raft',
+    agents: [
+      { role: 'lead', type: 'release-manager', tier: 3, required: true },
+      { role: 'pr-handler', type: 'pr-manager', tier: 2, required: true },
+      { role: 'reviewer', type: 'code-review-swarm', tier: 2, required: true },
+      { role: 'validator', type: 'tester', tier: 2, required: true },
+      { role: 'deployer', type: 'cicd-engineer', tier: 2, required: false },
+    ],
+  },
+  'fullstack-swarm': {
+    name: 'Full Stack Swarm', topology: 'hierarchical-mesh', strategy: 'specialized', maxAgents: 8, consensus: 'raft',
+    agents: [
+      { role: 'lead', type: 'hierarchical-coordinator', tier: 3, required: true },
+      { role: 'architect', type: 'system-architect', tier: 3, required: true },
+      { role: 'backend', type: 'backend-dev', tier: 3, required: true },
+      { role: 'frontend', type: 'coder', tier: 3, required: true },
+      { role: 'validator', type: 'tester', tier: 2, required: true },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
+      { role: 'security', type: 'security-auditor', tier: 2, required: false },
+    ],
+  },
+  'cicd-pipeline': {
+    name: 'CI/CD Pipeline', topology: 'hierarchical', strategy: 'minimal', maxAgents: 4, consensus: 'raft',
+    agents: [
+      { role: 'validator', type: 'tester', tier: 2, required: true },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: false },
+      { role: 'deployer', type: 'coder', tier: 2, required: true },
+    ],
+  },
+  'github-ops': {
+    name: 'GitHub Operations', topology: 'hierarchical', strategy: 'specialized', maxAgents: 5, consensus: 'raft',
+    agents: [
+      { role: 'lead', type: 'architect', tier: 3, required: false },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
+      { role: 'implementer', type: 'coder', tier: 2, required: true },
+    ],
+  },
+  'tdd-workflow': {
+    name: 'TDD Workflow', topology: 'hierarchical', strategy: 'specialized', maxAgents: 5, consensus: 'raft',
+    agents: [
+      { role: 'test-writer', type: 'tester', tier: 2, required: true },
+      { role: 'implementer', type: 'coder', tier: 3, required: true },
+      { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
+    ],
+  },
+  'monitoring-alerting': {
+    name: 'Monitoring & Alerting', topology: 'star', strategy: 'minimal', maxAgents: 4, consensus: 'none',
+    agents: [
+      { role: 'incident-lead', type: 'architect', tier: 3, required: true },
+      { role: 'fixer', type: 'coder', tier: 3, required: true },
+      { role: 'validator', type: 'tester', tier: 2, required: true },
+    ],
+  },
+};
 
 // ── Ambiguity Detection ─────────────────────────────────────────────────────
 

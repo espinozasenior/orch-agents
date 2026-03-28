@@ -7,10 +7,10 @@
  */
 
 import { spawn as _spawn } from 'node:child_process';
-import type { SPARCPhase } from '../types';
-import type { Logger } from '../shared/logger';
+import type { SPARCPhase } from '../../types';
+import type { Logger } from '../../shared/logger';
 import { createAgentSandbox, type AgentSandbox } from './agent-sandbox';
-import { buildSafeEnv } from './cli-client';
+import { buildSafeEnv } from '../../shared/safe-env';
 
 // ---------------------------------------------------------------------------
 // Public types

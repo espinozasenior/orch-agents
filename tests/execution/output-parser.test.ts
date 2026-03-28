@@ -4,7 +4,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseChunk, tryParseTokens } from '../../src/execution/output-parser';
+import { parseChunk, tryParseTokens } from '../../src/execution/runtime/output-parser';
 
 // ---------------------------------------------------------------------------
 // parseChunk

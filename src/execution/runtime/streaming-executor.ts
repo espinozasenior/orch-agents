@@ -12,14 +12,14 @@
 import { spawn as _spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { TaskExecutionRequest, TaskExecutionResult, TaskExecutor } from './task-executor';
-import type { EventBus } from '../shared/event-bus';
-import { createDomainEvent } from '../shared/event-bus';
+import type { EventBus } from '../../shared/event-bus';
+import { createDomainEvent } from '../../shared/event-bus';
 import type { AgentTracker } from './agent-tracker';
 import type { CancellationController } from './cancellation-controller';
 import { parseChunk, tryParseTokens } from './output-parser';
-import type { Logger } from '../shared/logger';
+import type { Logger } from '../../shared/logger';
 import { createAgentSandbox, type AgentSandbox } from './agent-sandbox';
-import { buildSafeEnv } from './cli-client';
+import { buildSafeEnv } from '../../shared/safe-env';
 import { extractJson } from './task-executor';
 
 // ---------------------------------------------------------------------------

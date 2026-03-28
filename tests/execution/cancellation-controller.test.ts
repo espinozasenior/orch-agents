@@ -5,7 +5,7 @@
 import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { createCancellationController } from '../../src/execution/cancellation-controller';
+import { createCancellationController } from '../../src/execution/runtime/cancellation-controller';
 import type { ChildProcess } from 'node:child_process';
 
 // ---------------------------------------------------------------------------

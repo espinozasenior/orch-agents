@@ -20,10 +20,11 @@ export function verifySignature(
   payload: string | Buffer,
   signature: string,
   secret: string,
+  options?: { prefix?: string },
 ): void {
-  // SECURITY: Require explicit opt-in to skip verification
+  // SECURITY: Require explicit opt-in to skip verification, never in production
   if (!secret) {
-    if (process.env.SKIP_SIGNATURE_VERIFICATION === 'true') {
+    if (process.env.SKIP_SIGNATURE_VERIFICATION === 'true' && process.env.NODE_ENV !== 'production') {
       return;
     }
     throw new AuthenticationError(
@@ -35,16 +36,17 @@ export function verifySignature(
     throw new AuthenticationError('Missing X-Hub-Signature-256 header');
   }
 
-  const expectedPrefix = 'sha256=';
-  if (!signature.startsWith(expectedPrefix)) {
-    throw new AuthenticationError('Invalid signature format: must start with sha256=');
+  const prefix = options?.prefix ?? 'sha256=';
+
+  if (prefix && !signature.startsWith(prefix)) {
+    throw new AuthenticationError(`Invalid signature format: must start with ${prefix}`);
   }
 
   const expectedHmac = createHmac('sha256', secret)
     .update(payload)
     .digest('hex');
 
-  const expectedSignature = `${expectedPrefix}${expectedHmac}`;
+  const expectedSignature = `${prefix}${expectedHmac}`;
 
   // Both strings must be the same length for timingSafeEqual
   const sigBuffer = Buffer.from(signature);

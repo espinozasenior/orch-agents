@@ -21,6 +21,26 @@ export interface AppConfig {
   readonly githubToken: string;
   /** Bot username for loop prevention (optional) */
   readonly botUsername?: string;
+  /** Enable Claude-powered diff review (opt-in, default false) */
+  readonly enableClaudeDiffReview: boolean;
+  /** Enable Linear integration (opt-in, default false) */
+  readonly linearEnabled: boolean;
+  /** Linear webhook HMAC signing secret */
+  readonly linearWebhookSecret: string;
+  /** Linear API key for GraphQL API */
+  readonly linearApiKey: string;
+  /** Linear team ID for polling */
+  readonly linearTeamId: string;
+  /** @deprecated Use WORKFLOW.md polling.interval_ms instead */
+  readonly linearPollIntervalMs: number;
+  /** Linear bot user ID for loop prevention */
+  readonly linearBotUserId: string;
+  /** Enable Linear polling fallback (default false) */
+  readonly linearPollingEnabled: boolean;
+  /** Path to WORKFLOW.md (default: 'WORKFLOW.md' in project root) */
+  readonly workflowMdPath: string;
+  /** Enable GitHub routing via WORKFLOW.md (default false, uses config/github-routing.json) */
+  readonly workflowMdGithub: boolean;
 }
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = [
@@ -55,6 +75,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   }
 
   const botUsername = env.BOT_USERNAME ?? undefined;
+  const enableClaudeDiffReview = env.ENABLE_CLAUDE_DIFF_REVIEW === 'true';
+
+  const linearEnabled = env.LINEAR_ENABLED === 'true';
+  const linearWebhookSecret = env.LINEAR_WEBHOOK_SECRET ?? '';
+  const linearApiKey = env.LINEAR_API_KEY ?? '';
+  const linearTeamId = env.LINEAR_TEAM_ID ?? '';
+  const linearPollIntervalMs = parsePollInterval(env.LINEAR_POLL_INTERVAL_MS);
+  const linearBotUserId = env.LINEAR_BOT_USER_ID ?? '';
+  const linearPollingEnabled = env.LINEAR_POLLING_ENABLED === 'true';
+  const workflowMdPath = env.WORKFLOW_MD_PATH ?? 'WORKFLOW.md';
+  const workflowMdGithub = env.WORKFLOW_MD_GITHUB === 'true';
 
   return Object.freeze({
     port,
@@ -63,6 +94,16 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     webhookSecret,
     githubToken,
     botUsername,
+    enableClaudeDiffReview,
+    linearEnabled,
+    linearWebhookSecret,
+    linearApiKey,
+    linearTeamId,
+    linearPollIntervalMs,
+    linearBotUserId,
+    linearPollingEnabled,
+    workflowMdPath,
+    workflowMdGithub,
   });
 }
 
@@ -84,6 +125,15 @@ function parseLogLevel(value: string | undefined): LogLevel {
     );
   }
   return lower;
+}
+
+function parsePollInterval(value: string | undefined): number {
+  if (!value) return 30_000;
+  const parsed = parseInt(value, 10);
+  if (isNaN(parsed) || parsed < 1000) {
+    throw new Error(`Invalid LINEAR_POLL_INTERVAL_MS: '${value}'. Must be >= 1000.`);
+  }
+  return parsed;
 }
 
 function parseNodeEnv(value: string | undefined): NodeEnv {

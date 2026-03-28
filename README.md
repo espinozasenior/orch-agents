@@ -1,245 +1,341 @@
-# Orch-Agents
+# orch-agents
 
-An automated pipeline that listens for GitHub webhooks (push, PR, issues, etc.) and dispatches AI agents to handle the work — code review, bug fixes, testing, deployments, and more.
+Autonomous AI agents for your GitHub repos and Linear boards.
 
-## How It Works (The Big Picture)
+orch-agents watches your GitHub repo and Linear board, then dispatches AI agents to do the work — code reviews, bug fixes, feature builds, security audits. You define what agents run for what tasks in one file: `WORKFLOW.md`.
 
-```
-GitHub Webhook (e.g. "PR opened")
-    |
-    v
-1. INTAKE    -- What happened? Parse the webhook payload
-    |
-    v
-2. TRIAGE    -- How urgent is it? Score priority (P0-P3)
-    |
-    v
-3. PLANNING  -- What agents do we need? Pick a workflow template
-    |
-    v
-4. EXECUTION -- Run the agents! Each gets a prompt with full context
-    |
-    v
-5. REVIEW    -- Did it work? Check quality gates
-```
-
-Each step is configured by a JSON file you can edit. No code changes needed.
+Inspired by [OpenAI Symphony](https://github.com/openai/symphony) and [Linear's Agent Interaction Guidelines](https://linear.app/docs/agent-interaction-guidelines).
 
 ## Quick Start
 
 ```bash
+# 1. Clone and build
+git clone https://github.com/espinozasenior/orch-agents.git
+cd orch-agents
 npm install
 npm run build
-npm start          # Starts the server on port 3000
+
+# 2. Set environment variables
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GITHUB_TOKEN="ghp_..."
+export WEBHOOK_SECRET="your-secret"
+
+# 3. Start
+npm start
 ```
 
-Send a test webhook:
-```bash
-curl -X POST http://localhost:3000/webhooks/github \
-  -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: push" \
-  -d '{"ref": "refs/heads/main", "repository": {"full_name": "my/repo"}}'
-```
+Then add a webhook to your GitHub repo:
 
-## Configuration (The 3 Files You Can Edit)
+| Field | Value |
+|-------|-------|
+| Payload URL | `https://your-server/webhooks/github` |
+| Content type | `application/json` |
+| Secret | Same as `WEBHOOK_SECRET` |
+| Events | Push, Pull requests, Issues, Issue comments, Workflow runs |
 
-The pipeline is controlled by 3 JSON files in the `config/` folder. Together they form a **decision matrix** — you decide what happens for each GitHub event.
-
-### File 1: `config/github-routing.json` — "When X happens, do Y"
-
-Maps GitHub events to a workflow. Think of it as "if this, then that" rules.
+## How It Works
 
 ```
-GitHub Event  +  Action  +  Condition  -->  Intent  +  Template
-─────────────────────────────────────────────────────────────────
-push             —          main branch     validate-main    cicd-pipeline
-push             —          other branch    validate-branch  quick-fix
-pull_request     opened     —               review-pr        github-ops
-issues           labeled    bug             fix-bug          tdd-workflow
-issues           labeled    enhancement     build-feature    feature-build
-release          published  —               deploy-release   release-pipeline
+YOU                                   ORCH-AGENTS
+━━━                                   ━━━━━━━━━━━
+Open a PR                         →   reviewer agent checks your code
+                                      posts findings on the PR
+
+Label an issue "bug"              →   coder + tester agents
+                                      fix the bug, write tests, push
+
+Move Linear card to "Todo"        →   agents from the matching template
+(with label "feature")                architect designs, coder builds,
+                                      reviewer checks
+
+CI fails on main                  →   coder agent reads the error
+                                      pushes a fix
+
+Comment "stop" on a PR            →   all agents stop immediately
 ```
 
-**To change:** Edit the JSON array. Each entry has `event`, `action`, `condition`, `intent`, and `template`.
+Every agent runs in an **isolated git worktree**. Every change goes through a **review gate** (automated code review + test runner + security scan) before being committed.
 
-### File 2: `config/workflow-templates.json` — "Who works on it and how"
+## WORKFLOW.md — The Only Config You Need
 
-Defines the agent team for each template. This is where you control cost, speed, and quality.
+Create `WORKFLOW.md` in your repo root. This one file controls everything:
 
-Each template has:
+```yaml
+---
+# Define your agent teams
+templates:
+  tdd-workflow: [coder, tester]
+  feature-build: [architect, coder, reviewer]
+  github-ops: [reviewer]
+  quick-fix: [coder]
+  security-audit: [security-architect]
 
-```json
-{
-  "key": "github-ops",
-  "name": "GitHub Operations",
-  "phases": [
-    {
-      "type": "specification",
-      "agents": ["architect"],
-      "gate": "spec-approved",
-      "skippable": true
-    },
-    {
-      "type": "refinement",
-      "agents": ["reviewer", "coder"],
-      "gate": "review-approved",
-      "skippable": false
-    }
-  ],
-  "defaultAgents": [
-    { "role": "lead",        "type": "architect", "tier": 3, "required": false },
-    { "role": "reviewer",    "type": "reviewer",  "tier": 2, "required": true },
-    { "role": "implementer", "type": "coder",     "tier": 2, "required": true }
-  ],
-  "topology": "hierarchical",
-  "maxAgents": 5
-}
+# What GitHub events trigger which template
+github:
+  events:
+    pull_request.opened: github-ops
+    pull_request.synchronize: github-ops
+    issues.labeled.bug: tdd-workflow
+    issues.labeled.feature: feature-build
+    issue_comment.mentions_bot: quick-fix
+    workflow_run.failure: quick-fix
+
+# Route work by label (works for both GitHub and Linear)
+agents:
+  max_concurrent: 8
+  routing:
+    bug: tdd-workflow
+    feature: feature-build
+    security: security-audit
+    default: quick-fix
+
+# Linear board integration (optional)
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  team: $LINEAR_TEAM_ID
+  active_states: [Todo, In Progress]
+  terminal_states: [Done, Cancelled]
+
+# Timeouts
+stall:
+  timeout_ms: 300000
+---
 ```
 
-#### What Each Field Means
+### Templates
 
-**`phases`** — The steps agents go through, in order. Like a checklist.
+A template is just a name and a list of agent types:
 
-| Phase | What happens |
-|-------|-------------|
-| `specification` | Agent reads the task and writes a plan |
-| `pseudocode` | Agent designs the algorithm |
-| `architecture` | Agent designs the system structure |
-| `refinement` | Agent writes/fixes the actual code |
-| `completion` | Agent runs final checks, deploys |
-
-More phases = more thorough but slower. A quick bug fix might only need `refinement`. A new feature might need all 5.
-
-Each phase has:
-- **`agents`** — Which agent types work on this phase (they run in parallel)
-- **`gate`** — A quality check that must pass before moving on (e.g., "tests-pass")
-- **`skippable`** — If `true`, a failed gate skips the phase instead of stopping everything
-
-**`defaultAgents`** — The team of AI agents assigned to this workflow.
-
-Each agent has:
-
-| Field | What it means | Example |
-|-------|--------------|---------|
-| `role` | The job title (for logging/identification) | `"lead"`, `"implementer"`, `"validator"` |
-| `type` | The agent specialization | `"coder"`, `"tester"`, `"architect"`, `"reviewer"` |
-| `tier` | The AI model power level (see below) | `1`, `2`, or `3` |
-| `required` | Must this agent spawn? `true` = plan fails without it | `true` or `false` |
-
-**`tier`** — This is the biggest cost/quality knob:
-
-| Tier | Model | Speed | Cost per call | Best for |
-|------|-------|-------|---------------|----------|
-| 1 | WASM (local) | <1ms | Free | Simple transforms (rename vars, add types) |
-| 2 | Haiku | ~500ms | ~$0.0002 | Routine tasks (tests, simple fixes) |
-| 3 | Sonnet/Opus | 2-5s | ~$0.003-0.015 | Complex reasoning (architecture, security) |
-
-**`topology`** — How agents coordinate:
-
-| Topology | How it works | When to use |
-|----------|-------------|-------------|
-| `star` | One leader, agents work independently | Simple tasks, 2-3 agents |
-| `hierarchical` | Leader delegates to sub-leads | Medium tasks, 4-6 agents |
-| `hierarchical-mesh` | Full coordination between all agents | Complex tasks, 6+ agents |
-
-**`consensus`** — How agents agree on results:
-
-| Consensus | How it works | When to use |
-|-----------|-------------|-------------|
-| `none` | No coordination overhead | Quick fixes, independent work |
-| `raft` | Leader-based agreement | Most workflows |
-| `pbft` | Byzantine fault tolerant | Critical/security work |
-
-**`maxAgents`** — Hard limit on how many agents can run at once. Controls your cost ceiling.
-
-### File 3: `config/urgency-rules.json` — "How urgent is it?"
-
-Controls the priority scoring. Adjusts how labels, file types, and PR size affect urgency.
-
-## Common Recipes
-
-### "Make PR reviews cheaper"
-
-Edit `config/workflow-templates.json`, find `github-ops`, change the architect from tier 3 to tier 2:
-
-```json
-{ "role": "lead", "type": "architect", "tier": 2, "required": false }
+```yaml
+templates:
+  tdd-workflow: [coder, tester]      # Bug fixes: write code + tests
+  feature-build: [architect, coder, reviewer]  # Features: design + build + review
+  quick-fix: [coder]                 # Simple stuff: one agent
 ```
 
-### "Add security scanning to bug fixes"
+Agents run **sequentially**. Each gets its own isolated workspace.
 
-Edit `config/workflow-templates.json`, find `tdd-workflow`, add to `defaultAgents`:
+### GitHub Events
 
-```json
-{ "role": "security", "type": "security-architect", "tier": 3, "required": false }
+Map events to templates with one line each:
+
+```yaml
+github:
+  events:
+    pull_request.opened: github-ops        # PR opened → review
+    issues.labeled.bug: tdd-workflow       # Bug labeled → fix it
+    push.default_branch: cicd-pipeline     # Push to main → validate
+    workflow_run.failure: quick-fix        # CI failed → fix it
 ```
 
-### "Skip the specification phase for quick fixes"
+Format: `event.action.condition: template-name`
 
-Edit `config/workflow-templates.json`, find `quick-fix`, and the `phases` array only has `refinement` — it already skips specification. To add it optionally:
+Conditions: `default_branch`, `other` (non-default branch), `merged`, `mentions_bot`, `failure`, or any label name.
 
-```json
-{ "type": "specification", "agents": ["architect"], "gate": "spec-approved", "skippable": true }
+### Label Routing
+
+The `agents.routing` section routes work by label — works for **both** GitHub issues and Linear cards:
+
+```yaml
+agents:
+  routing:
+    bug: tdd-workflow         # "bug" label → coder + tester
+    feature: feature-build    # "feature" label → architect + coder + reviewer
+    security: security-audit  # "security" label → security specialist
+    default: quick-fix        # No matching label → single coder
 ```
 
-The `"skippable": true` means it won't block the pipeline if the gate fails.
+### Linear Integration
 
-### "Prevent the bot from responding to its own comments"
+Optional. When enabled, moving a Linear card to an active state triggers agents:
 
-Set the `BOT_USERNAME` environment variable to your bot's GitHub username:
-
-```bash
-BOT_USERNAME=my-bot-account npm start
+```yaml
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY             # $VAR syntax reads from env
+  team: $LINEAR_TEAM_ID
+  active_states: [Todo, In Progress]   # Agents work on these
+  terminal_states: [Done, Cancelled]   # Agents stop on these
 ```
 
-This does two things:
-1. Drops any webhook where the sender matches the bot username (prevents infinite loops)
-2. Makes `mentions_bot` routing rules only match comments that contain `@my-bot-account`
+Set up the Linear webhook: Settings > API > Webhooks > URL: `https://your-server/webhooks/linear`
 
-Without this, every `issue_comment` event will match — including the bot's own replies.
+## Agent Definitions
 
-### "Ignore issue comments entirely"
+Agents are markdown files in `.claude/agents/`. Each teaches the agent what to do:
 
-Edit `config/github-routing.json`, remove the entry with `"event": "issue_comment"`.
+```markdown
+<!-- .claude/agents/coder.md -->
+---
+name: coder
+category: development
+tier: 2
+description: Code implementation specialist
+---
+
+You are a code implementation agent. Your job is to:
+1. Read the issue/PR description
+2. Write clean, tested code
+3. Follow the project's coding conventions
+```
+
+orch-agents ships with 18+ built-in agent definitions. Customize or add your own.
+
+## Commands
+
+### Stop an agent
+
+Comment on any GitHub PR or Linear issue:
+
+```
+stop
+```
+
+or
+
+```
+@orch-agents stop
+```
+
+All running agents for that work item cancel immediately.
+
+### Mention the bot
+
+```
+@orch-agents take a look at this
+```
+
+Triggers the `issue_comment.mentions_bot` event.
 
 ## Environment Variables
 
-| Variable | Default | What it does |
-|----------|---------|-------------|
-| `PORT` | `3000` | HTTP server port |
-| `LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
-| `ENABLE_TASK_AGENTS` | `false` | Enable real AI agent execution (otherwise runs in stub mode) |
-| `ENABLE_AGENTS` | `false` | Enable CLI lifecycle agents (legacy mode) |
-| `BOT_USERNAME` | *(none)* | GitHub username of the bot. Prevents the bot from processing its own comments (infinite loop prevention). Also makes `mentions_bot` routing rules require an actual `@<username>` mention instead of matching all comments. |
-| `NODE_ENV` | `development` | Set to `production` for production logging |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | Yes | — | Claude API key |
+| `GITHUB_TOKEN` | Yes | — | GitHub personal access token |
+| `WEBHOOK_SECRET` | Yes | — | GitHub webhook HMAC secret |
+| `PORT` | No | `3000` | HTTP server port |
+| `LOG_LEVEL` | No | `info` | `trace` `debug` `info` `warn` `error` |
+| `BOT_USERNAME` | No | `orch-agents` | Bot identity for loop prevention |
+| `NODE_ENV` | No | `development` | `development` or `production` |
+| `LINEAR_ENABLED` | No | `false` | Enable Linear integration |
+| `LINEAR_API_KEY` | No | — | Linear API key |
+| `LINEAR_WEBHOOK_SECRET` | No | — | Linear webhook signing secret |
+| `LINEAR_TEAM_ID` | No | — | Linear team UUID |
+| `ENABLE_INTERACTIVE_AGENTS` | No | `false` | Enable agent execution (otherwise stub mode) |
+| `WORKFLOW_MD_GITHUB` | No | `false` | Use WORKFLOW.md for GitHub event routing |
 
-## Build and Test
+## Deployment
+
+### Local development
 
 ```bash
-npm run build    # TypeScript compile
-npm test         # Run all tests
-npm run lint     # Run linter
-npm start        # Start server (loads .env automatically)
+npm start                                          # Start on :3000
+npx cloudflared tunnel --url http://localhost:3000  # Expose publicly
+# Use the tunnel URL as your webhook URL
+```
+
+### Production
+
+```bash
+# Any Node.js host (Fly.io, Railway, Render, EC2)
+# Set env vars in your platform's dashboard
+npm run build && npm start
+```
+
+### Docker
+
+```bash
+docker build -t orch-agents .
+docker run -p 3000:3000 --env-file .env orch-agents
+```
+
+## Requirements
+
+- Node.js 22+
+- Claude CLI (`npm i -g @anthropic-ai/claude-code`)
+- git (for worktree isolation)
+- gh CLI (`brew install gh` or equivalent)
+
+## How It Works Internally
+
+```
+Webhook arrives (GitHub or Linear)
+    ↓
+Signature verified (HMAC-SHA256)
+    ↓
+Input sanitized (prompt injection defense)
+    ↓
+Event normalized → IntakeEvent
+    ↓
+WORKFLOW.md looked up → template → agent list
+    ↓
+For each agent (sequentially, isolated worktree):
+    1. Create git worktree
+    2. Run Claude Code with agent instructions
+    3. Review gate:
+       - Diff review (Claude-powered)
+       - Test runner (npm test)
+       - Security scanner (secret detection)
+    4. If review fails → fix-it loop (up to 3 attempts)
+    5. Commit and push
+    ↓
+Post results on GitHub PR / Linear issue
+    ↓
+Clean up worktree
 ```
 
 ## Project Structure
 
 ```
-config/                  # Editable JSON configuration
-  github-routing.json    # Event -> intent -> template mapping
-  workflow-templates.json # Template -> agent teams, phases
-  urgency-rules.json     # Priority scoring rules
+WORKFLOW.md              # Your project config (the only file you edit)
 
 src/
-  intake/                # Webhook parsing + normalization
-  triage/                # Priority scoring
-  planning/              # Workflow template selection + plan creation
-  execution/             # Agent spawning + phase execution
-  review/                # Quality gate checking
-  shared/                # Logger, event bus, error types
-  pipeline.ts            # Wires everything together
-  index.ts               # HTTP server entry point
+  webhook-gateway/       # HTTP endpoints, HMAC verification, dedup
+  intake/                # Event normalization (GitHub + Linear → IntakeEvent)
+  triage/                # Priority scoring (P0-P3)
+  execution/
+    simple-executor.ts   # The executor — runs agents sequentially
+    orchestrator/        # Event wiring
+    runtime/             # Agent tracking, streaming, sandbox
+    workspace/           # Git worktree isolation
+    fix-it-loop.ts       # Review → fix → re-review cycle
+    prompt-builder.ts    # Prompt construction
+  review/                # Quality gates (diff review + tests + security)
+  integration/
+    github-client.ts     # GitHub API (PR comments, reviews)
+    linear/              # Linear API, polling, workpad, stall detection
+  agent-registry/        # Agent definition discovery
+  shared/                # Event bus, logger, errors, sanitizer, identity
+  setup/                 # Interactive setup wizard
 
-tests/                   # All test files (TDD London School)
-docs/sparc/              # SPARC methodology plans
+.claude/agents/          # Agent definitions (markdown files)
+tests/                   # 730+ tests (London School TDD)
+docs/                    # Research reports, SPARC specs, DDD analysis
 ```
+
+## Build & Test
+
+```bash
+npm run build    # TypeScript compile
+npm test         # Run all 730+ tests
+npm run lint     # ESLint
+npm run setup    # Interactive setup wizard
+```
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Webhook returns 401 | Check `WEBHOOK_SECRET` matches GitHub/Linear settings |
+| Agent doesn't start | Check WORKFLOW.md has a matching event/routing rule |
+| Agent times out | Increase `stall.timeout_ms` in WORKFLOW.md |
+| No PR comments | Check `GITHUB_TOKEN` has `repo` scope |
+| Linear not working | Set `LINEAR_ENABLED=true` and verify `LINEAR_API_KEY` |
+| "WORKFLOW.md not found" | Create WORKFLOW.md in your project root |
+| Bot responding to itself | Set `BOT_USERNAME` env var to your bot's GitHub username |
+
+## License
+
+MIT

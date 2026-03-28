@@ -7,11 +7,11 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createStreamingTaskExecutor } from '../../src/execution/streaming-executor';
+import { createStreamingTaskExecutor } from '../../src/execution/runtime/streaming-executor';
 import { createEventBus } from '../../src/shared/event-bus';
-import { createAgentTracker } from '../../src/execution/agent-tracker';
-import { createCancellationController } from '../../src/execution/cancellation-controller';
-import type { TaskExecutionRequest } from '../../src/execution/task-executor';
+import { createAgentTracker } from '../../src/execution/runtime/agent-tracker';
+import { createCancellationController } from '../../src/execution/runtime/cancellation-controller';
+import type { TaskExecutionRequest } from '../../src/execution/runtime/task-executor';
 import type { Logger } from '../../src/shared/logger';
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ import {
   type TaskExecutionRequest,
   type TaskExecutionResult,
   type ClaudeTaskExecutorOpts,
-} from '../../src/execution/task-executor';
+} from '../../src/execution/runtime/task-executor';
 import type { Logger, LogContext } from '../../src/shared/logger';
 
 // ---------------------------------------------------------------------------

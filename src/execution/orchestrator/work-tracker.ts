@@ -5,8 +5,8 @@
  * through SPARC phase execution. Tracks phase results, timing, and outcome.
  */
 
-import type { PhaseResult } from '../types';
-import type { AgentTracker, AgentExecState } from './agent-tracker';
+import type { PhaseResult } from '../../types';
+import type { AgentTracker, AgentExecState } from '../runtime/agent-tracker';
 
 // ---------------------------------------------------------------------------
 // Types

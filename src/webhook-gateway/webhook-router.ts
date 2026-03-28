@@ -5,7 +5,7 @@
  * 1. Verifies HMAC-SHA256 signature
  * 2. Deduplicates via event buffer
  * 3. Parses the GitHub event payload
- * 4. Normalizes into an IntakeEvent
+ * 4. Normalizes into an IntakeEvent using WORKFLOW.md config
  * 5. Publishes IntakeCompleted event to the event bus
  * 6. Returns 202 Accepted immediately
  */
@@ -18,20 +18,17 @@ import type { Logger } from '../shared/logger';
 import { verifySignature } from './signature-verifier';
 import { createEventBuffer, type EventBuffer } from './event-buffer';
 import { parseGitHubEvent } from './event-parser';
-import { normalizeGitHubEvent } from '../intake/github-normalizer';
-import {
-  AppError,
-  AuthenticationError,
-  ConflictError,
-  RateLimitError,
-  ValidationError,
-} from '../shared/errors';
+import { normalizeGitHubEventFromWorkflow } from '../intake/github-workflow-normalizer';
+import type { WorkflowConfig } from '../integration/linear/workflow-parser';
+import { ValidationError } from '../shared/errors';
+import { handleWebhookError } from '../shared/webhook-error-handler';
 
 export interface WebhookRouterDeps {
   config: AppConfig;
   logger: Logger;
   eventBus: EventBus;
   eventBuffer?: EventBuffer;
+  workflowConfig?: WorkflowConfig;
 }
 
 // Extend FastifyRequest to hold the raw body string
@@ -133,13 +130,33 @@ export async function webhookRouter(
               status: 'skipped',
             });
           }
+
+          // AIG: Stop command detection
+          const stopPattern = /\b(?:stop|cancel|abort)\b/i;
+          const botNameForStop = config.botUsername ?? 'orch-agents';
+          const mentionStop = new RegExp(`@${botNameForStop}\\s+(?:stop|cancel|abort)`, 'i');
+
+          if (stopPattern.test(parsed.commentBody) || mentionStop.test(parsed.commentBody)) {
+            const workItemId = `pr-${parsed.prNumber ?? parsed.issueNumber}`;
+            const cancelEvent = createDomainEvent('WorkCancelled', {
+              workItemId,
+              cancellationReason: `User requested stop via comment: "${parsed.commentBody.slice(0, 100)}"`,
+            }, deliveryId);
+            eventBus.publish(cancelEvent);
+
+            log.info('Stop command detected', { sender: parsed.sender, deliveryId, workItemId });
+            return reply.status(202).send({ id: deliveryId, status: 'cancelling' });
+          }
         }
 
         // Step 3: Deduplication and rate limiting
         buffer.check(deliveryId, parsed.repoFullName);
 
-        // Step 4: Normalize to IntakeEvent
-        const intakeEvent = normalizeGitHubEvent(parsed);
+        // Step 4: Normalize to IntakeEvent using WORKFLOW.md config
+        if (!deps.workflowConfig) {
+          throw new ValidationError('WorkflowConfig not loaded — WORKFLOW.md is required', {});
+        }
+        const intakeEvent = normalizeGitHubEventFromWorkflow(parsed, deps.workflowConfig);
 
         if (!intakeEvent) {
           log.info('Event skipped (bot sender or no matching rule)', {
@@ -178,55 +195,4 @@ export async function webhookRouter(
       }
     },
   );
-}
-
-function handleWebhookError(
-  err: unknown,
-  reply: FastifyReply,
-  log: Logger,
-): FastifyReply {
-  if (err instanceof AuthenticationError) {
-    log.warn('Webhook authentication failed', { error: err.message });
-    return reply.status(401).send({
-      error: { code: err.code, message: err.message },
-    });
-  }
-
-  if (err instanceof ConflictError) {
-    log.info('Duplicate webhook delivery', { error: err.message });
-    return reply.status(409).send({
-      error: { code: err.code, message: err.message },
-    });
-  }
-
-  if (err instanceof RateLimitError) {
-    log.warn('Webhook rate limited', { retryAfter: err.retryAfter });
-    return reply
-      .status(429)
-      .header('Retry-After', String(err.retryAfter))
-      .send({
-        error: { code: err.code, message: err.message, retryAfter: err.retryAfter },
-      });
-  }
-
-  if (err instanceof ValidationError) {
-    log.warn('Webhook validation failed', { error: err.message, fields: err.fields });
-    return reply.status(400).send({
-      error: { code: err.code, message: err.message, fields: err.fields },
-    });
-  }
-
-  if (err instanceof AppError) {
-    log.error('Webhook processing error', { error: err.message, code: err.code });
-    return reply.status(err.statusCode).send({
-      error: { code: err.code, message: err.message },
-    });
-  }
-
-  log.error('Unexpected webhook error', {
-    error: err instanceof Error ? err.message : String(err),
-  });
-  return reply.status(500).send({
-    error: { code: 'ERR_INTERNAL', message: 'An unexpected error occurred' },
-  });
 }

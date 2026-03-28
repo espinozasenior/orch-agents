@@ -7,8 +7,8 @@
  * Also handles reading/writing config/setup.json to disk.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import type { SetupConfig, AgentToggle, EventToggle, TopologyChoice, ConsensusChoice, StrategyChoice } from './types';
 import type { PlannedAgent } from '../types';
 
@@ -34,6 +34,10 @@ export function loadSetup(): SetupConfig | null {
 }
 
 export function saveSetup(config: SetupConfig): string {
+  const dir = dirname(SETUP_PATH);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
   writeFileSync(SETUP_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
   return SETUP_PATH;
 }

@@ -7,11 +7,47 @@ import { createEventBuffer, type EventBuffer } from '../../src/webhook-gateway/e
 import { loadConfig } from '../../src/shared/config';
 import { createLogger } from '../../src/shared/logger';
 import { createEventBus, type EventBus } from '../../src/shared/event-bus';
-import { setRoutingTable, setBotUserId, type RoutingRule } from '../../src/intake/github-normalizer';
+import { setBotUserId } from '../../src/intake/github-workflow-normalizer';
 import type { IntakeCompletedEvent } from '../../src/shared/event-types';
+import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
 
-// Load actual routing rules
-import routingRules from '../../config/github-routing.json';
+function makeTestWorkflowConfig(): WorkflowConfig {
+  return {
+    templates: {
+      'github-ops': ['reviewer'],
+      'tdd-workflow': ['coder', 'tester'],
+      'quick-fix': ['coder'],
+      'cicd-pipeline': ['coder'],
+      'release-pipeline': ['coder'],
+      'security-audit': ['security-architect'],
+      'feature-build': ['architect', 'coder', 'reviewer'],
+    },
+    github: {
+      events: {
+        'pull_request.opened': 'github-ops',
+        'pull_request.synchronize': 'github-ops',
+        'pull_request.closed.merged': 'release-pipeline',
+        'pull_request.ready_for_review': 'github-ops',
+        'push.default_branch': 'cicd-pipeline',
+        'push.other': 'quick-fix',
+        'issues.opened': 'github-ops',
+        'issues.labeled.bug': 'tdd-workflow',
+        'issues.labeled.enhancement': 'feature-build',
+        'issues.labeled.security': 'security-audit',
+        'issue_comment.mentions_bot': 'quick-fix',
+        'pull_request_review.changes_requested': 'quick-fix',
+        'workflow_run.failure': 'quick-fix',
+        'release.published': 'release-pipeline',
+        'deployment_status.failure': 'quick-fix',
+      },
+    },
+    tracker: { kind: 'linear', apiKey: '', team: 'test', activeStates: ['Todo'], terminalStates: ['Done'] },
+    agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },
+    polling: { intervalMs: 30000, enabled: false },
+    stall: { timeoutMs: 300000 },
+    promptTemplate: '',
+  };
+}
 
 const TEST_SECRET = 'test-secret-for-webhooks';
 
@@ -54,7 +90,6 @@ describe('webhookRouter (integration)', () => {
 
   beforeEach(async () => {
     deliveryCounter = 0;
-    setRoutingTable(routingRules as RoutingRule[]);
     setBotUserId(0);
 
     const config = loadConfig({
@@ -73,7 +108,8 @@ describe('webhookRouter (integration)', () => {
       logger,
       eventBus,
       eventBuffer: buffer,
-    } as WebhookRouterDeps);
+      workflowConfig: makeTestWorkflowConfig(),
+    } satisfies WebhookRouterDeps);
     await server.ready();
   });
 
@@ -259,6 +295,7 @@ describe('webhookRouter (integration)', () => {
       logger: createLogger({ level: 'fatal' }),
       eventBus,
       eventBuffer: buffer,
+      workflowConfig: makeTestWorkflowConfig(),
     } as WebhookRouterDeps);
     await server.ready();
 
@@ -363,6 +400,7 @@ describe('webhookRouter (integration)', () => {
       logger: createLogger({ level: 'fatal' }),
       eventBus,
       eventBuffer: buffer,
+      workflowConfig: makeTestWorkflowConfig(),
     } as WebhookRouterDeps);
     await server.ready();
 
@@ -429,6 +467,7 @@ describe('webhookRouter (integration)', () => {
       logger: createLogger({ level: 'fatal' }),
       eventBus,
       eventBuffer: buffer,
+      workflowConfig: makeTestWorkflowConfig(),
     } as WebhookRouterDeps);
     await server.ready();
 
@@ -496,6 +535,7 @@ describe('webhookRouter (integration)', () => {
       logger: createLogger({ level: 'fatal' }),
       eventBus,
       eventBuffer: buffer,
+      workflowConfig: makeTestWorkflowConfig(),
     } as WebhookRouterDeps);
     await server.ready();
 
@@ -541,7 +581,6 @@ describe('webhookRouter (integration)', () => {
   });
 
   it('should process issue_comment events from other users normally', async () => {
-    setRoutingTable(routingRules as RoutingRule[]);
     setBotUserId(0);
 
     const payload = {

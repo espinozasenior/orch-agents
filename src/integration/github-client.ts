@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Logger } from '../shared/logger';
 import { ExecutionError } from '../shared/errors';
-import { buildSafeEnv } from '../execution/cli-client';
+import { buildSafeEnv } from '../shared/safe-env';
 
 const execFileAsync = promisify(execFile);
 

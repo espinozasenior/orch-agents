@@ -1,11 +1,11 @@
 /**
  * TDD: End-to-end pipeline integration test.
  *
- * Verifies the full event-sourced pipeline:
- * IntakeCompleted -> Triage -> WorkTriaged -> Planning -> PlanCreated -> Execution -> WorkCompleted -> Review -> ReviewCompleted
+ * Verifies the simplified event-sourced pipeline:
+ * IntakeCompleted -> Execution -> WorkCompleted -> Review -> ReviewCompleted
  *
- * All engines are wired to a shared event bus via the pipeline module.
- * Uses event-driven waits (not setTimeout) for reliable CI.
+ * Triage runs independently for observability (IntakeCompleted -> WorkTriaged)
+ * but execution does not depend on it.
  */
 
 import { describe, it, afterEach } from 'node:test';
@@ -15,72 +15,38 @@ import { createEventBus, createDomainEvent } from '../../src/shared/event-bus';
 import type { EventBus } from '../../src/shared/event-bus';
 import type { DomainEventType } from '../../src/shared/event-types';
 import { createLogger } from '../../src/shared/logger';
-import { setUrgencyRules, resetUrgencyRules } from '../../src/triage/triage-engine';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
-import type { CliClient } from '../../src/execution/cli-client';
-import { createStubTaskExecutor } from '../../src/execution/task-executor';
-import { createStreamingTaskExecutor } from '../../src/execution/streaming-executor';
-import { createAgentTracker } from '../../src/execution/agent-tracker';
-import { createCancellationController } from '../../src/execution/cancellation-controller';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
-
-// ---------------------------------------------------------------------------
-// Test urgency rules (avoid filesystem dependency on config/urgency-rules.json)
-// ---------------------------------------------------------------------------
-
-const TEST_URGENCY_RULES = {
-  priorityWeights: {
-    severity: 0.35,
-    impact: 0.25,
-    skipTriage: 1.0,
-    labelBoost: 0.2,
-    recency: 0.2,
-  },
-  severityScores: {
-    critical: 1.0,
-    high: 0.75,
-    medium: 0.5,
-    low: 0.25,
-  },
-  impactScores: {
-    'system-wide': 1.0,
-    'cross-cutting': 0.75,
-    module: 0.5,
-    isolated: 0.25,
-  },
-  labelBoosts: {
-    security: 0.3,
-    bug: 0.2,
-    enhancement: 0.1,
-    refactor: 0.05,
-  },
-  priorityThresholds: {
-    'P0-immediate': 0.8,
-    'P1-high': 0.6,
-    'P2-standard': 0.35,
-    'P3-backlog': 0,
-  },
-  effortMapping: {
-    trivial: { maxComplexity: 15, maxFiles: 1 },
-    small: { maxComplexity: 30, maxFiles: 3 },
-    medium: { maxComplexity: 50, maxFiles: 8 },
-    large: { maxComplexity: 75, maxFiles: 20 },
-    epic: { maxComplexity: 100, maxFiles: 100 },
-  },
-};
+import type { SimpleExecutor, ExecutionResult } from '../../src/execution/simple-executor';
+import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+function makeWorkflowConfig(): WorkflowConfig {
+  return {
+    templates: {
+      'github-ops': ['reviewer'],
+      'tdd-workflow': ['coder', 'tester'],
+      'quick-fix': ['coder'],
+      'cicd-pipeline': ['coder'],
+      'feature-build': ['architect', 'coder', 'reviewer'],
+      'security-audit': ['security-architect'],
+    },
+    tracker: { kind: 'linear', apiKey: '', team: 'test', activeStates: ['Todo'], terminalStates: ['Done'] },
+    agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },
+    polling: { intervalMs: 30000, enabled: false },
+    stall: { timeoutMs: 300000 },
+    promptTemplate: '',
+  };
+}
 
 function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
   return {
     id: 'intake-e2e-001',
     timestamp: new Date().toISOString(),
     source: 'github',
-    sourceMetadata: { skipTriage: true, phases: ['refinement', 'completion'] },
+    sourceMetadata: { template: 'quick-fix' },
     intent: 'validate-branch',
     entities: {
       repo: 'test-org/test-repo',
@@ -90,6 +56,25 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
       labels: [],
     },
     ...overrides,
+  };
+}
+
+/** Stub SimpleExecutor that always succeeds. */
+function makeStubExecutor(): SimpleExecutor {
+  return {
+    async execute(plan): Promise<ExecutionResult> {
+      return {
+        status: 'completed',
+        agentResults: plan.agentTeam.map((a) => ({
+          agentRole: a.role,
+          agentType: a.type,
+          status: 'completed' as const,
+          findings: [],
+          duration: 10,
+        })),
+        totalDuration: 10 * plan.agentTeam.length,
+      };
+    },
   };
 }
 
@@ -148,38 +133,39 @@ describe('Pipeline E2E', () => {
   afterEach(() => {
     handle?.shutdown();
     handle = undefined;
-    resetUrgencyRules();
   });
 
-  it('IntakeCompleted flows through triage, planning, execution to WorkCompleted and ReviewCompleted', async () => {
+  it('IntakeCompleted flows through execution to WorkCompleted and ReviewCompleted', async () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
 
-    handle = startPipeline({ eventBus, logger });
+    handle = startPipeline({
+      eventBus, logger,
+      simpleExecutor: makeStubExecutor(),
+      workflowConfig: makeWorkflowConfig(),
+    });
 
     // Set up event-driven waits before publishing
     const reviewPromise = waitForEvent(eventBus, 'ReviewCompleted');
     const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted');
+    // Triage still runs independently
     const triagedPromise = waitForEvent(eventBus, 'WorkTriaged');
-    const planPromise = waitForEvent(eventBus, 'PlanCreated');
 
     // Act
     const intakeEvent = makeIntakeEvent();
     eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'e2e-corr-001'));
 
-    // Wait for final event in the chain
-    const [triaged, plan, workCompleted, review] = await Promise.all([
-      triagedPromise, planPromise, workCompletedPromise, reviewPromise,
+    // Wait for all events
+    const [triaged, workCompleted, review] = await Promise.all([
+      triagedPromise, workCompletedPromise, reviewPromise,
     ]);
 
-    // Assert full chain completed
+    // Assert triage ran independently
     assert.ok(triaged, 'Should produce a WorkTriaged event');
-    assert.ok(plan, 'Should produce a PlanCreated event');
 
     const wcPayload = workCompleted.payload as { workItemId: string; phaseCount: number };
     assert.equal(wcPayload.workItemId, 'intake-e2e-001');
-    assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one phase');
+    assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one agent');
 
     const rcPayload = review.payload as { reviewVerdict: ReviewVerdict };
     assert.equal(rcPayload.reviewVerdict.status, 'pass', 'Stub review should pass');
@@ -190,15 +176,17 @@ describe('Pipeline E2E', () => {
   it('preserves correlationId through the full pipeline', async () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
 
-    handle = startPipeline({ eventBus, logger });
+    handle = startPipeline({
+      eventBus, logger,
+      simpleExecutor: makeStubExecutor(),
+      workflowConfig: makeWorkflowConfig(),
+    });
 
     const reviewPromise = waitForEvent(eventBus, 'ReviewCompleted');
 
     const correlationIds: string[] = [];
     eventBus.subscribe('WorkTriaged', (evt) => correlationIds.push(evt.correlationId));
-    eventBus.subscribe('PlanCreated', (evt) => correlationIds.push(evt.correlationId));
     eventBus.subscribe('WorkCompleted', (evt) => correlationIds.push(evt.correlationId));
 
     const intakeEvent = makeIntakeEvent({ id: 'intake-corr-001' });
@@ -207,51 +195,21 @@ describe('Pipeline E2E', () => {
     const review = await reviewPromise;
     correlationIds.push(review.correlationId);
 
-    assert.equal(correlationIds.length, 4);
+    assert.equal(correlationIds.length, 3);
     for (const cid of correlationIds) {
       assert.equal(cid, 'pipeline-corr-001', 'All events should share the same correlationId');
     }
   });
 
-  it('handles complex events through the full pipeline', async () => {
-    const eventBus = createEventBus();
-    const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
-
-    handle = startPipeline({ eventBus, logger });
-
-    // Wait for either WorkCompleted or WorkFailed
-    const resultPromise = Promise.race([
-      waitForEvent(eventBus, 'WorkCompleted').then((e) => ({ type: 'completed' as const, event: e })),
-      waitForEvent(eventBus, 'WorkFailed').then((e) => ({ type: 'failed' as const, event: e })),
-    ]);
-
-    const intakeEvent = makeIntakeEvent({
-      id: 'intake-complex-001',
-      sourceMetadata: { skipTriage: false },
-      intent: 'incident-response',
-      entities: {
-        severity: 'critical',
-        files: Array.from({ length: 25 }, (_, i) => `dir${i}/file.ts`),
-        labels: ['security', 'system-wide'],
-      },
-    });
-
-    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }));
-
-    const result = await resultPromise;
-    assert.ok(
-      result.type === 'completed' || result.type === 'failed',
-      'Should produce either WorkCompleted or WorkFailed',
-    );
-  });
-
   it('handles multiple IntakeCompleted events concurrently', async () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
 
-    handle = startPipeline({ eventBus, logger });
+    handle = startPipeline({
+      eventBus, logger,
+      simpleExecutor: makeStubExecutor(),
+      workflowConfig: makeWorkflowConfig(),
+    });
 
     // Wait for 2 WorkCompleted events
     const completedPromise = collectEvents(eventBus, 'WorkCompleted', 2);
@@ -274,9 +232,12 @@ describe('Pipeline E2E', () => {
   it('shutdown stops all engines (no events processed after)', async () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
 
-    handle = startPipeline({ eventBus, logger });
+    handle = startPipeline({
+      eventBus, logger,
+      simpleExecutor: makeStubExecutor(),
+      workflowConfig: makeWorkflowConfig(),
+    });
     handle.shutdown();
 
     const triagedEvents: unknown[] = [];
@@ -286,249 +247,11 @@ describe('Pipeline E2E', () => {
       intakeEvent: makeIntakeEvent(),
     }));
 
-    // Short wait — just enough for any async handler that might still be queued
+    // Short wait
     await new Promise((r) => setTimeout(r, 50));
 
     assert.equal(triagedEvents.length, 0, 'No events should be processed after shutdown');
 
     handle = undefined;
-  });
-
-  it('pipeline with mock CliClient produces WorkCompleted with real artifacts', async () => {
-    const eventBus = createEventBus();
-    const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
-
-    // Build a mock CliClient with predictable responses
-    let agentCounter = 0;
-    let taskCounter = 0;
-    const cliClient: CliClient = {
-      async swarmInit() { return { swarmId: 'mock-swarm-001' }; },
-      async swarmShutdown() {},
-      async agentSpawn() { return { agentId: `mock-agent-${agentCounter++}` }; },
-      async agentStatus(agentId) {
-        return { agentId, status: 'completed', output: '{}' };
-      },
-      async agentTerminate() {},
-      async taskCreate() { return { taskId: `mock-task-${taskCounter++}` }; },
-      async taskAssign() {},
-      async taskStatus(taskId) {
-        return { taskId, status: 'completed', output: JSON.stringify({ done: true }) };
-      },
-      async taskComplete() {},
-      async memoryStore() {},
-      async memorySearch() { return []; },
-    };
-
-    handle = startPipeline({ eventBus, logger, cliClient });
-
-    const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted');
-
-    const intakeEvent = makeIntakeEvent({ id: 'intake-mcp-001' });
-    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'mcp-corr-001'));
-
-    const workCompleted = await workCompletedPromise;
-    const wcPayload = workCompleted.payload as {
-      workItemId: string;
-      phaseCount: number;
-    };
-
-    assert.equal(wcPayload.workItemId, 'intake-mcp-001');
-    assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one phase');
-  });
-
-  it('pipeline with task-tool executor produces WorkCompleted with real artifacts', async () => {
-    const eventBus = createEventBus();
-    const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
-
-    const taskExecutor = createStubTaskExecutor();
-
-    handle = startPipeline({ eventBus, logger, taskExecutor });
-
-    const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted');
-    const phaseCompletedEvents = collectEvents(eventBus, 'PhaseCompleted', 1, 5000);
-
-    const intakeEvent = makeIntakeEvent({
-      id: 'intake-tt-001',
-      rawText: 'Fix auth bypass in session handler',
-      entities: {
-        repo: 'test-org/test-repo',
-        prNumber: 42,
-        files: ['src/auth.ts'],
-        labels: ['security'],
-        severity: 'high',
-      },
-    });
-    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'tt-corr-001'));
-
-    const workCompleted = await workCompletedPromise;
-    const wcPayload = workCompleted.payload as { workItemId: string; phaseCount: number };
-
-    assert.equal(wcPayload.workItemId, 'intake-tt-001');
-    assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one phase');
-
-    // Verify phase results have task-tool artifacts
-    const phaseEvents = await phaseCompletedEvents;
-    assert.ok(phaseEvents.length > 0, 'Should have at least one PhaseCompleted');
-
-    const phasePayload = phaseEvents[0].payload as { phaseResult: { artifacts: Array<{ url: string }> } };
-    assert.ok(
-      phasePayload.phaseResult.artifacts.some((a) => a.url.startsWith('task-tool://')),
-      'Artifacts should use task-tool:// URL scheme',
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Streaming executor E2E — Dorothy layer
-// ---------------------------------------------------------------------------
-
-describe('Pipeline E2E — Streaming Executor (Dorothy)', () => {
-  let handle: PipelineHandle | undefined;
-  let scriptPath: string | undefined;
-
-  afterEach(() => {
-    handle?.shutdown();
-    handle = undefined;
-    resetUrgencyRules();
-    if (scriptPath) {
-      try { fs.unlinkSync(scriptPath); } catch {}
-      scriptPath = undefined;
-    }
-  });
-
-  it('streaming executor emits AgentSpawned, AgentChunk, AgentCompleted through full pipeline', async () => {
-    const eventBus = createEventBus();
-    const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
-
-    // Create a temp script that outputs valid JSON (simulates Claude CLI)
-    scriptPath = path.join(os.tmpdir(), `e2e-claude-${Date.now()}.js`);
-    fs.writeFileSync(scriptPath, `
-      process.stdout.write(JSON.stringify({
-        phaseType: 'refinement',
-        agentRole: 'implementer',
-        summary: 'Streaming E2E test output',
-        artifacts: [{ type: 'analysis', content: 'streaming test' }],
-        issues: [],
-        status: 'completed',
-      }));
-    `);
-
-    const agentTracker = createAgentTracker();
-    const cancellationController = createCancellationController();
-    const taskExecutor = createStreamingTaskExecutor({
-      eventBus,
-      agentTracker,
-      cancellationController,
-      cliBin: 'node',
-      cliArgs: [scriptPath],
-      defaultTimeout: 10_000,
-    });
-
-    handle = startPipeline({ eventBus, logger, taskExecutor, agentTracker, cancellationController });
-
-    // Collect Dorothy-layer events
-    const spawnedEvents: unknown[] = [];
-    const chunkEvents: unknown[] = [];
-    const completedEvents: unknown[] = [];
-    eventBus.subscribe('AgentSpawned', (evt) => spawnedEvents.push(evt));
-    eventBus.subscribe('AgentChunk', (evt) => chunkEvents.push(evt));
-    eventBus.subscribe('AgentCompleted', (evt) => completedEvents.push(evt));
-
-    // Wait for pipeline completion
-    const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted', 15_000);
-
-    const intakeEvent = makeIntakeEvent({
-      id: 'intake-streaming-001',
-      rawText: 'Streaming E2E test task',
-      entities: {
-        repo: 'test-org/test-repo',
-        prNumber: 99,
-        files: ['src/streaming.ts'],
-        labels: [],
-        severity: 'medium',
-      },
-    });
-
-    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'streaming-corr-001'));
-
-    const workCompleted = await workCompletedPromise;
-    const wcPayload = workCompleted.payload as { workItemId: string; phaseCount: number };
-
-    // Pipeline completed
-    assert.equal(wcPayload.workItemId, 'intake-streaming-001');
-    assert.ok(wcPayload.phaseCount > 0, 'Should have executed at least one phase');
-
-    // Dorothy events fired during execution
-    assert.ok(spawnedEvents.length > 0, 'Should have emitted at least one AgentSpawned event');
-    assert.ok(chunkEvents.length > 0, 'Should have emitted at least one AgentChunk (stdout data)');
-    assert.ok(completedEvents.length > 0, 'Should have emitted at least one AgentCompleted event');
-
-    // Agent tracker has per-agent state
-    const trackedAgents = agentTracker.getAgentsByPlan((workCompleted.payload as { planId: string }).planId);
-    assert.ok(trackedAgents.length > 0, 'AgentTracker should have tracked agents for this plan');
-    assert.ok(
-      trackedAgents.every(a => a.status === 'completed'),
-      'All tracked agents should be completed',
-    );
-    assert.ok(
-      trackedAgents.some(a => a.bytesReceived > 0),
-      'At least one agent should have received bytes',
-    );
-  });
-
-  it('streaming executor produces task-tool artifacts through pipeline', async () => {
-    const eventBus = createEventBus();
-    const logger = createLogger({ level: 'error' });
-    setUrgencyRules(TEST_URGENCY_RULES);
-
-    scriptPath = path.join(os.tmpdir(), `e2e-claude-artifacts-${Date.now()}.js`);
-    fs.writeFileSync(scriptPath, `
-      process.stdout.write(JSON.stringify({
-        phaseType: 'refinement',
-        agentRole: 'implementer',
-        summary: 'Artifact test',
-        artifacts: [{ type: 'code-patch', content: 'diff --git a/file.ts' }],
-        issues: [],
-        status: 'completed',
-      }));
-    `);
-
-    const agentTracker = createAgentTracker();
-    const cancellationController = createCancellationController();
-    const taskExecutor = createStreamingTaskExecutor({
-      eventBus,
-      agentTracker,
-      cancellationController,
-      cliBin: 'node',
-      cliArgs: [scriptPath],
-      defaultTimeout: 10_000,
-    });
-
-    handle = startPipeline({ eventBus, logger, taskExecutor, agentTracker, cancellationController });
-
-    const phaseCompletedPromise = collectEvents(eventBus, 'PhaseCompleted', 1, 15_000);
-
-    const intakeEvent = makeIntakeEvent({
-      id: 'intake-streaming-artifacts',
-      rawText: 'Streaming artifact test',
-      entities: { repo: 'test/repo', prNumber: 100, files: ['src/a.ts'], labels: [], severity: 'low' },
-    });
-
-    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }));
-
-    const phaseEvents = await phaseCompletedPromise;
-    assert.ok(phaseEvents.length > 0);
-
-    const phasePayload = phaseEvents[0].payload as {
-      phaseResult: { artifacts: Array<{ url: string; metadata: Record<string, unknown> }> };
-    };
-
-    assert.ok(
-      phasePayload.phaseResult.artifacts.some(a => a.url.startsWith('task-tool://')),
-      'Streaming executor should produce task-tool:// artifacts through the pipeline',
-    );
   });
 });

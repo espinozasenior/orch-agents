@@ -4,7 +4,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAgentTracker } from '../../src/execution/agent-tracker';
+import { createAgentTracker } from '../../src/execution/runtime/agent-tracker';
 
 // ---------------------------------------------------------------------------
 // Helpers

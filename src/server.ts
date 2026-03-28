@@ -11,12 +11,14 @@ import type { AppConfig } from './shared/config';
 import type { Logger } from './shared/logger';
 import type { EventBus } from './shared/event-bus';
 import { webhookRouter } from './webhook-gateway/webhook-router';
-import { setBotUsername } from './intake/github-normalizer';
+import { setBotUsername } from './intake/github-workflow-normalizer';
+import type { WorkflowConfig } from './integration/linear/workflow-parser';
 
 export interface ServerDependencies {
   config: AppConfig;
   logger: Logger;
   eventBus: EventBus;
+  workflowConfig?: WorkflowConfig;
 }
 
 /**
@@ -47,8 +49,8 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
     };
   });
 
-  // ── Webhook gateway routes (Phase 1) ──────────────────────
-  await server.register(webhookRouter, deps);
+  // ── Webhook gateway routes ──────────────────────────────────
+  await server.register(webhookRouter, { ...deps, workflowConfig: deps.workflowConfig });
 
   // ── Request logging hook ─────────────────────────────────────
   server.addHook('onRequest', async (request) => {

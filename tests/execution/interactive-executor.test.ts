@@ -14,7 +14,7 @@ import {
   type InteractiveTaskExecutor,
   type InteractiveExecutionRequest,
   type InteractiveExecutorDeps,
-} from '../../src/execution/interactive-executor';
+} from '../../src/execution/runtime/interactive-executor';
 import type { Logger, LogContext } from '../../src/shared/logger';
 
 // ---------------------------------------------------------------------------

@@ -8,10 +8,11 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
 import { createAgentRegistry } from '../../src/agent-registry/agent-registry';
+import { parseWorkflowMd } from '../../src/integration/linear/workflow-parser';
 
 const AGENTS_DIR = resolve(__dirname, '..', '..', '.claude', 'agents');
+const WORKFLOW_MD = resolve(__dirname, '..', '..', 'WORKFLOW.md');
 
 describe('AgentRegistry', () => {
   let registry: ReturnType<typeof createAgentRegistry>;
@@ -85,55 +86,33 @@ describe('AgentRegistry', () => {
   });
 });
 
-describe('AgentRegistry validates tech-lead-router agent types', () => {
-  it('all router TEAM_TEMPLATE agent types exist in registry', () => {
-    const registry = createAgentRegistry({ agentsDir: AGENTS_DIR });
+describe('AgentRegistry validates WORKFLOW.md template agent types', () => {
+  it('all WORKFLOW.md template agent types exist in registry', () => {
+    // WORKFLOW.md uses $LINEAR_TEAM_ID which must be set for parsing
+    const origTeamId = process.env.LINEAR_TEAM_ID;
+    process.env.LINEAR_TEAM_ID = process.env.LINEAR_TEAM_ID || 'test-team';
 
-    // Load team-templates.json and extract all agent type strings
-    const templatesPath = resolve(__dirname, '..', '..', 'config', 'team-templates.json');
-    const templates = JSON.parse(readFileSync(templatesPath, 'utf-8')) as Array<{
-      key: string;
-      agents: Array<{ type: string; role: string }>;
-    }>;
+    const registry = createAgentRegistry({ agentsDir: AGENTS_DIR });
+    let config;
+    try {
+      config = parseWorkflowMd(WORKFLOW_MD);
+    } finally {
+      if (origTeamId === undefined) delete process.env.LINEAR_TEAM_ID;
+      else process.env.LINEAR_TEAM_ID = origTeamId;
+    }
 
     const missing: string[] = [];
-    for (const template of templates) {
-      for (const agent of template.agents) {
-        if (!registry.has(agent.type)) {
-          missing.push(`${template.key}/${agent.role}: type "${agent.type}" not found in registry`);
+    for (const [templateName, agentTypes] of Object.entries(config.templates)) {
+      for (const agentType of agentTypes) {
+        if (!registry.has(agentType)) {
+          missing.push(`${templateName}: agent "${agentType}" not found in registry`);
         }
       }
     }
 
     assert.deepEqual(
       missing, [],
-      `All template agent types must exist in .claude/agents/: ${missing.join('; ')}`,
-    );
-  });
-
-  it('all phase agent references exist in registry', () => {
-    const registry = createAgentRegistry({ agentsDir: AGENTS_DIR });
-
-    const templatesPath = resolve(__dirname, '..', '..', 'config', 'team-templates.json');
-    const templates = JSON.parse(readFileSync(templatesPath, 'utf-8')) as Array<{
-      key: string;
-      phases: Array<{ type: string; agents: string[] }>;
-    }>;
-
-    const missing: string[] = [];
-    for (const template of templates) {
-      for (const phase of template.phases) {
-        for (const agentType of phase.agents) {
-          if (!registry.has(agentType)) {
-            missing.push(`${template.key}/${phase.type}: agent "${agentType}" not found`);
-          }
-        }
-      }
-    }
-
-    assert.deepEqual(
-      missing, [],
-      `All phase agent refs must exist in .claude/agents/: ${missing.join('; ')}`,
+      `All WORKFLOW.md template agent types must exist in .claude/agents/: ${missing.join('; ')}`,
     );
   });
 });

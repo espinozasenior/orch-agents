@@ -13,7 +13,7 @@ import {
   type ArtifactApplier,
   type ArtifactApplierDeps,
   createArtifactApplier,
-} from '../../src/execution/artifact-applier';
+} from '../../src/execution/workspace/artifact-applier';
 
 // ---------------------------------------------------------------------------
 // Helpers

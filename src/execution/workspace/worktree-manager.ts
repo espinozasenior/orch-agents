@@ -8,9 +8,9 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { resolve as pathResolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { WorktreeHandle } from '../types';
-import type { Logger } from '../shared/logger';
-import { ValidationError, ExecutionError } from '../shared/errors';
+import type { WorktreeHandle } from '../../types';
+import type { Logger } from '../../shared/logger';
+import { ValidationError, ExecutionError } from '../../shared/errors';
 
 const execFile = promisify(execFileCb);
 

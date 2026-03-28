@@ -187,8 +187,10 @@ describe('GitHub API Integration', { skip: !GITHUB_TOKEN ? SKIP_REASON : false }
   describe('Normalizer End-to-End', () => {
     it('can build a realistic IntakeEvent from live GitHub data', async () => {
       // Dynamically import the normalizer
-      const { normalizeGitHubEvent } = await import('../../src/intake/github-normalizer');
+      const { normalizeGitHubEventFromWorkflow } = await import('../../src/intake/github-workflow-normalizer');
+      const { parseWorkflowMdString } = await import('../../src/integration/linear/workflow-parser');
       const { parseGitHubEvent } = await import('../../src/webhook-gateway/event-parser');
+      const workflowConfig = parseWorkflowMdString('---\ntemplates:\n  quick-fix:\n    - coder\n  cicd-pipeline:\n    - coder\ngithub:\n  events:\n    push.default_branch: cicd-pipeline\n    push.other: quick-fix\ntracker:\n  kind: linear\n  team: test\nagents:\n  routing:\n    default: quick-fix\npolling:\n  interval_ms: 30000\n  enabled: false\nstall:\n  timeout_ms: 300000\n---\nPrompt');
 
       // Fetch a real repo
       const { data: repos } = await githubApi('/user/repos?per_page=1&sort=pushed', token);
@@ -238,7 +240,7 @@ describe('GitHub API Integration', { skip: !GITHUB_TOKEN ? SKIP_REASON : false }
       assert.equal(parsed.repoFullName, repo.full_name);
 
       // Normalize it
-      const intakeEvent = normalizeGitHubEvent(parsed);
+      const intakeEvent = normalizeGitHubEventFromWorkflow(parsed, workflowConfig);
       assert.ok(intakeEvent, 'Should produce an IntakeEvent (not null)');
       assert.equal(intakeEvent!.intent, 'validate-main');
       assert.equal(intakeEvent!.source, 'github');

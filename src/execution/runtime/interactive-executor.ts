@@ -10,9 +10,9 @@
  */
 
 import { resolve as pathResolve } from 'node:path';
-import type { Logger } from '../shared/logger';
+import type { Logger } from '../../shared/logger';
 import type { TaskExecutionResult } from './task-executor';
-import { buildSafeEnv } from './cli-client';
+import { buildSafeEnv } from '../../shared/safe-env';
 
 // ---------------------------------------------------------------------------
 // Re-export for backward compatibility

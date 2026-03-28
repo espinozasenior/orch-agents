@@ -6,7 +6,7 @@
  * Queryable by planId for drill-down observability.
  */
 
-import type { SPARCPhase } from '../types';
+import type { SPARCPhase } from '../../types';
 
 // ---------------------------------------------------------------------------
 // Public types

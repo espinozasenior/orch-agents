@@ -11,8 +11,8 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { Logger } from '../shared/logger';
-import type { WorktreeHandle, ApplyContext, ApplyResult } from '../types';
+import type { Logger } from '../../shared/logger';
+import type { WorktreeHandle, ApplyContext, ApplyResult } from '../../types';
 
 const execFileAsync = promisify(execFileCb);
 
@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFileCb);
 // Re-export types for backward compatibility
 // ---------------------------------------------------------------------------
 
-export type { WorktreeHandle, ApplyContext, ApplyResult } from '../types';
+export type { WorktreeHandle, ApplyContext, ApplyResult } from '../../types';
 
 // ---------------------------------------------------------------------------
 // Public types

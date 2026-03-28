@@ -356,23 +356,7 @@ describe('multiSelect item isolation', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// C8: getDefaultTemplate must not crash with missing templates
-// ---------------------------------------------------------------------------
-
-describe('getDefaultTemplate safety', () => {
-  it('returns undefined instead of crashing when template key is missing', () => {
-    const { setTemplates, getDefaultTemplate, resetTemplates } = require('../../src/planning/template-library');
-    try {
-      // Set empty templates — no 'feature-build' key exists
-      setTemplates([]);
-      const result = getDefaultTemplate('sparc-full');
-      assert.equal(result, undefined);
-    } finally {
-      resetTemplates();
-    }
-  });
-});
+// C8: getDefaultTemplate test removed — template-library deleted in planning layer cleanup.
 
 // ---------------------------------------------------------------------------
 // T1: Happy-path wizard tests

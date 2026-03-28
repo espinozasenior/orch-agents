@@ -14,7 +14,7 @@ import {
   createAgentSandbox,
   getActiveSandboxes,
   type AgentSandbox,
-} from '../../src/execution/agent-sandbox';
+} from '../../src/execution/runtime/agent-sandbox';
 
 // ---------------------------------------------------------------------------
 // Step 1: agent-sandbox.ts tests

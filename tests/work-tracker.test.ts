@@ -11,8 +11,8 @@ import {
   createWorkTracker,
   type WorkTracker,
   type WorkItemState,
-} from '../src/execution/work-tracker';
-import { createAgentTracker } from '../src/execution/agent-tracker';
+} from '../src/execution/orchestrator/work-tracker';
+import { createAgentTracker } from '../src/execution/runtime/agent-tracker';
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -44,7 +44,7 @@ export type WorkIntent =
 export interface IntakeEvent {
   id: string;
   timestamp: string;
-  source: 'github' | 'client' | 'schedule' | 'system';
+  source: 'github' | 'linear' | 'client' | 'schedule' | 'system';
   sourceMetadata: Record<string, unknown>;
   intent: WorkIntent;
   entities: {
@@ -63,44 +63,39 @@ export interface IntakeEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Triage -> Planning
+// Triage (simplified — no SPARC phases or effort estimation)
 // ---------------------------------------------------------------------------
 
 export interface TriageResult {
   intakeEventId: string;
   priority: 'P0-immediate' | 'P1-high' | 'P2-standard' | 'P3-backlog';
-  complexity: { level: 'low' | 'medium' | 'high'; percentage: number };
-  impact: 'isolated' | 'module' | 'cross-cutting' | 'system-wide';
-  risk: 'low' | 'medium' | 'high' | 'critical';
-  recommendedPhases: SPARCPhase[];
-  requiresApproval: boolean;
   skipTriage: boolean;
-  estimatedEffort: 'trivial' | 'small' | 'medium' | 'large' | 'epic';
 }
 
 // ---------------------------------------------------------------------------
-// Planning -> Execution
+// Execution
 // ---------------------------------------------------------------------------
 
 export interface WorkflowPlan {
   id: string;
   workItemId: string;
-  methodology: 'sparc-full' | 'sparc-partial' | 'tdd' | 'adhoc' | 'testing';
   template: string;
-  topology:
-    | 'mesh'
-    | 'hierarchical'
-    | 'hierarchical-mesh'
-    | 'ring'
-    | 'star'
-    | 'adaptive';
-  swarmStrategy: 'specialized' | 'balanced' | 'minimal';
-  consensus: 'raft' | 'pbft' | 'none';
-  maxAgents: number;
-  phases: PlannedPhase[];
   agentTeam: PlannedAgent[];
-  estimatedDuration: number;
-  estimatedCost: number;
+  maxAgents?: number;
+  /** @deprecated Kept for backward compat with prompt-builder / fix-it-loop. */
+  methodology?: string;
+  /** @deprecated Kept for backward compat. */
+  topology?: string;
+  /** @deprecated Kept for backward compat. */
+  swarmStrategy?: string;
+  /** @deprecated Kept for backward compat. */
+  consensus?: string;
+  /** @deprecated Kept for backward compat. */
+  phases?: PlannedPhase[];
+  /** @deprecated Kept for backward compat. */
+  estimatedDuration?: number;
+  /** @deprecated Kept for backward compat. */
+  estimatedCost?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,22 +130,8 @@ export interface ReviewVerdict {
 }
 
 // ---------------------------------------------------------------------------
-// Planning sub-types
+// Agent types
 // ---------------------------------------------------------------------------
-
-export interface PlanningInput {
-  intakeEventId: string;
-  triageResult: TriageResult;
-  classification: {
-    domain: string;
-    complexity: { level: string; percentage: number };
-    scope: string;
-    risk: string;
-  };
-  templateKey: string;
-  agentTeam: PlannedAgent[];
-  ambiguity?: { score: number; needsClarification: boolean };
-}
 
 export interface PlannedPhase {
   type: SPARCPhase;

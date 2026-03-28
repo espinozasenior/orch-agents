@@ -10,20 +10,20 @@ import { createLogger } from './shared/logger';
 import { createEventBus } from './shared/event-bus';
 import { buildServer } from './server';
 import { startPipeline } from './pipeline';
-import { createCliClient } from './execution/cli-client';
-import { createClaudeTaskExecutor } from './execution/task-executor';
-import { createStreamingTaskExecutor } from './execution/streaming-executor';
-import { createAgentTracker } from './execution/agent-tracker';
-import { createCancellationController } from './execution/cancellation-controller';
-import { createWorktreeManager } from './execution/worktree-manager';
-import { createInteractiveExecutor } from './execution/interactive-executor';
-import { createArtifactApplier } from './execution/artifact-applier';
+import { createWorktreeManager } from './execution/workspace/worktree-manager';
+import { createInteractiveExecutor } from './execution/runtime/interactive-executor';
+import { createArtifactApplier } from './execution/workspace/artifact-applier';
 import { createReviewGate, createStubDiffReviewer, createCliTestRunner, createPatternSecurityScanner } from './review/review-gate';
+import { createClaudeDiffReviewer } from './review/claude-diff-reviewer';
 import { createGitHubClient } from './integration/github-client';
 import { createFixItLoop } from './execution/fix-it-loop';
 import type { FixExecutor, FixReviewer, FixCommitter, FixPromptBuilder } from './execution/fix-it-loop';
 import { buildFixPrompt } from './execution/prompt-builder';
 import { isAbsolute as pathIsAbsolute } from 'node:path';
+import { createSimpleExecutor, type SimpleExecutor } from './execution/simple-executor';
+import { getDefaultRegistry } from './agent-registry/agent-registry';
+import { parseWorkflowMd, type WorkflowConfig } from './integration/linear/workflow-parser';
+import { resolve as pathResolve } from 'node:path';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -36,58 +36,36 @@ async function main(): Promise<void> {
     logLevel: config.logLevel,
   });
 
-  // Wire the event-sourced processing pipeline:
-  // IntakeCompleted -> Triage -> Planning -> Execution -> Review
-  // Execution modes:
-  //   ENABLE_TASK_AGENTS=true → task-tool agents (real work via Claude prompts)
-  //   ENABLE_AGENTS=true      → CLI lifecycle agents (swarm/agent/task via claude-flow CLI)
-  //   neither                 → stub mode (pass-through, no real execution)
-  const useTaskAgents = process.env.ENABLE_TASK_AGENTS === 'true';
-  const useRealAgents = process.env.ENABLE_AGENTS === 'true';
-  const useStreamingExecutor = process.env.ENABLE_STREAMING_EXECUTOR === 'true';
-  // Task-tool mode takes priority; skip MCP client when task-tool is enabled
-  const cliClient = (useRealAgents && !useTaskAgents && !useStreamingExecutor) ? createCliClient() : undefined;
-
-  // Dorothy streaming layer: per-agent tracking and cancellation
-  let agentTracker: ReturnType<typeof createAgentTracker> | undefined;
-  let cancellationController: ReturnType<typeof createCancellationController> | undefined;
-  let taskExecutor: ReturnType<typeof createClaudeTaskExecutor> | ReturnType<typeof createStreamingTaskExecutor> | undefined;
-
-  if (useStreamingExecutor) {
-    agentTracker = createAgentTracker();
-    cancellationController = createCancellationController();
-    taskExecutor = createStreamingTaskExecutor({
-      eventBus,
-      agentTracker,
-      cancellationController,
-      logger,
+  // Load WORKFLOW.md — the single source of truth for templates and routing.
+  // Fail hard at startup if missing or invalid.
+  const workflowMdPath = process.env.WORKFLOW_MD_PATH
+    ?? pathResolve(process.cwd(), 'WORKFLOW.md');
+  let workflowConfig: WorkflowConfig;
+  try {
+    workflowConfig = parseWorkflowMd(workflowMdPath);
+    logger.info('Loaded WORKFLOW.md', {
+      path: workflowMdPath,
+      templates: Object.keys(workflowConfig.templates),
+      defaultTemplate: workflowConfig.agents.defaultTemplate,
     });
-    logger.info('Streaming task executor enabled (Dorothy layer)');
-  } else if (useTaskAgents) {
-    taskExecutor = createClaudeTaskExecutor();
-    logger.info('Task-tool agent execution enabled');
+  } catch (err) {
+    logger.fatal('Failed to load WORKFLOW.md — cannot start without it', {
+      path: workflowMdPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
   }
 
-  if ((useTaskAgents || useStreamingExecutor) && useRealAgents) {
-    logger.warn('ENABLE_AGENTS ignored — task executor takes priority');
-  } else if (useRealAgents) {
-    logger.info('Real agent execution enabled (CLI lifecycle)');
-  }
-
-  // Phase 5: interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
+  // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
   const useInteractiveAgents = process.env.ENABLE_INTERACTIVE_AGENTS === 'true';
 
-  let interactiveExecutor: ReturnType<typeof createInteractiveExecutor> | undefined;
-  let worktreeManager: ReturnType<typeof createWorktreeManager> | undefined;
-  let artifactApplier: ReturnType<typeof createArtifactApplier> | undefined;
+  let simpleExecutor: SimpleExecutor | undefined;
   let reviewGate: ReturnType<typeof createReviewGate> | undefined;
-  let githubClient: ReturnType<typeof createGitHubClient> | undefined;
-  let fixItLoop: ReturnType<typeof createFixItLoop> | undefined;
 
   if (useInteractiveAgents) {
     const execLogger = logger.child ? logger.child({ module: 'interactive' }) : logger;
 
-    // M4: Validate WORKTREE_BASE_PATH is absolute on the raw value before resolution
+    // Validate WORKTREE_BASE_PATH is absolute
     const worktreeBasePath = process.env.WORKTREE_BASE_PATH ?? '/tmp/orch-agents';
     if (!pathIsAbsolute(worktreeBasePath)) {
       throw new Error(`WORKTREE_BASE_PATH must be an absolute path, got: ${worktreeBasePath}`);
@@ -96,12 +74,20 @@ async function main(): Promise<void> {
     const parsedAttempts = parseInt(process.env.MAX_FIX_ATTEMPTS ?? '3', 10);
     const maxFixAttempts = (isNaN(parsedAttempts) || parsedAttempts < 1 || parsedAttempts > 10) ? 3 : parsedAttempts;
 
-    worktreeManager = createWorktreeManager({ logger: execLogger, basePath: worktreeBasePath });
-    interactiveExecutor = createInteractiveExecutor({ logger: execLogger });
-    artifactApplier = createArtifactApplier({ logger: execLogger });
+    const worktreeManager = createWorktreeManager({ logger: execLogger, basePath: worktreeBasePath });
+    const interactiveExecutor = createInteractiveExecutor({ logger: execLogger });
+    const artifactApplier = createArtifactApplier({ logger: execLogger });
+
+    const diffReviewer = config.enableClaudeDiffReview
+      ? createClaudeDiffReviewer({ logger: execLogger })
+      : createStubDiffReviewer();
+
+    logger.info('DiffReviewer mode', {
+      mode: config.enableClaudeDiffReview ? 'claude' : 'stub',
+    });
 
     reviewGate = createReviewGate({
-      diffReviewer: createStubDiffReviewer(),
+      diffReviewer,
       testRunner: createCliTestRunner({ logger: execLogger }),
       securityScanner: createPatternSecurityScanner({ logger: execLogger }),
       logger: execLogger,
@@ -110,7 +96,7 @@ async function main(): Promise<void> {
     // Adapt existing components to FixItLoop dependency interfaces
     const fixExecutor: FixExecutor = {
       async executeFix(worktreePath, prompt, timeout) {
-        return interactiveExecutor!.execute({
+        return interactiveExecutor.execute({
           prompt, worktreePath, agentRole: 'fixer', agentType: 'coder',
           tier: 3, phaseType: 'refinement', timeout, metadata: {},
         });
@@ -132,8 +118,6 @@ async function main(): Promise<void> {
 
     const fixCommitter: FixCommitter = {
       async commit(worktreePath, message) {
-        // C4+C5: Route through worktreeManager to get basePath validation and consistent git operations.
-        // Build a handle from the worktreePath for the worktreeManager API.
         const handle = {
           planId: worktreePath.split('/').pop() ?? 'unknown',
           path: worktreePath,
@@ -141,7 +125,7 @@ async function main(): Promise<void> {
           baseBranch: 'main',
           status: 'active' as const,
         };
-        return worktreeManager!.commit(handle, message);
+        return worktreeManager.commit(handle, message);
       },
       async diff(worktreePath) {
         const handle = {
@@ -151,7 +135,7 @@ async function main(): Promise<void> {
           baseBranch: 'main',
           status: 'active' as const,
         };
-        return worktreeManager!.diff(handle);
+        return worktreeManager.diff(handle);
       },
     };
 
@@ -159,34 +143,59 @@ async function main(): Promise<void> {
       build(findings, feedback, attempt, attemptMax) {
         return buildFixPrompt(
           { id: 'fix', timestamp: new Date().toISOString(), source: 'system', sourceMetadata: {}, intent: 'review-pr', entities: {} },
-          { id: 'fix-plan', workItemId: 'fix', methodology: 'adhoc', template: 'fix', topology: 'star', swarmStrategy: 'minimal', consensus: 'none', maxAgents: 1, phases: [], agentTeam: [], estimatedDuration: 0, estimatedCost: 0 },
+          { id: 'fix-plan', workItemId: 'fix', template: 'fix', agentTeam: [] },
           { worktreePath: '', findings, feedback, attempt, maxAttempts: attemptMax },
         );
       },
     };
 
-    fixItLoop = createFixItLoop({
+    const fixItLoop = createFixItLoop({
       fixExecutor, fixReviewer, fixCommitter, fixPromptBuilder, logger: execLogger,
     });
 
+    let githubClient: ReturnType<typeof createGitHubClient> | undefined;
     if (process.env.GITHUB_TOKEN) {
       githubClient = createGitHubClient({ logger: execLogger, token: process.env.GITHUB_TOKEN });
     }
+
+    // Wire SimpleExecutor
+    simpleExecutor = createSimpleExecutor({
+      interactiveExecutor,
+      worktreeManager,
+      artifactApplier,
+      reviewGate,
+      fixItLoop,
+      agentRegistry: getDefaultRegistry(),
+      githubClient,
+      logger: execLogger,
+      eventBus,
+      maxFixAttempts,
+    });
 
     logger.info('Interactive agent execution enabled', {
       worktreeBasePath,
       maxFixAttempts,
       hasGitHubToken: !!process.env.GITHUB_TOKEN,
+      simpleExecutor: true,
     });
   }
 
+  if (!simpleExecutor) {
+    // Provide a no-op executor for stub mode (no real execution)
+    simpleExecutor = {
+      async execute(plan) {
+        logger.info('Stub executor: no real execution', { planId: plan.id });
+        return { status: 'completed', agentResults: [], totalDuration: 0 };
+      },
+    };
+    logger.info('Running in stub mode (ENABLE_INTERACTIVE_AGENTS not set)');
+  }
+
   const pipeline = startPipeline({
-    eventBus, logger, cliClient, taskExecutor,
-    interactiveExecutor, worktreeManager, artifactApplier, fixItLoop, reviewGate, githubClient,
-    agentTracker, cancellationController,
+    eventBus, logger, reviewGate, simpleExecutor, workflowConfig,
   });
 
-  const server = await buildServer({ config, logger, eventBus });
+  const server = await buildServer({ config, logger, eventBus, workflowConfig });
 
   try {
     const host = process.env.BIND_HOST ?? '0.0.0.0';
