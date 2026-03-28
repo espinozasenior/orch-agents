@@ -26,12 +26,12 @@ import type { WorkflowConfig } from '../../src/integration/linear/workflow-parse
 function makeWorkflowConfig(): WorkflowConfig {
   return {
     templates: {
-      'github-ops': ['reviewer'],
-      'tdd-workflow': ['coder', 'tester'],
-      'quick-fix': ['coder'],
-      'cicd-pipeline': ['coder'],
-      'feature-build': ['architect', 'coder', 'reviewer'],
-      'security-audit': ['security-architect'],
+      'github-ops': ['.claude/agents/core/reviewer.md'],
+      'tdd-workflow': ['.claude/agents/core/coder.md', '.claude/agents/core/tester.md'],
+      'quick-fix': ['.claude/agents/core/coder.md'],
+      'cicd-pipeline': ['.claude/agents/core/coder.md'],
+      'feature-build': ['.claude/agents/core/architect.md', '.claude/agents/core/coder.md', '.claude/agents/core/reviewer.md'],
+      'security-audit': ['.claude/agents/v3/security-architect.md'],
     },
     tracker: { kind: 'linear', apiKey: '', team: 'test', activeStates: ['Todo'], terminalStates: ['Done'] },
     agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },

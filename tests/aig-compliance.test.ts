@@ -49,8 +49,8 @@ function computeLinearSignature(payload: string, secret: string): string {
 function makeTestWorkflowConfig(): WorkflowConfig {
   return {
     templates: {
-      'github-ops': ['reviewer'],
-      'quick-fix': ['coder'],
+      'github-ops': ['.claude/agents/core/reviewer.md'],
+      'quick-fix': ['.claude/agents/core/coder.md'],
     },
     github: {
       events: {

@@ -61,7 +61,7 @@ function makePlan(overrides: Partial<WorkflowPlan> = {}): WorkflowPlan {
     maxAgents: 1,
     phases: [],
     agentTeam: [
-      { role: 'implementer', type: 'coder', tier: 2, required: true },
+      { role: 'coder', type: '.claude/agents/core/coder.md', tier: 2, required: true },
     ],
     estimatedDuration: 60_000,
     estimatedCost: 0.01,
@@ -192,7 +192,8 @@ function createMocks(): Mocks {
   const agentRegistry: AgentRegistry = {
     getAll: () => [],
     getNames: () => [],
-    getByName: mock.fn(() => ({
+    getByName: mock.fn(() => undefined),
+    getByPath: mock.fn(() => ({
       name: 'coder',
       type: 'developer',
       description: 'A coding agent',
@@ -201,6 +202,7 @@ function createMocks(): Mocks {
       category: 'core',
       filePath: '/agents/coder.md',
       version: '1.0.0',
+      body: 'You are a coding agent.',
     })),
     getByCategory: () => [],
     has: () => true,
@@ -266,8 +268,8 @@ describe('SimpleExecutor', () => {
     assert.equal(result.status, 'completed');
     assert.equal(result.agentResults.length, 1);
     assert.equal(result.agentResults[0].status, 'completed');
-    assert.equal(result.agentResults[0].agentRole, 'implementer');
-    assert.equal(result.agentResults[0].agentType, 'coder');
+    assert.equal(result.agentResults[0].agentRole, 'coder');
+    assert.equal(result.agentResults[0].agentType, '.claude/agents/core/coder.md');
     assert.equal(result.agentResults[0].commitSha, 'abc1234');
     assert.ok(result.totalDuration >= 0);
   });
@@ -302,8 +304,8 @@ describe('SimpleExecutor', () => {
     executor = buildExecutor();
     const plan = makePlan({
       agentTeam: [
-        { role: 'implementer', type: 'coder', tier: 2, required: true },
-        { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
+        { role: 'coder', type: '.claude/agents/core/coder.md', tier: 2, required: true },
+        { role: 'reviewer', type: '.claude/agents/core/reviewer.md', tier: 2, required: true },
       ],
     });
     const intake = makeIntakeEvent();
@@ -315,6 +317,64 @@ describe('SimpleExecutor', () => {
     assert.equal(result.agentResults[0].status, 'completed');
     assert.equal(result.agentResults[1].status, 'completed');
     assert.equal((mocks.worktreeManager.create as ReturnType<typeof mock.fn>).mock.callCount(), 2);
+  });
+
+  // -----------------------------------------------------------------------
+  // 3b. Sequential agents chain — second agent branches from first's commit
+  // -----------------------------------------------------------------------
+
+  it('should chain sequential agents: second worktree bases on first commit SHA', async () => {
+    (mocks.artifactApplier.apply as ReturnType<typeof mock.fn>).mock.mockImplementation(
+      async () => makeAppliedResult('first-agent-sha'),
+    );
+
+    executor = buildExecutor();
+    const plan = makePlan({
+      agentTeam: [
+        { role: 'coder', type: '.claude/agents/core/coder.md', tier: 2, required: true },
+        { role: 'reviewer', type: '.claude/agents/core/reviewer.md', tier: 2, required: true },
+      ],
+    });
+    const intake = makeIntakeEvent();
+
+    await executor.execute(plan, intake);
+
+    const createCalls = (mocks.worktreeManager.create as ReturnType<typeof mock.fn>).mock.calls;
+    assert.equal(createCalls.length, 2);
+
+    // First agent: branches from the intake branch
+    assert.equal(createCalls[0].arguments[1], 'feature-branch');
+
+    // Second agent: branches from first agent's commit SHA
+    assert.equal(createCalls[1].arguments[1], 'first-agent-sha');
+  });
+
+  it('should keep base branch when previous agent has no commit', async () => {
+    let callCount = 0;
+    (mocks.artifactApplier.apply as ReturnType<typeof mock.fn>).mock.mockImplementation(
+      async () => {
+        callCount++;
+        // First agent: no changes (no commitSha)
+        if (callCount === 1) return { status: 'applied' as const, changedFiles: [], commitSha: undefined };
+        return makeAppliedResult('second-sha');
+      },
+    );
+
+    executor = buildExecutor();
+    const plan = makePlan({
+      agentTeam: [
+        { role: 'coder', type: '.claude/agents/core/coder.md', tier: 2, required: true },
+        { role: 'reviewer', type: '.claude/agents/core/reviewer.md', tier: 2, required: true },
+      ],
+    });
+    const intake = makeIntakeEvent();
+
+    await executor.execute(plan, intake);
+
+    const createCalls = (mocks.worktreeManager.create as ReturnType<typeof mock.fn>).mock.calls;
+    // Both should use the original branch since first agent had no commit
+    assert.equal(createCalls[0].arguments[1], 'feature-branch');
+    assert.equal(createCalls[1].arguments[1], 'feature-branch');
   });
 
   // -----------------------------------------------------------------------
@@ -333,8 +393,8 @@ describe('SimpleExecutor', () => {
     executor = buildExecutor();
     const plan = makePlan({
       agentTeam: [
-        { role: 'implementer', type: 'coder', tier: 2, required: true },
-        { role: 'reviewer', type: 'reviewer', tier: 2, required: true },
+        { role: 'coder', type: '.claude/agents/core/coder.md', tier: 2, required: true },
+        { role: 'reviewer', type: '.claude/agents/core/reviewer.md', tier: 2, required: true },
       ],
     });
     const intake = makeIntakeEvent();
@@ -453,7 +513,7 @@ describe('SimpleExecutor', () => {
     const callArgs = (mocks.githubClient.postPRComment as ReturnType<typeof mock.fn>).mock.calls[0].arguments;
     assert.equal(callArgs[0], 'owner/repo');
     assert.equal(callArgs[1], 42);
-    assert.ok((callArgs[2] as string).includes('coder'));
+    assert.ok((callArgs[2] as string).includes('coder.md'));
   });
 
   it('should not post PR comment when no prNumber', async () => {
@@ -500,7 +560,7 @@ describe('SimpleExecutor', () => {
   // -----------------------------------------------------------------------
 
   it('should still run agent with empty instructions when not in registry', async () => {
-    (mocks.agentRegistry.getByName as ReturnType<typeof mock.fn>).mock.mockImplementation(
+    (mocks.agentRegistry.getByPath as ReturnType<typeof mock.fn>).mock.mockImplementation(
       () => undefined,
     );
 
@@ -629,15 +689,15 @@ describe('SimpleExecutor', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildAgentPrompt', () => {
-  const agent: PlannedAgent = { role: 'implementer', type: 'coder', tier: 2, required: true };
+  const agent: PlannedAgent = { role: 'coder', type: '.claude/agents/core/coder.md', tier: 2, required: true };
 
   it('should include agent role and type', () => {
     const plan = makePlan();
     const intake = makeIntakeEvent();
     const prompt = buildAgentPrompt('', intake, agent, plan);
 
-    assert.ok(prompt.includes('coder'));
-    assert.ok(prompt.includes('implementer'));
+    assert.ok(prompt.includes('.claude/agents/core/coder.md'));
+    assert.ok(prompt.includes('role: coder'));
   });
 
   it('should include agent instructions when provided', () => {

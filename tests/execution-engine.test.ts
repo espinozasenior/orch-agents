@@ -39,9 +39,9 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
 function makeWorkflowConfig(): WorkflowConfig {
   return {
     templates: {
-      'github-ops': ['reviewer'],
-      'tdd-workflow': ['coder', 'tester'],
-      'quick-fix': ['coder'],
+      'github-ops': ['.claude/agents/core/reviewer.md'],
+      'tdd-workflow': ['.claude/agents/core/coder.md', '.claude/agents/core/tester.md'],
+      'quick-fix': ['.claude/agents/core/coder.md'],
     },
     tracker: { kind: 'linear', apiKey: '', team: 'test', activeStates: ['Todo'], terminalStates: ['Done'] },
     agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },
@@ -146,7 +146,7 @@ describe('Execution Engine', () => {
 
       await new Promise((r) => setTimeout(r, 100));
 
-      assert.deepEqual(executedAgents, ['coder', 'tester']);
+      assert.deepEqual(executedAgents, ['.claude/agents/core/coder.md', '.claude/agents/core/tester.md']);
 
       unsub();
       eventBus.removeAllListeners();
@@ -178,8 +178,8 @@ describe('Execution Engine', () => {
 
       await new Promise((r) => setTimeout(r, 100));
 
-      // Falls back to default 'quick-fix' -> ['coder']
-      assert.deepEqual(executedAgents, ['coder']);
+      // Falls back to default 'quick-fix' -> ['.claude/agents/core/coder.md']
+      assert.deepEqual(executedAgents, ['.claude/agents/core/coder.md']);
 
       unsub();
       eventBus.removeAllListeners();

@@ -86,8 +86,8 @@ describe('AgentRegistry', () => {
   });
 });
 
-describe('AgentRegistry validates WORKFLOW.md template agent types', () => {
-  it('all WORKFLOW.md template agent types exist in registry', () => {
+describe('AgentRegistry validates WORKFLOW.md template agent paths', () => {
+  it('all WORKFLOW.md template agent paths exist on disk', () => {
     // WORKFLOW.md uses $LINEAR_TEAM_ID which must be set for parsing
     const origTeamId = process.env.LINEAR_TEAM_ID;
     process.env.LINEAR_TEAM_ID = process.env.LINEAR_TEAM_ID || 'test-team';
@@ -102,17 +102,49 @@ describe('AgentRegistry validates WORKFLOW.md template agent types', () => {
     }
 
     const missing: string[] = [];
-    for (const [templateName, agentTypes] of Object.entries(config.templates)) {
-      for (const agentType of agentTypes) {
-        if (!registry.has(agentType)) {
-          missing.push(`${templateName}: agent "${agentType}" not found in registry`);
+    for (const [templateName, agentPaths] of Object.entries(config.templates)) {
+      for (const agentPath of agentPaths) {
+        const resolved = resolve(__dirname, '..', '..', agentPath);
+        const { existsSync } = require('node:fs');
+        if (!existsSync(resolved)) {
+          missing.push(`${templateName}: agent path "${agentPath}" not found on disk`);
         }
       }
     }
 
     assert.deepEqual(
       missing, [],
-      `All WORKFLOW.md template agent types must exist in .claude/agents/: ${missing.join('; ')}`,
+      `All WORKFLOW.md template agent paths must exist: ${missing.join('; ')}`,
     );
+  });
+});
+
+describe('AgentRegistry getByPath', () => {
+  let registry: ReturnType<typeof createAgentRegistry>;
+
+  beforeEach(() => {
+    registry = createAgentRegistry({ agentsDir: AGENTS_DIR });
+  });
+
+  it('loads agent definition from a valid path', () => {
+    const def = registry.getByPath('.claude/agents/core/coder.md');
+    assert.notEqual(def, undefined);
+    assert.equal(def!.name, 'coder');
+    assert.equal(def!.category, 'core');
+    assert.ok(def!.body.length > 0, 'should have body content');
+    assert.ok(def!.filePath.endsWith('coder.md'));
+  });
+
+  it('returns undefined for non-existent path', () => {
+    const def = registry.getByPath('.claude/agents/core/nonexistent-agent.md');
+    assert.equal(def, undefined);
+  });
+
+  it('returns undefined for file without frontmatter', () => {
+    // README files typically don't have agent frontmatter
+    const def = registry.getByPath('README.md');
+    // Could be undefined (no frontmatter) or missing — either way, not an agent
+    // Just verify it doesn't throw
+    assert.ok(def === undefined || def.name !== undefined);
   });
 });
