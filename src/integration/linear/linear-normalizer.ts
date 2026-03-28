@@ -248,7 +248,8 @@ function buildIntent(
   const labelsChanged = fields.labelIds !== undefined;
   const assigneeChanged = fields.assigneeId !== undefined;
   const priorityChanged = fields.priority !== undefined;
-  const stateChanged = fields.state !== undefined;
+  // Linear sends "stateId" (not "state") in updatedFrom — check both for compat
+  const stateChanged = fields.state !== undefined || fields.stateId !== undefined;
 
   // Label-based intents
   if (labelsChanged && issue.labels) {
@@ -271,7 +272,7 @@ function buildIntent(
     return 'custom:linear-assigned';
   }
 
-  // State-based intents — prefer type over name
+  // State-based intents — match by type, resilient to display name changes
   if (stateChanged && issue.state) {
     const stateType = issue.state.type?.toLowerCase();
     if (stateType) {
@@ -279,11 +280,8 @@ function buildIntent(
       if (stateType === 'started') return 'custom:linear-start';
       return `custom:linear-${stateType}`;
     }
-    // Fallback to name when type is unavailable
-    const stateName = issue.state.name.toLowerCase();
-    if (stateName === 'todo') return 'custom:linear-todo';
-    if (stateName === 'in progress') return 'custom:linear-start';
-    return `custom:linear-${stateName.replace(/\s+/g, '-')}`;
+    // Fallback: type unavailable — derive intent from name as last resort
+    return `custom:linear-${issue.state.name.toLowerCase().replace(/\s+/g, '-')}`;
   }
 
   return `custom:linear-${template}`;

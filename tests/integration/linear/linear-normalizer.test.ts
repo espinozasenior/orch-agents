@@ -265,6 +265,57 @@ describe('LinearNormalizer', () => {
     assert.equal(result, null);
   });
 
+  // Resilience to state renames: "Todo" renamed to "Ready" still has type "unstarted"
+  it('should match by type when state is renamed (e.g. Todo -> Ready)', () => {
+    const payload = makeLinearPayload({}, {
+      state: { id: 'state-1', name: 'Ready', type: 'unstarted' },
+    });
+    const updatedFrom = { state: { id: 'old-state' } };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.intent, 'custom:linear-todo');
+  });
+
+  // Resilience: "In Progress" renamed to "Doing" still has type "started"
+  it('should match by type when In Progress is renamed to Doing', () => {
+    const payload = makeLinearPayload({}, {
+      state: { id: 'state-2', name: 'Doing', type: 'started' },
+    });
+    const updatedFrom = { state: { id: 'old-state' } };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.intent, 'custom:linear-start');
+  });
+
+  // Resilience: "Done" renamed to "Shipped" still has type "completed" → terminal, skip
+  it('should reject renamed terminal state (Done -> Shipped, type completed)', () => {
+    const payload = makeLinearPayload({}, {
+      state: { id: 'state-x', name: 'Shipped', type: 'completed' },
+    });
+    const updatedFrom = { state: { id: 'old-state' } };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.equal(result, null);
+  });
+
+  // Polling reconciler sends stateId in updatedFrom, not state
+  it('should detect state change when updatedFrom uses stateId (polling compat)', () => {
+    const payload = makeLinearPayload({}, {
+      state: { id: 'state-2', name: 'Todo', type: 'unstarted' },
+    });
+    const updatedFrom = { stateId: 'old-state-id' };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.intent, 'custom:linear-todo');
+  });
+
   it('should return null when state changed to non-active, non-terminal state', () => {
     const payload = makeLinearPayload({}, {
       state: { id: 'state-x', name: 'Backlog', type: 'backlog' },
