@@ -59,6 +59,7 @@ agents:
     feature: feature-build
     security: security-audit
     refactor: sparc-full
+    review: github-ops
     default: quick-fix
 
 polling:

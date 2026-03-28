@@ -453,7 +453,7 @@ describe('SimpleExecutor', () => {
     const callArgs = (mocks.githubClient.postPRComment as ReturnType<typeof mock.fn>).mock.calls[0].arguments;
     assert.equal(callArgs[0], 'owner/repo');
     assert.equal(callArgs[1], 42);
-    assert.ok((callArgs[2] as string).includes('implementer'));
+    assert.ok((callArgs[2] as string).includes('coder'));
   });
 
   it('should not post PR comment when no prNumber', async () => {

@@ -12,7 +12,7 @@ const BOT_MARKER = `<!-- ${BOT_NAME}-bot -->`;
  * Wrap a comment body with the agent identity badge and bot marker.
  */
 export function formatAgentComment(body: string): string {
-  return `${body}\n\n---\n*${BOT_NAME}* | [Agent Interaction Guidelines](https://linear.app/docs/agent-interaction-guidelines)\n${BOT_MARKER}`;
+  return `${body}\n${BOT_MARKER}`;
 }
 
 /**

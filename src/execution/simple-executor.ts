@@ -181,12 +181,32 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             findings = fixResult.finalVerdict.findings;
           }
 
-          // 7. Post PR comment if applicable (AIG: use formatAgentComment for identity badge)
+          // 7. Post PR/issue comment with work summary
           if (deps.githubClient && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
+            const changedFiles = applyResult.changedFiles ?? [];
+            const duration = Math.round((Date.now() - agentStart) / 1000);
+            const findingLines = findings.length > 0
+              ? `\n\n**Findings (${findings.length}):**\n${findings.map(f => `- [${f.severity}] ${f.message}`).join('\n')}`
+              : '';
+            const fileLines = changedFiles.length > 0
+              ? `\n\n**Files (${changedFiles.length}):**\n${changedFiles.slice(0, 10).map(f => `- \`${f}\``).join('\n')}${changedFiles.length > 10 ? `\n- ... and ${changedFiles.length - 10} more` : ''}`
+              : '';
+            const outputPreview = execResult.output
+              ? `\n\n**Output:**\n${execResult.output.slice(0, 500)}${execResult.output.length > 500 ? '...' : ''}`
+              : '';
+
+            const summary = [
+              `**${agent.type}** completed in ${duration}s`,
+              applyResult.commitSha ? `Commit: \`${applyResult.commitSha.slice(0, 7)}\`` : '',
+              fileLines,
+              outputPreview,
+              findingLines,
+            ].filter(Boolean).join('\n');
+
             await deps.githubClient.postPRComment(
               intakeEvent.entities.repo,
               intakeEvent.entities.prNumber,
-              formatAgentComment(`Agent **${agent.role}** (${agent.type}) completed.`),
+              formatAgentComment(summary),
             ).catch((err: unknown) => deps.logger.warn('Failed to post PR comment', {
               error: err instanceof Error ? err.message : String(err),
             }));

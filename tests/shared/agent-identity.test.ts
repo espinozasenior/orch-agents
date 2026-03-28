@@ -18,26 +18,15 @@ import {
 
 describe('agent-identity', () => {
   describe('formatAgentComment', () => {
-    it('appends bot name and marker to body', () => {
+    it('appends bot marker to body', () => {
       const body = 'Agent **coder** completed work.';
       const result = formatAgentComment(body);
 
       assert.ok(result.startsWith(body), 'Should start with the original body');
-      assert.ok(result.includes('---'), 'Should include a horizontal rule');
-      assert.ok(
-        result.includes('Agent Interaction Guidelines'),
-        'Should include AIG link',
-      );
       assert.ok(
         result.includes(getBotMarker()),
         'Should include the bot marker',
       );
-    });
-
-    it('includes the bot name in the footer', () => {
-      const result = formatAgentComment('Hello');
-      const botName = getBotName();
-      assert.ok(result.includes(botName), 'Should include the bot name');
     });
   });
 

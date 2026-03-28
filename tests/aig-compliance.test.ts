@@ -248,7 +248,7 @@ describe('AIG Compliance', () => {
     it('formatAgentComment includes bot marker in all comments', () => {
       const comment = formatAgentComment('Test comment');
       assert.ok(comment.includes(getBotMarker()), 'Comment should contain bot marker');
-      assert.ok(comment.includes('Agent Interaction Guidelines'), 'Should contain AIG link');
+      assert.ok(comment.includes(getBotMarker()), 'Should contain bot marker');
     });
   });
 
