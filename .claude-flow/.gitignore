@@ -3,5 +3,8 @@ data/
 logs/
 sessions/
 neural/
+daemon-state.json
+metrics/
+security/
 *.log
 *.tmp

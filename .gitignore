@@ -20,7 +20,7 @@ Thumbs.db
 *.swo
 
 # Runtime state
-.swarm/state.json
+.swarm/
 vectors.db
 
 # Logs
