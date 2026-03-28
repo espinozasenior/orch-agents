@@ -60,7 +60,7 @@ async function main(): Promise<void> {
 
   // GitHub App authentication — prefer over PAT for bot identity
   let tokenProvider: GitHubTokenProvider | undefined;
-  let effectiveGithubToken: string | undefined = config.githubToken || undefined;
+  const effectiveGithubToken: string | undefined = config.githubToken || undefined;
 
   if ((config.githubAppId || config.githubAppPrivateKeyPath || config.githubAppInstallationId)
       && !(config.githubAppId && config.githubAppPrivateKeyPath && config.githubAppInstallationId)) {
