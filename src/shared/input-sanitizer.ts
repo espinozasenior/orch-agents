@@ -25,7 +25,10 @@ export function stripHtmlComments(text: string): string {
  * Targets: U+200B, U+200C, U+200D, U+FEFF, U+2060, U+200E, U+200F, U+202A-U+202E.
  */
 export function removeInvisibleChars(text: string): string {
-  return text.replace(/[\u200B\u200C\u200D\uFEFF\u2060\u200E\u200F\u202A-\u202E]/g, '');
+  return text.replace(
+    /\u200B|\u200C|\u200D|\uFEFF|\u2060|\u200E|\u200F|\u202A|\u202B|\u202C|\u202D|\u202E/g,
+    '',
+  );
 }
 
 /**
