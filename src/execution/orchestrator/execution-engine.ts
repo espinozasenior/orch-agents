@@ -111,9 +111,15 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       correlationId,
     });
 
-    // Guard against duplicate processing
-    if (tracker.getState(planId)) {
-      logger.warn('Duplicate execution ignored', { planId });
+    // Guard against duplicate processing — check by workItemId, not planId
+    // (planId is a fresh UUID every time, so checking it would never match)
+    const activeItems = tracker.listActive();
+    const alreadyRunning = activeItems.some(item => item.workItemId === intakeEvent.id);
+    if (alreadyRunning) {
+      logger.warn('Duplicate execution ignored — work item already running', {
+        workItemId: intakeEvent.id,
+        planId,
+      });
       return;
     }
 

@@ -42,6 +42,33 @@ export async function linearWebhookHandler(
   const { config, logger, eventBus } = deps;
   const buffer = deps.eventBuffer ?? createEventBuffer();
 
+  // Capture raw body for HMAC signature verification.
+  // Only register if the GitHub webhook router hasn't already registered
+  // its own JSON parser on this Fastify instance.
+  if (!fastify.hasContentTypeParser('application/json')) {
+    fastify.addContentTypeParser(
+      'application/json',
+      { parseAs: 'string' },
+      (req, body, done) => {
+        try {
+          const raw = body as string;
+          (req as unknown as Record<string, unknown>).__rawBody = raw;
+          const parsed = JSON.parse(raw);
+          done(null, parsed);
+        } catch (err) {
+          done(err as Error, undefined);
+        }
+      },
+    );
+
+    fastify.addHook('preHandler', async (request) => {
+      const raw = (request.raw as unknown as Record<string, unknown>).__rawBody;
+      if (typeof raw === 'string') {
+        request.rawBodyString = raw;
+      }
+    });
+  }
+
   fastify.post(
     '/webhooks/linear',
     async (request: FastifyRequest, reply: FastifyReply) => {
