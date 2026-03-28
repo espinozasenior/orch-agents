@@ -579,14 +579,14 @@ describe('SimpleExecutor', () => {
   // 11. Empty agent team
   // -----------------------------------------------------------------------
 
-  it('should return completed with 0 results for empty agent team', async () => {
+  it('should return failed with 0 results for empty agent team', async () => {
     executor = buildExecutor();
     const plan = makePlan({ agentTeam: [] });
     const intake = makeIntakeEvent();
 
     const result = await executor.execute(plan, intake);
 
-    assert.equal(result.status, 'completed');
+    assert.equal(result.status, 'failed');
     assert.equal(result.agentResults.length, 0);
     assert.ok(result.totalDuration >= 0);
   });

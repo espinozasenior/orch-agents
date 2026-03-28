@@ -24,6 +24,7 @@ import type { Logger } from '../shared/logger';
 import type { EventBus } from '../shared/event-bus';
 import { createDomainEvent } from '../shared/event-bus';
 import { formatAgentComment } from '../shared/agent-identity';
+import { sanitize, wrapUserContent } from '../shared/input-sanitizer';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -246,7 +247,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
 
           emitPhaseCompleted(plan.id, 'completed', agentStart);
 
-          // 8. Cleanup worktree
+          // 9. Cleanup worktree
           await deps.worktreeManager.dispose(handle);
 
         } catch (err) {
@@ -271,7 +272,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
       // Determine overall status
       const allCompleted = agentResults.length > 0
         ? agentResults.every((r) => r.status === 'completed')
-        : true;
+        : false;
       const anyCompleted = agentResults.some((r) => r.status === 'completed');
 
       return {
@@ -316,7 +317,7 @@ export function buildAgentPrompt(
 
   if (intakeEvent.rawText) {
     sections.push('## Description');
-    sections.push(intakeEvent.rawText);
+    sections.push(wrapUserContent(sanitize(intakeEvent.rawText)));
   }
 
   if (intakeEvent.entities.labels?.length) {
