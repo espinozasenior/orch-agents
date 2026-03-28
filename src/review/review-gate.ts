@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import type { Logger } from '../shared/logger';
 import type { ReviewVerdict, Finding, Artifact } from '../types';
 
