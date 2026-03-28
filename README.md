@@ -208,12 +208,89 @@ All running agents for that work item cancel immediately.
 
 Triggers the `issue_comment.mentions_bot` event.
 
+## GitHub App Setup (Recommended)
+
+Using a GitHub App gives agents their own bot identity. Pushes and comments show as `orch-agents[bot]` instead of your personal account, which prevents feedback loops and looks professional on PRs.
+
+> **Without a GitHub App**, orch-agents falls back to your personal `GITHUB_TOKEN`. This works for dev/testing but agents' pushes appear as you, requiring extra loop-prevention logic.
+
+### 1. Create the App
+
+Go to **[github.com/settings/apps/new](https://github.com/settings/apps/new)** (or your org's settings for org repos).
+
+| Field | Value |
+|-------|-------|
+| **App name** | `orch-agents` (or your preferred name) |
+| **Homepage URL** | Your repo URL |
+| **Webhook URL** | `https://your-server/webhooks/github` |
+| **Webhook secret** | Generate with `openssl rand -hex 32` |
+
+**Permissions** (Repository):
+
+| Permission | Access | Why |
+|------------|--------|-----|
+| Contents | Read & Write | Push commits from agent worktrees |
+| Pull requests | Read & Write | Post review comments on PRs |
+| Issues | Read & Write | Post comments on issues |
+| Metadata | Read | Required by GitHub |
+
+**Subscribe to events**: Push, Pull request, Issues, Issue comment
+
+**Leave unchecked**: Callback URL, "Request user authorization during installation", "Enable Device Flow" — these are for OAuth login flows, not needed here.
+
+### 2. Get Your Credentials
+
+After creating the app:
+
+1. Note the **App ID** (shown at the top of the app settings page)
+2. Scroll to **Private keys** → click **Generate a private key** → download the `.pem` file
+3. Go to **Install App** (left sidebar) → install on your repo
+4. Note the **Installation ID** from the URL: `github.com/settings/installations/XXXXXXXX`
+
+### 3. Configure Environment
+
+Add to your `.env`:
+
+```bash
+GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY_PATH=./github-app.pem
+GITHUB_APP_INSTALLATION_ID=78901234
+GITHUB_WEBHOOK_SECRET=<the-secret-from-step-1>
+BOT_USERNAME=orch-agents[bot]
+```
+
+Copy the downloaded `.pem` file to your project root. It's already in `.gitignore`.
+
+### 4. Verify
+
+Start the server and push to a PR branch. You should see:
+- Push webhook arrives and is **skipped** (bot sender = `orch-agents[bot]`)
+- PR synchronize webhook arrives and is **skipped** (same bot sender)
+- No cascading agent executions
+
+Agent comments on PRs will show as posted by your app, with the bot badge.
+
+### Fallback: Personal Access Token
+
+If you don't want a GitHub App, use a personal access token instead:
+
+```bash
+GITHUB_TOKEN=ghp_...
+WEBHOOK_SECRET=<your-webhook-secret>
+BOT_USERNAME=your-github-username
+```
+
+This works but agents' actions appear as you, and the system relies on SHA tracking for loop prevention instead of bot identity.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | Yes | — | Claude API key |
-| `GITHUB_TOKEN` | Yes | — | GitHub personal access token |
+| `GITHUB_TOKEN` | Fallback | — | GitHub PAT (if not using GitHub App) |
+| `GITHUB_APP_ID` | Recommended | — | GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | Recommended | — | Path to `.pem` private key |
+| `GITHUB_APP_INSTALLATION_ID` | Recommended | — | GitHub App installation ID |
 | `WEBHOOK_SECRET` | Yes | — | GitHub webhook HMAC secret |
 | `PORT` | No | `3000` | HTTP server port |
 | `LOG_LEVEL` | No | `info` | `trace` `debug` `info` `warn` `error` |
@@ -334,7 +411,9 @@ npm run setup    # Interactive setup wizard
 | No PR comments | Check `GITHUB_TOKEN` has `repo` scope |
 | Linear not working | Set `LINEAR_ENABLED=true` and verify `LINEAR_API_KEY` |
 | "WORKFLOW.md not found" | Create WORKFLOW.md in your project root |
-| Bot responding to itself | Set `BOT_USERNAME` env var to your bot's GitHub username |
+| Bot responding to itself | Set up a GitHub App (recommended) or set `BOT_USERNAME` to match your bot's login |
+| Agent pushes trigger more agents | Set up a GitHub App so pushes come from `app[bot]` sender |
+| "Private key not found" | Check `GITHUB_APP_PRIVATE_KEY_PATH` points to your `.pem` file |
 
 ## License
 
