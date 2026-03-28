@@ -13,6 +13,7 @@ import type { EventBus } from './shared/event-bus';
 import { webhookRouter } from './webhook-gateway/webhook-router';
 import { linearWebhookHandler } from './integration/linear/linear-webhook-handler';
 import { setBotUsername } from './intake/github-workflow-normalizer';
+import { setBotName } from './shared/agent-identity';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
 
 export interface ServerDependencies {
@@ -33,6 +34,7 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
 
   if (config.botUsername) {
     setBotUsername(config.botUsername);
+    setBotName(config.botUsername);
   }
 
   const server = Fastify({

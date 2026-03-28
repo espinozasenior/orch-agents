@@ -69,6 +69,11 @@ export async function linearWebhookHandler(
     });
   }
 
+  // Dispose event buffer on server close to stop the cleanup timer
+  fastify.addHook('onClose', async () => {
+    buffer.dispose();
+  });
+
   fastify.post(
     '/webhooks/linear',
     async (request: FastifyRequest, reply: FastifyReply) => {

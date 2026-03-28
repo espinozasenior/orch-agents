@@ -49,6 +49,11 @@ export async function webhookRouter(
   const { config, logger, eventBus } = deps;
   const buffer = deps.eventBuffer ?? createEventBuffer();
 
+  // Dispose event buffer on server close to stop the cleanup timer
+  fastify.addHook('onClose', async () => {
+    buffer.dispose();
+  });
+
   // Custom content type parser that preserves the raw body string
   // for HMAC signature verification.
   fastify.addContentTypeParser(
@@ -95,7 +100,12 @@ export async function webhookRouter(
         }
 
         // Get raw body for signature verification.
-        // Prefer the captured raw string; fall back to re-serializing.
+        // SECURITY: rawBodyString should always be set by the content type parser.
+        // The JSON.stringify fallback may produce a different byte sequence than the
+        // original payload, which could cause HMAC verification to accept a modified body.
+        if (!request.rawBodyString) {
+          log.warn('Raw body not captured by content type parser — signature verification may be unreliable');
+        }
         const rawBody = request.rawBodyString ?? JSON.stringify(request.body);
 
         // Step 1: Verify signature
