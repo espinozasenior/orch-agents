@@ -1,27 +1,27 @@
 ---
 templates:
   tdd-workflow:
-    - coder
-    - tester
+    - .claude/agents/core/coder.md
+    - .claude/agents/core/tester.md
   feature-build:
-    - architect
-    - coder
-    - reviewer
+    - .claude/agents/sparc/architecture.md
+    - .claude/agents/core/coder.md
+    - .claude/agents/core/reviewer.md
   github-ops:
-    - reviewer
+    - .claude/agents/core/reviewer.md
   quick-fix:
-    - coder
+    - .claude/agents/core/coder.md
   security-audit:
-    - security-architect
+    - .claude/agents/v3/security-architect.md
   cicd-pipeline:
-    - coder
+    - .claude/agents/core/coder.md
   release-pipeline:
-    - coder
+    - .claude/agents/core/coder.md
   sparc-full:
-    - architect
-    - coder
-    - reviewer
-    - tester
+    - .claude/agents/core/architect.md
+    - .claude/agents/core/coder.md
+    - .claude/agents/core/reviewer.md
+    - .claude/agents/core/tester.md
 
 github:
   events:
@@ -35,7 +35,6 @@ github:
     issues.labeled.enhancement: feature-build
     issues.labeled.security: security-audit
     issue_comment.mentions_bot: quick-fix
-    pull_request_review.changes_requested: quick-fix
     workflow_run.failure: quick-fix
     release.published: release-pipeline
     deployment_status.failure: quick-fix

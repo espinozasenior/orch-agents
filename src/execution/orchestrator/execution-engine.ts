@@ -7,6 +7,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { WorkflowPlan, PlannedAgent } from '../../types';
 import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
@@ -68,11 +70,27 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       ?? workflowConfig.templates[workflowConfig.agents.defaultTemplate]
       ?? ['coder'];
 
+    // Validate all agent paths exist before building the plan
+    for (const agentPath of agentTypes) {
+      if (!existsSync(resolve(process.cwd(), agentPath))) {
+        const reason = `Template '${templateName}' references missing agent: ${agentPath}`;
+        logger.error(reason);
+        eventBus.publish(
+          createDomainEvent('WorkFailed', {
+            workItemId: intakeEvent.id,
+            failureReason: reason,
+            retryCount: 0,
+          }, correlationId),
+        );
+        return;
+      }
+    }
+
     // Build a simple plan from the template
     const planId = randomUUID();
-    const agentTeam: PlannedAgent[] = agentTypes.map((type) => ({
-      role: type,
-      type,
+    const agentTeam: PlannedAgent[] = agentTypes.map((agentPath) => ({
+      role: agentPath.replace(/^.*\//, '').replace(/\.md$/, ''),
+      type: agentPath,
       tier: 2 as const,
       required: true,
     }));

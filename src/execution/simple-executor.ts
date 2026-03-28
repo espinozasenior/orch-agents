@@ -86,6 +86,8 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
       const startTime = Date.now();
       const agentResults: AgentResult[] = [];
       const agents = plan.agentTeam;
+      // Chain sequential agents: each starts from the previous agent's commit
+      let lastCommitRef = intakeEvent.entities.branch ?? 'main';
 
       for (const agent of agents) {
         const agentStart = Date.now();
@@ -102,13 +104,12 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
 
         try {
           // 1. Get agent definition (full markdown body as instructions)
-          const agentDef = deps.agentRegistry.getByName(agent.type);
+          const agentDef = deps.agentRegistry.getByPath(agent.type);
           const instructions = agentDef?.body || agentDef?.description || '';
 
-          // 2. Create isolated worktree
-          const baseBranch = intakeEvent.entities.branch ?? 'main';
+          // 2. Create worktree from last successful agent's commit (or base branch)
           handle = await deps.worktreeManager.create(
-            plan.id, baseBranch, `agent/${plan.id}/${agent.role}`,
+            plan.id, lastCommitRef, `agent/${plan.id}/${agent.role}`,
           );
 
           // 3. Build prompt: agent instructions + issue context
@@ -122,7 +123,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             agentType: agent.type,
             tier: agent.tier,
             phaseType: 'refinement',
-            timeout: deps.agentTimeoutMs ?? 300_000,
+            timeout: deps.agentTimeoutMs ?? 900_000,
             metadata: { planId: plan.id, workItemId: plan.workItemId },
           });
 
@@ -168,7 +169,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               initialCommitSha: applyResult.commitSha,
               artifacts: [],
               maxAttempts: deps.maxFixAttempts ?? 3,
-              timeout: deps.agentTimeoutMs ?? 300_000,
+              timeout: deps.agentTimeoutMs ?? 900_000,
             });
             findings = fixResult.finalVerdict.findings;
           }
@@ -227,6 +228,11 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             ).catch((err: unknown) => deps.logger.warn('Failed to post PR comment', {
               error: err instanceof Error ? err.message : String(err),
             }));
+          }
+
+          // Chain: next agent starts from this agent's commit
+          if (applyResult.commitSha) {
+            lastCommitRef = applyResult.commitSha;
           }
 
           agentResults.push({

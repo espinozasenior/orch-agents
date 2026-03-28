@@ -8,8 +8,10 @@
  * Cached after first scan. Call refresh() to re-read from disk.
  */
 
-import { resolve } from 'node:path';
+import { resolve, basename } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
 import { scanAgentDirectory, type AgentDefinition } from './directory-scanner';
+import { parseFrontmatter } from './frontmatter-parser';
 
 // ---------------------------------------------------------------------------
 // Re-export AgentDefinition for consumers
@@ -33,6 +35,9 @@ export interface AgentRegistry {
 
   /** Filter agents by category (core, sparc, github, v3, etc.) */
   getByCategory(category: string): AgentDefinition[];
+
+  /** Look up a single agent by relative file path (resolved against project root) */
+  getByPath(relativePath: string): AgentDefinition | undefined;
 
   /** Check if a name resolves to a known agent */
   has(name: string): boolean;
@@ -87,6 +92,52 @@ export function createAgentRegistry(options: AgentRegistryOptions = {}): AgentRe
     getByName(name: string): AgentDefinition | undefined {
       ensureLoaded();
       return _nameIndex!.get(name);
+    },
+
+    getByPath(relativePath: string): AgentDefinition | undefined {
+      const absPath = resolve(process.cwd(), relativePath);
+      if (!existsSync(absPath)) {
+        logger?.warn('Agent file not found', { path: absPath });
+        return undefined;
+      }
+
+      try {
+        const content = readFileSync(absPath, 'utf-8');
+        const frontmatter = parseFrontmatter(content);
+        if (!frontmatter) {
+          logger?.warn('Agent file has no frontmatter', { path: absPath });
+          return undefined;
+        }
+
+        // Derive category from path structure (e.g., .claude/agents/core/coder.md → "core")
+        const parts = relativePath.split('/');
+        const agentsDirIdx = parts.indexOf('agents');
+        const category = agentsDirIdx >= 0 && agentsDirIdx + 1 < parts.length - 1
+          ? parts[agentsDirIdx + 1]
+          : 'uncategorized';
+
+        // Extract markdown body (everything after frontmatter closing ---)
+        const bodyMatch = content.match(/^---[\s\S]*?---\s*\n([\s\S]*)$/);
+        const body = bodyMatch?.[1]?.trim() ?? '';
+
+        return {
+          name: frontmatter.name ?? basename(absPath, '.md'),
+          type: frontmatter.type ?? 'generic',
+          description: frontmatter.description ?? '',
+          capabilities: frontmatter.capabilities,
+          color: frontmatter.color ?? '#888888',
+          category,
+          filePath: absPath,
+          version: frontmatter.version ?? '1.0.0',
+          body,
+        };
+      } catch (err) {
+        logger?.warn('Failed to read agent file', {
+          path: absPath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return undefined;
+      }
     },
 
     getByCategory(category: string): AgentDefinition[] {
