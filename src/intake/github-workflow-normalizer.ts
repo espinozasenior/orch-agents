@@ -12,6 +12,7 @@ import type { IntakeEvent, WorkIntent } from '../types';
 import type { ParsedGitHubEvent } from '../webhook-gateway/event-parser';
 import type { WorkflowConfig } from '../integration/linear/workflow-parser';
 import { sanitize } from '../shared/input-sanitizer';
+import { isAgentCommit } from '../shared/agent-commit-tracker';
 
 // ---------------------------------------------------------------------------
 // Bot user ID/username for loop prevention (mirrors github-normalizer.ts)
@@ -263,6 +264,21 @@ export function normalizeGitHubEventFromWorkflow(
     return null;
   }
 
+  // Agent commit loop prevention — skip webhooks triggered by our own pushes
+  if (parsed.eventType === 'push') {
+    const headCommitId = (parsed.rawPayload as Record<string, unknown> & { head_commit?: { id?: string } }).head_commit?.id;
+    if (headCommitId && isAgentCommit(headCommitId)) {
+      return null;
+    }
+  }
+
+  if (parsed.eventType === 'pull_request' && parsed.action === 'synchronize') {
+    const afterSha = (parsed.rawPayload as Record<string, unknown> & { after?: string }).after;
+    if (afterSha && isAgentCommit(afterSha)) {
+      return null;
+    }
+  }
+
   const githubEvents = workflowConfig.github?.events;
   if (!githubEvents || Object.keys(githubEvents).length === 0) {
     return null; // No github events configured, caller should fall back
@@ -270,6 +286,13 @@ export function normalizeGitHubEventFromWorkflow(
 
   // Try to match event rules
   let template = matchGitHubEventRule(parsed, githubEvents);
+
+  // Push to non-default branch with no matching rule — skip instead of falling
+  // through to defaultTemplate. This prevents agent branch pushes from spawning
+  // new work items when WORKFLOW.md has no push.other rule.
+  if (template === null && parsed.eventType === 'push' && parsed.branch !== parsed.defaultBranch) {
+    return null;
+  }
 
   // Fallback 1: shared label routing via agents.routing
   if (template === null && parsed.labels.length > 0) {

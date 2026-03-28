@@ -25,6 +25,7 @@ import type { EventBus } from '../shared/event-bus';
 import { createDomainEvent } from '../shared/event-bus';
 import { formatAgentComment } from '../shared/agent-identity';
 import { sanitize, wrapUserContent } from '../shared/input-sanitizer';
+import { trackAgentCommit } from '../shared/agent-commit-tracker';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -173,6 +174,11 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               timeout: deps.agentTimeoutMs ?? 900_000,
             });
             findings = fixResult.finalVerdict.findings;
+          }
+
+          // 6b. Track agent commit SHA for feedback loop prevention
+          if (applyResult.commitSha) {
+            trackAgentCommit(applyResult.commitSha);
           }
 
           // 7. Push commits to remote

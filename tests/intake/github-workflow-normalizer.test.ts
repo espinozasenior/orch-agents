@@ -13,6 +13,10 @@ import {
   setBotUserId,
   setBotUsername,
 } from '../../src/intake/github-workflow-normalizer';
+import {
+  trackAgentCommit,
+  clearTrackedCommits,
+} from '../../src/shared/agent-commit-tracker';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
 import type { ParsedGitHubEvent } from '../../src/webhook-gateway/event-parser';
 
@@ -158,6 +162,7 @@ describe('normalizeGitHubEventFromWorkflow', () => {
   beforeEach(() => {
     setBotUserId(0);
     setBotUsername('');
+    clearTrackedCommits();
   });
 
   // AC1/AC4: pull_request.opened maps to github-ops
@@ -574,6 +579,124 @@ describe('normalizeGitHubEventFromWorkflow', () => {
       assert.equal(result.entities.branch, 'main');
       assert.deepEqual(result.entities.files, ['src/app.ts', 'tests/app.test.ts']);
       assert.equal(result.entities.author, 'octocat');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Agent feedback loop prevention
+  // -------------------------------------------------------------------------
+
+  describe('agent feedback loop prevention', () => {
+    it('should skip push event when head_commit.id is a tracked agent SHA', () => {
+      trackAgentCommit('agent-sha-001');
+      const parsed = makeParsed({
+        eventType: 'push',
+        branch: 'feature/x',
+        defaultBranch: 'main',
+        rawPayload: { head_commit: { id: 'agent-sha-001' } },
+      });
+      const config = makeWorkflowConfig();
+
+      const result = normalizeGitHubEventFromWorkflow(parsed, config);
+
+      assert.equal(result, null);
+    });
+
+    it('should skip pull_request.synchronize when after SHA is a tracked agent SHA', () => {
+      trackAgentCommit('agent-sha-002');
+      const parsed = makeParsed({
+        eventType: 'pull_request',
+        action: 'synchronize',
+        prNumber: 10,
+        rawPayload: { after: 'agent-sha-002' },
+      });
+      const config = makeWorkflowConfig();
+
+      const result = normalizeGitHubEventFromWorkflow(parsed, config);
+
+      assert.equal(result, null);
+    });
+
+    it('should process pull_request.synchronize with human SHA normally', () => {
+      const parsed = makeParsed({
+        eventType: 'pull_request',
+        action: 'synchronize',
+        prNumber: 10,
+        rawPayload: { after: 'human-sha-999' },
+      });
+      const config = makeWorkflowConfig();
+
+      const result = normalizeGitHubEventFromWorkflow(parsed, config);
+
+      assert.ok(result);
+      assert.equal(result.sourceMetadata.template, 'github-ops');
+    });
+
+    it('should not affect pull_request.opened (not synchronize)', () => {
+      trackAgentCommit('agent-sha-003');
+      const parsed = makeParsed({
+        eventType: 'pull_request',
+        action: 'opened',
+        prNumber: 10,
+        rawPayload: { after: 'agent-sha-003' },
+      });
+      const config = makeWorkflowConfig();
+
+      const result = normalizeGitHubEventFromWorkflow(parsed, config);
+
+      assert.ok(result);
+      assert.equal(result.sourceMetadata.template, 'github-ops');
+    });
+
+    it('should skip push to non-default branch when no rule matches', () => {
+      // Config WITHOUT push.other rule
+      const config = makeWorkflowConfig({
+        github: {
+          events: {
+            'push.default_branch': 'cicd-pipeline',
+            'pull_request.opened': 'github-ops',
+          },
+        },
+      });
+      const parsed = makeParsed({
+        eventType: 'push',
+        branch: 'feature/agent-branch',
+        defaultBranch: 'main',
+      });
+
+      const result = normalizeGitHubEventFromWorkflow(parsed, config);
+
+      assert.equal(result, null);
+    });
+
+    it('should still match push to default branch after rule matching', () => {
+      const config = makeWorkflowConfig();
+      const parsed = makeParsed({
+        eventType: 'push',
+        branch: 'main',
+        defaultBranch: 'main',
+      });
+
+      const result = normalizeGitHubEventFromWorkflow(parsed, config);
+
+      assert.ok(result);
+      assert.equal(result.sourceMetadata.template, 'cicd-pipeline');
+    });
+
+    it('should process push with non-agent SHA normally', () => {
+      const parsed = makeParsed({
+        eventType: 'push',
+        branch: 'feat/x',
+        defaultBranch: 'main',
+        rawPayload: { head_commit: { id: 'human-push-sha' } },
+      });
+      const config = makeWorkflowConfig();
+
+      const result = normalizeGitHubEventFromWorkflow(parsed, config);
+
+      assert.ok(result);
+      // push.other rule matches in the default config
+      assert.equal(result.sourceMetadata.template, 'quick-fix');
     });
   });
 });

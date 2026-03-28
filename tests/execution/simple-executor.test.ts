@@ -26,6 +26,7 @@ import type { FixItLoop, FixItResult, FixItContext } from '../../src/execution/f
 import type { AgentRegistry } from '../../src/agent-registry/agent-registry';
 import type { GitHubClient } from '../../src/integration/github-client';
 import type { Logger } from '../../src/shared/logger';
+import { isAgentCommit, clearTrackedCommits } from '../../src/shared/agent-commit-tracker';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -238,6 +239,7 @@ describe('SimpleExecutor', () => {
 
   beforeEach(() => {
     mocks = createMocks();
+    clearTrackedCommits();
   });
 
   function buildExecutor(overrides: Partial<SimpleExecutorDeps> = {}): SimpleExecutor {
@@ -681,6 +683,38 @@ describe('SimpleExecutor', () => {
 
     const createArgs = (mocks.worktreeManager.create as ReturnType<typeof mock.fn>).mock.calls[0].arguments;
     assert.equal(createArgs[1], 'main'); // baseBranch
+  });
+
+  // -----------------------------------------------------------------------
+  // 12. Agent commit SHA tracking for feedback loop prevention
+  // -----------------------------------------------------------------------
+
+  it('should track agent commit SHA via trackAgentCommit after successful apply', async () => {
+    (mocks.artifactApplier.apply as ReturnType<typeof mock.fn>).mock.mockImplementation(
+      async () => makeAppliedResult('tracked-sha-xyz'),
+    );
+
+    executor = buildExecutor();
+    const plan = makePlan();
+    const intake = makeIntakeEvent();
+
+    await executor.execute(plan, intake);
+
+    assert.equal(isAgentCommit('tracked-sha-xyz'), true);
+  });
+
+  it('should not track SHA when apply has no commitSha', async () => {
+    (mocks.artifactApplier.apply as ReturnType<typeof mock.fn>).mock.mockImplementation(
+      async () => ({ status: 'applied' as const, changedFiles: [], commitSha: undefined }),
+    );
+
+    executor = buildExecutor();
+    const plan = makePlan();
+    const intake = makeIntakeEvent();
+
+    await executor.execute(plan, intake);
+
+    assert.equal(isAgentCommit('undefined'), false);
   });
 });
 
