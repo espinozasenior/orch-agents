@@ -44,12 +44,18 @@ describe('verifySignature', () => {
   });
 
   it('should skip verification when SKIP_SIGNATURE_VERIFICATION=true and secret is empty', () => {
+    const origSkip = process.env.SKIP_SIGNATURE_VERIFICATION;
+    const origNode = process.env.NODE_ENV;
     process.env.SKIP_SIGNATURE_VERIFICATION = 'true';
+    process.env.NODE_ENV = 'test';
     try {
       // Should not throw even with garbage signature
       verifySignature(payload, 'garbage', '');
     } finally {
-      delete process.env.SKIP_SIGNATURE_VERIFICATION;
+      if (origSkip === undefined) delete process.env.SKIP_SIGNATURE_VERIFICATION;
+      else process.env.SKIP_SIGNATURE_VERIFICATION = origSkip;
+      if (origNode === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = origNode;
     }
   });
 

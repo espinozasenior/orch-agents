@@ -99,6 +99,7 @@ export function sanitize(text: string | null | undefined): string {
   result = removeInvisibleChars(result);
   result = stripHiddenHtmlAttributes(result);
   result = cleanHtmlEntities(result);
+  result = removeInvisibleChars(result); // re-run after entity decoding may re-introduce control chars
   result = sanitizeMarkdownImages(result);
   return result;
 }
