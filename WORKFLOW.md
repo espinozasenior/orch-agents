@@ -30,7 +30,6 @@ github:
     pull_request.closed.merged: release-pipeline
     pull_request.ready_for_review: github-ops
     push.default_branch: cicd-pipeline
-    push.other: quick-fix
     issues.opened: github-ops
     issues.labeled.bug: tdd-workflow
     issues.labeled.enhancement: feature-build
