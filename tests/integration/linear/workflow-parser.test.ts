@@ -81,6 +81,8 @@ describe('WorkflowParser', () => {
     assert.equal(config.tracker.team, 'my-team');
     assert.deepEqual(config.tracker.activeStates, ['Todo', 'In Progress']);
     assert.deepEqual(config.tracker.terminalStates, ['Done', 'Cancelled']);
+    assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
+    assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
   });
 
   it('should parse agents section correctly', () => {
@@ -164,6 +166,9 @@ agents:
 
     assert.deepEqual(config.tracker.activeStates, ['Todo', 'In Progress']);
     assert.deepEqual(config.tracker.terminalStates, ['Done', 'Cancelled']);
+    // Type defaults are always populated
+    assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
+    assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
   });
 
   it('should throw for missing frontmatter delimiters', () => {

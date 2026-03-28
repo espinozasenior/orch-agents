@@ -24,7 +24,7 @@ function makeIssue(overrides: Partial<LinearIssueResponse> = {}): LinearIssueRes
     title: 'Test issue',
     priority: 2,
     updatedAt: '2026-01-01T00:00:00Z',
-    state: { id: 'state-1', name: 'Backlog' },
+    state: { id: 'state-1', name: 'Backlog', type: 'backlog' },
     labels: { nodes: [] },
     assignee: null,
     creator: { id: 'user-1', name: 'Test' },
@@ -51,6 +51,7 @@ describe('LinearStateReconciler', () => {
       assert.equal(snapshot.id, 'issue-1');
       assert.equal(snapshot.state, 'Backlog');
       assert.equal(snapshot.stateId, 'state-1');
+      assert.equal(snapshot.stateType, 'backlog');
       assert.deepEqual(snapshot.labels, ['bug', 'feature']);
       assert.equal(snapshot.assigneeId, 'user-2');
       assert.equal(snapshot.priority, 2);
@@ -64,11 +65,12 @@ describe('LinearStateReconciler', () => {
   });
 
   describe('detectChanges', () => {
-    it('detects state change', () => {
+    it('detects state change by type', () => {
       const cached: LinearIssueSnapshot = {
         id: 'issue-1',
         state: 'Backlog',
         stateId: 'state-1',
+        stateType: 'backlog',
         labels: [],
         labelIds: [],
         assigneeId: null,
@@ -77,15 +79,15 @@ describe('LinearStateReconciler', () => {
       };
 
       const current = makeIssue({
-        state: { id: 'state-2', name: 'Todo' },
+        state: { id: 'state-2', name: 'Todo', type: 'unstarted' },
       });
 
       const changes = detectChanges(cached, current);
 
       assert.equal(changes.length, 1);
       assert.equal(changes[0].field, 'state');
-      assert.equal(changes[0].from, 'Backlog');
-      assert.equal(changes[0].to, 'Todo');
+      assert.equal(changes[0].from, 'backlog');
+      assert.equal(changes[0].to, 'unstarted');
     });
 
     it('detects label change (added)', () => {
@@ -93,6 +95,7 @@ describe('LinearStateReconciler', () => {
         id: 'issue-1',
         state: 'Backlog',
         stateId: 'state-1',
+        stateType: 'backlog',
         labels: [],
         labelIds: [],
         assigneeId: null,
@@ -117,6 +120,7 @@ describe('LinearStateReconciler', () => {
         id: 'issue-1',
         state: 'Backlog',
         stateId: 'state-1',
+        stateType: 'backlog',
         labels: ['bug'],
         labelIds: ['l1'],
         assigneeId: null,
@@ -139,6 +143,7 @@ describe('LinearStateReconciler', () => {
         id: 'issue-1',
         state: 'Backlog',
         stateId: 'state-1',
+        stateType: 'backlog',
         labels: [],
         labelIds: [],
         assigneeId: null,
@@ -163,6 +168,7 @@ describe('LinearStateReconciler', () => {
         id: 'issue-1',
         state: 'Backlog',
         stateId: 'state-1',
+        stateType: 'backlog',
         labels: [],
         labelIds: [],
         assigneeId: null,
@@ -185,6 +191,7 @@ describe('LinearStateReconciler', () => {
         id: 'issue-1',
         state: 'Backlog',
         stateId: 'state-1',
+        stateType: 'backlog',
         labels: [],
         labelIds: [],
         assigneeId: null,
@@ -193,7 +200,7 @@ describe('LinearStateReconciler', () => {
       };
 
       const current = makeIssue({
-        state: { id: 'state-2', name: 'Todo' },
+        state: { id: 'state-2', name: 'Todo', type: 'unstarted' },
         assignee: { id: 'user-2' },
         priority: 1,
       });
@@ -211,6 +218,7 @@ describe('LinearStateReconciler', () => {
         id: 'issue-1',
         state: 'Backlog',
         stateId: 'state-1',
+        stateType: 'backlog',
         labels: ['bug'],
         labelIds: ['l1'],
         assigneeId: 'user-1',
@@ -219,7 +227,7 @@ describe('LinearStateReconciler', () => {
       };
 
       const current = makeIssue({
-        state: { id: 'state-1', name: 'Backlog' },
+        state: { id: 'state-1', name: 'Backlog', type: 'backlog' },
         labels: { nodes: [{ id: 'l1', name: 'bug' }] },
         assignee: { id: 'user-1' },
         priority: 2,

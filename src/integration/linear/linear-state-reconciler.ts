@@ -17,6 +17,7 @@ export function snapshotIssue(issue: LinearIssueResponse): LinearIssueSnapshot {
     id: issue.id,
     state: issue.state.name,
     stateId: issue.state.id,
+    stateType: issue.state.type,
     labels: issue.labels.nodes.map((l) => l.name).sort(),
     labelIds: issue.labels.nodes.map((l) => l.id).sort(),
     assigneeId: issue.assignee?.id ?? null,
@@ -37,13 +38,17 @@ export function detectChanges(
 ): LinearChange[] {
   const changes: LinearChange[] = [];
 
-  // State change
-  if (cached.state !== current.state.name) {
+  // State change — compare by type when available, fall back to name
+  const stateChanged = cached.stateType && current.state.type
+    ? cached.stateType !== current.state.type
+    : cached.state !== current.state.name;
+
+  if (stateChanged) {
     changes.push({
       field: 'state',
-      from: cached.state,
-      to: current.state.name,
-      updatedFrom: { state: { id: cached.stateId } },
+      from: cached.stateType ?? cached.state,
+      to: current.state.type ?? current.state.name,
+      updatedFrom: { state: { id: cached.stateId }, stateId: cached.stateId },
     });
   }
 

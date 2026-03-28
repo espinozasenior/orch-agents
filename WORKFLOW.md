@@ -43,12 +43,12 @@ tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
   team: $LINEAR_TEAM_ID
-  active_states:
-    - Todo
-    - In Progress
-  terminal_states:
-    - Done
-    - Cancelled
+  active_types:
+    - unstarted
+    - started
+  terminal_types:
+    - completed
+    - canceled
 
 agents:
   max_concurrent: 8

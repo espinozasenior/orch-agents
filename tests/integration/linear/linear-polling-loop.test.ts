@@ -33,6 +33,8 @@ const TEST_WORKFLOW_CONFIG: WorkflowConfig = {
     team: 'ENG',
     activeStates: ['Todo', 'In Progress'],
     terminalStates: ['Done', 'Cancelled'],
+    activeTypes: ['unstarted', 'started'],
+    terminalTypes: ['completed', 'canceled'],
   },
   agents: {
     maxConcurrent: 8,
@@ -60,7 +62,7 @@ function makeIssue(overrides: Partial<LinearIssueResponse> = {}): LinearIssueRes
     title: 'Test issue',
     priority: 2,
     updatedAt: '2026-01-01T00:00:00Z',
-    state: { id: 'state-1', name: 'Backlog' },
+    state: { id: 'state-1', name: 'Backlog', type: 'backlog' },
     labels: { nodes: [] },
     assignee: null,
     creator: { id: 'user-1', name: 'Test' },
@@ -103,9 +105,9 @@ describe('LinearPollingLoop', () => {
   it('should detect state changes and emit IntakeCompleted (AC5)', async () => {
     // First poll: issue in Backlog (cached without emitting)
     let pollCount = 0;
-    const issueV1 = makeIssue({ state: { id: 'state-1', name: 'Backlog' } });
+    const issueV1 = makeIssue({ state: { id: 'state-1', name: 'Backlog', type: 'backlog' } });
     const issueV2 = makeIssue({
-      state: { id: 'state-2', name: 'Todo' },
+      state: { id: 'state-2', name: 'Todo', type: 'unstarted' },
       updatedAt: '2026-01-01T00:01:00Z',
     });
 
@@ -147,9 +149,9 @@ describe('LinearPollingLoop', () => {
 
   // AC6: Dedup against webhook events
   it('should deduplicate events already received via webhook (AC6)', async () => {
-    const issueV1 = makeIssue({ state: { id: 'state-1', name: 'Backlog' } });
+    const issueV1 = makeIssue({ state: { id: 'state-1', name: 'Backlog', type: 'backlog' } });
     const issueV2 = makeIssue({
-      state: { id: 'state-2', name: 'Todo' },
+      state: { id: 'state-2', name: 'Todo', type: 'unstarted' },
       updatedAt: '2026-01-01T00:01:00Z',
     });
 
@@ -193,7 +195,7 @@ describe('LinearPollingLoop', () => {
 
   it('should not emit events on first poll (cache only)', async () => {
     const client = createMockLinearClient([
-      makeIssue({ state: { id: 'state-2', name: 'Todo' } }),
+      makeIssue({ state: { id: 'state-2', name: 'Todo', type: 'unstarted' } }),
     ]);
 
     const capturedEvents: IntakeCompletedEvent[] = [];
