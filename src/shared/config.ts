@@ -41,6 +41,12 @@ export interface AppConfig {
   readonly workflowMdPath: string;
   /** Enable GitHub routing via WORKFLOW.md (default false, uses config/github-routing.json) */
   readonly workflowMdGithub: boolean;
+  /** GitHub App ID for bot authentication (optional) */
+  readonly githubAppId?: string;
+  /** Path to GitHub App private key PEM file (optional) */
+  readonly githubAppPrivateKeyPath?: string;
+  /** GitHub App installation ID (optional) */
+  readonly githubAppInstallationId?: string;
 }
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = [
@@ -64,14 +70,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const port = parsePort(env.PORT);
   const logLevel = parseLogLevel(env.LOG_LEVEL);
 
-  const webhookSecret = env.WEBHOOK_SECRET ?? '';
+  const webhookSecret = env.GITHUB_WEBHOOK_SECRET ?? env.WEBHOOK_SECRET ?? '';
   if (isProduction && !webhookSecret) {
-    throw new Error('WEBHOOK_SECRET is required in production');
+    throw new Error('GITHUB_WEBHOOK_SECRET (or WEBHOOK_SECRET) is required in production');
   }
 
   const githubToken = env.GITHUB_TOKEN ?? '';
-  if (isProduction && !githubToken) {
-    throw new Error('GITHUB_TOKEN is required in production');
+  const githubAppId = env.GITHUB_APP_ID ?? undefined;
+  const githubAppPrivateKeyPath = env.GITHUB_APP_PRIVATE_KEY_PATH ?? undefined;
+  const githubAppInstallationId = env.GITHUB_APP_INSTALLATION_ID ?? undefined;
+  if (isProduction && !githubToken && !githubAppId) {
+    throw new Error('GITHUB_TOKEN or GITHUB_APP_ID is required in production');
   }
 
   const botUsername = env.BOT_USERNAME ?? undefined;
@@ -104,6 +113,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     linearPollingEnabled,
     workflowMdPath,
     workflowMdGithub,
+    githubAppId,
+    githubAppPrivateKeyPath,
+    githubAppInstallationId,
   });
 }
 

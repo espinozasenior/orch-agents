@@ -29,6 +29,9 @@ vectors.db
 *.log
 npm-debug.log*
 
+# Private keys
+*.pem
+
 # Coverage
 coverage/
 .nyc_output/

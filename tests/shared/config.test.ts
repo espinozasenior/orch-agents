@@ -61,15 +61,27 @@ describe('loadConfig', () => {
     it('should require WEBHOOK_SECRET in production', () => {
       assert.throws(
         () => loadConfig({ NODE_ENV: 'production', GITHUB_TOKEN: 'ghp_test' }),
-        /WEBHOOK_SECRET is required/,
+        /WEBHOOK_SECRET.*is required/,
       );
     });
 
-    it('should require GITHUB_TOKEN in production', () => {
+    it('should require GITHUB_TOKEN or GITHUB_APP_ID in production', () => {
       assert.throws(
         () => loadConfig({ NODE_ENV: 'production', WEBHOOK_SECRET: 'secret' }),
-        /GITHUB_TOKEN is required/,
+        /GITHUB_TOKEN or GITHUB_APP_ID is required/,
       );
+    });
+
+    it('should accept GITHUB_APP_ID instead of GITHUB_TOKEN in production', () => {
+      const config = loadConfig({
+        NODE_ENV: 'production',
+        WEBHOOK_SECRET: 'secret',
+        GITHUB_APP_ID: '12345',
+        GITHUB_APP_PRIVATE_KEY_PATH: '/path/to/key.pem',
+        GITHUB_APP_INSTALLATION_ID: '67890',
+      });
+      assert.equal(config.githubAppId, '12345');
+      assert.equal(config.githubToken, '');
     });
 
     it('should succeed with all required vars in production', () => {
