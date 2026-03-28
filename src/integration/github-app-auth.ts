@@ -15,6 +15,8 @@ import type { Logger } from '../shared/logger';
 
 export interface GitHubTokenProvider {
   getToken(): Promise<string>;
+  /** Fetch the App's slug from GitHub (e.g., "automata-ai-bot"). Bot login is `${slug}[bot]`. */
+  getAppSlug(): Promise<string>;
 }
 
 export interface GitHubAppTokenProviderOpts {
@@ -118,5 +120,34 @@ export function createGitHubAppTokenProvider(
     return refreshing;
   }
 
-  return { getToken };
+  let appSlug: string | null = null;
+
+  async function getAppSlug(): Promise<string> {
+    if (appSlug) return appSlug;
+
+    const jwt = createJWT(appId, privateKey);
+    const response = await fetch('https://api.github.com/app', {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'orch-agents',
+      },
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`GitHub GET /app failed (${response.status}): ${body}`);
+    }
+
+    const data = (await response.json()) as { slug: string };
+    if (!data.slug) {
+      throw new Error('GitHub App response missing slug field');
+    }
+
+    appSlug = data.slug;
+    logger?.info('GitHub App slug resolved', { slug: appSlug });
+    return appSlug;
+  }
+
+  return { getToken, getAppSlug };
 }

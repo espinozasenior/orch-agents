@@ -25,6 +25,7 @@ import { getDefaultRegistry } from './agent-registry/agent-registry';
 import { parseWorkflowMd, type WorkflowConfig } from './integration/linear/workflow-parser';
 import { resolve as pathResolve } from 'node:path';
 import { createGitHubAppTokenProvider, type GitHubTokenProvider } from './integration/github-app-auth';
+import { setBotName } from './shared/agent-identity';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -77,9 +78,11 @@ async function main(): Promise<void> {
       installationId: config.githubAppInstallationId,
       logger,
     });
-    // Token provider handles caching internally — no eager fetch needed.
-    // The provider will acquire and cache a token on the first API call.
-    logger.info('GitHub App authentication enabled', { appId: config.githubAppId });
+    // Auto-resolve bot name from GitHub App slug (e.g., "automata-ai-bot[bot]")
+    const slug = await tokenProvider.getAppSlug();
+    const botLogin = `${slug}[bot]`;
+    setBotName(botLogin);
+    logger.info('GitHub App authentication enabled', { appId: config.githubAppId, botLogin });
   } else if (effectiveGithubToken) {
     logger.info('Using personal access token for GitHub');
   } else {
