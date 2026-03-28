@@ -8,6 +8,7 @@ import { loadConfig } from '../../src/shared/config';
 import { createLogger } from '../../src/shared/logger';
 import { createEventBus, type EventBus } from '../../src/shared/event-bus';
 import { setBotUserId } from '../../src/intake/github-workflow-normalizer';
+import { setBotName } from '../../src/shared/agent-identity';
 import type { IntakeCompletedEvent } from '../../src/shared/event-types';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
 
@@ -91,6 +92,7 @@ describe('webhookRouter (integration)', () => {
   beforeEach(async () => {
     deliveryCounter = 0;
     setBotUserId(0);
+    setBotName('orch-agents');
 
     const config = loadConfig({
       PORT: '3999',
@@ -386,6 +388,7 @@ describe('webhookRouter (integration)', () => {
     buffer.dispose();
     await server.close();
     buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+    setBotName('automata');
 
     const config = loadConfig({
       PORT: '3999',
@@ -453,6 +456,7 @@ describe('webhookRouter (integration)', () => {
     buffer.dispose();
     await server.close();
     buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+    setBotName('automata');
 
     const config = loadConfig({
       PORT: '3999',
@@ -521,6 +525,7 @@ describe('webhookRouter (integration)', () => {
     buffer.dispose();
     await server.close();
     buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+    setBotName('orch-bot');
 
     const config = loadConfig({
       PORT: '3999',

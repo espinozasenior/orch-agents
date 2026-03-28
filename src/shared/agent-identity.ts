@@ -39,7 +39,9 @@ export function getBotName(): string {
 
 /**
  * Get the bot HTML marker string.
+ * Strips `[bot]` suffix from the name to avoid `name[bot]-bot` in the marker.
  */
 export function getBotMarker(): string {
-  return `<!-- ${_botName}-bot -->`;
+  const slug = _botName.replace(/\[bot\]$/, '');
+  return `<!-- ${slug}-bot -->`;
 }

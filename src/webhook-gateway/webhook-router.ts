@@ -22,6 +22,7 @@ import { normalizeGitHubEventFromWorkflow } from '../intake/github-workflow-norm
 import type { WorkflowConfig } from '../integration/linear/workflow-parser';
 import { ValidationError } from '../shared/errors';
 import { handleWebhookError } from '../shared/webhook-error-handler';
+import { getBotName, getBotMarker } from '../shared/agent-identity';
 
 export interface WebhookRouterDeps {
   config: AppConfig;
@@ -129,15 +130,15 @@ export async function webhookRouter(
 
         // Step 2.5: Self-comment loop prevention for issue_comment events
         if (eventType === 'issue_comment' && parsed.commentBody) {
-          const botUsername = config.botUsername;
           const commentAuthor = (
             (payload as Record<string, unknown>).comment as Record<string, unknown> | undefined
           )?.user as Record<string, unknown> | undefined;
           const commentLogin = commentAuthor?.login as string | undefined;
 
-          const botMarkerName = config.botUsername ?? 'orch-agents';
-          const isBotMarker = parsed.commentBody.includes(`<!-- ${botMarkerName}-bot -->`);
-          const isBotUser = botUsername && commentLogin === botUsername;
+          // Use centralized bot identity (auto-resolved from GitHub App slug or BOT_USERNAME)
+          const botName = getBotName();
+          const isBotMarker = parsed.commentBody.includes(getBotMarker());
+          const isBotUser = botName && commentLogin === botName;
 
           if (isBotMarker || isBotUser) {
             log.info('Skipping self-generated bot comment', {
@@ -154,10 +155,9 @@ export async function webhookRouter(
           }
 
           // AIG: Stop command detection — only explicit commands, not embedded words
-          const botNameForStop = config.botUsername ?? 'orch-agents';
           const commentTrimmed = parsed.commentBody.trim().toLowerCase();
           const isDirectCommand = commentTrimmed === 'stop' || commentTrimmed === 'cancel' || commentTrimmed === 'abort';
-          const escapedBotName = botNameForStop.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const escapedBotName = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           const mentionStop = new RegExp(`@${escapedBotName}\\s+(?:stop|cancel|abort)`, 'i');
           const isMentionCommand = mentionStop.test(parsed.commentBody);
 
