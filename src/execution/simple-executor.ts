@@ -18,12 +18,14 @@ import type { ReviewGate } from '../review/review-gate';
 import type { FixItLoop } from './fix-it-loop';
 import type { AgentRegistry } from '../agent-registry/agent-registry';
 import type { GitHubClient } from '../integration/github-client';
+import type { LinearClient } from '../integration/linear/linear-client';
 import type { Logger } from '../shared/logger';
 import type { EventBus } from '../shared/event-bus';
 import { createDomainEvent } from '../shared/event-bus';
 import { formatAgentComment } from '../shared/agent-identity';
 import { sanitize } from '../shared/input-sanitizer';
 import { trackAgentCommit } from '../shared/agent-commit-tracker';
+import { renderWorkflowPromptTemplate } from '../integration/linear/workflow-prompt';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -37,6 +39,7 @@ export interface SimpleExecutorDeps {
   fixItLoop?: FixItLoop;
   agentRegistry: AgentRegistry;
   githubClient?: GitHubClient;
+  linearClient?: Pick<LinearClient, 'createComment'>;
   logger: Logger;
   eventBus?: EventBus;
   maxFixAttempts?: number;
@@ -51,6 +54,10 @@ export interface ExecutionResult {
   status: 'completed' | 'failed' | 'partial';
   agentResults: AgentResult[];
   totalDuration: number;
+  sessionId?: string;
+  lastActivityAt?: string;
+  continuationState?: import('./runtime/task-executor').TaskExecutionResult['continuationState'];
+  tokenUsage?: import('./runtime/task-executor').TaskExecutionResult['tokenUsage'];
 }
 
 export interface AgentResult {
@@ -60,6 +67,10 @@ export interface AgentResult {
   commitSha?: string;
   findings: Finding[];
   duration: number;
+  sessionId?: string;
+  lastActivityAt?: string;
+  continuationState?: import('./runtime/task-executor').TaskExecutionResult['continuationState'];
+  tokenUsage?: import('./runtime/task-executor').TaskExecutionResult['tokenUsage'];
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +97,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
       const startTime = Date.now();
       const agentResults: AgentResult[] = [];
       const agents = plan.agentTeam;
+      const priorOutputs: string[] = [];
       // Chain sequential agents: each starts from the previous agent's commit
       let lastCommitRef = intakeEvent.entities.branch ?? 'main';
 
@@ -113,7 +125,20 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
           );
 
           // 3. Build prompt: agent instructions + issue context
-          const prompt = buildAgentPrompt(instructions, intakeEvent, agent, plan);
+          const workflowPrompt = renderWorkflowPromptTemplate(
+            plan.promptTemplate ?? '',
+            intakeEvent,
+            agent,
+            plan,
+          );
+          const prompt = buildAgentPrompt(
+            workflowPrompt,
+            instructions,
+            intakeEvent,
+            agent,
+            plan,
+            priorOutputs,
+          );
 
           // 4. Run Claude Code session in worktree
           const execResult = await deps.interactiveExecutor.execute({
@@ -134,6 +159,10 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               status: 'failed',
               findings: [],
               duration: Date.now() - agentStart,
+              sessionId: execResult.sessionId,
+              lastActivityAt: execResult.lastActivityAt,
+              continuationState: execResult.continuationState,
+              tokenUsage: execResult.tokenUsage,
             });
             emitPhaseCompleted(plan.id, 'failed', agentStart);
             await deps.worktreeManager.dispose(handle);
@@ -152,6 +181,10 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               status: 'failed',
               findings: [],
               duration: Date.now() - agentStart,
+              sessionId: execResult.sessionId,
+              lastActivityAt: execResult.lastActivityAt,
+              continuationState: execResult.continuationState,
+              tokenUsage: execResult.tokenUsage,
             });
             emitPhaseCompleted(plan.id, 'failed', agentStart);
             await deps.worktreeManager.dispose(handle);
@@ -199,6 +232,11 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             }
           }
 
+          const handoffOutput = truncateForHandoff(execResult.output ?? '');
+          if (handoffOutput) {
+            priorOutputs.push(handoffOutput);
+          }
+
           // 8. Post PR/issue comment with work summary
           if (deps.githubClient && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
             const changedFiles = applyResult.changedFiles ?? [];
@@ -236,6 +274,24 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             }));
           }
 
+          if (deps.linearClient && typeof intakeEvent.sourceMetadata.linearIssueId === 'string') {
+            const linearSummary = formatLinearAgentSummary({
+              agentType: agent.type,
+              durationMs: Date.now() - agentStart,
+              commitSha: applyResult.commitSha,
+              changedFiles: applyResult.changedFiles ?? [],
+              output: execResult.output ?? '',
+              findings,
+            });
+            await deps.linearClient.createComment(
+              intakeEvent.sourceMetadata.linearIssueId,
+              linearSummary,
+            ).catch((err: unknown) => deps.logger.warn('Failed to post Linear comment', {
+              issueId: intakeEvent.sourceMetadata.linearIssueId,
+              error: err instanceof Error ? err.message : String(err),
+            }));
+          }
+
           // Chain: next agent starts from this agent's commit
           if (applyResult.commitSha) {
             lastCommitRef = applyResult.commitSha;
@@ -248,6 +304,10 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             commitSha: applyResult.commitSha,
             findings,
             duration: Date.now() - agentStart,
+            sessionId: execResult.sessionId,
+            lastActivityAt: execResult.lastActivityAt,
+            continuationState: execResult.continuationState,
+            tokenUsage: execResult.tokenUsage,
           });
 
           emitPhaseCompleted(plan.id, 'completed', agentStart);
@@ -269,6 +329,10 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             status: 'failed',
             findings: [],
             duration: Date.now() - agentStart,
+            sessionId: undefined,
+            lastActivityAt: undefined,
+            continuationState: undefined,
+            tokenUsage: undefined,
           });
           emitPhaseCompleted(plan.id, 'failed', agentStart);
         }
@@ -279,11 +343,16 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
         ? agentResults.every((r) => r.status === 'completed')
         : false;
       const anyCompleted = agentResults.some((r) => r.status === 'completed');
+      const latestAgentResult = agentResults[agentResults.length - 1];
 
       return {
         status: allCompleted ? 'completed' : anyCompleted ? 'partial' : 'failed',
         agentResults,
         totalDuration: Date.now() - startTime,
+        sessionId: latestAgentResult?.sessionId,
+        lastActivityAt: latestAgentResult?.lastActivityAt,
+        continuationState: latestAgentResult?.continuationState,
+        tokenUsage: latestAgentResult?.tokenUsage,
       };
     },
   };
@@ -295,16 +364,24 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
 
 /** @internal Exported for testing only */
 export function buildAgentPrompt(
+  workflowPrompt: string,
   agentInstructions: string,
   intakeEvent: IntakeEvent,
   agent: PlannedAgent,
   plan: WorkflowPlan,
+  priorAgentOutputs: string[] = [],
 ): string {
   const sections: string[] = [];
 
   sections.push(`You are a ${agent.type} agent with role: ${agent.role}.`);
   sections.push('You must make concrete changes to the codebase. Read files, write code, create tests, and fix issues. Do not just analyze — act.');
   sections.push('');
+
+  if (workflowPrompt) {
+    sections.push('## Workflow Contract');
+    sections.push(workflowPrompt);
+    sections.push('');
+  }
 
   if (agentInstructions) {
     sections.push('## Your Instructions');
@@ -325,10 +402,70 @@ export function buildAgentPrompt(
     sections.push(sanitize(intakeEvent.rawText));
   }
 
+  if (typeof intakeEvent.sourceMetadata.linearIdentifier === 'string') {
+    sections.push('');
+    sections.push(`Linear issue: ${intakeEvent.sourceMetadata.linearIdentifier}`);
+  }
+
+  if (priorAgentOutputs.length > 0) {
+    sections.push('');
+    sections.push('## Prior Agent Output');
+    sections.push(priorAgentOutputs.join('\n\n---\n\n'));
+  }
+
   if (intakeEvent.entities.labels?.length) {
     sections.push('');
     sections.push(`Labels: ${intakeEvent.entities.labels.join(', ')}`);
   }
 
   return sections.join('\n');
+}
+
+function truncateForHandoff(output: string): string {
+  if (!output.trim()) {
+    return '';
+  }
+  const maxHandoff = 8192;
+  if (output.length <= maxHandoff) {
+    return output;
+  }
+  return `(truncated)\n${output.slice(-maxHandoff)}`;
+}
+
+function formatLinearAgentSummary(params: {
+  agentType: string;
+  durationMs: number;
+  commitSha?: string;
+  changedFiles: string[];
+  output: string;
+  findings: Finding[];
+}): string {
+  const durationSeconds = Math.max(1, Math.round(params.durationMs / 1000));
+  const changedFiles = params.changedFiles.length > 0
+    ? `\n\nFiles changed (${params.changedFiles.length}):\n${params.changedFiles.slice(0, 10).map((file) => `- \`${file}\``).join('\n')}${params.changedFiles.length > 10 ? `\n- ... and ${params.changedFiles.length - 10} more` : ''}`
+    : '';
+  const findings = params.findings.length > 0
+    ? `\n\nFindings (${params.findings.length}):\n${params.findings.map((finding) => `- [${finding.severity}] ${finding.message}`).join('\n')}`
+    : '';
+  const output = params.output.trim()
+    ? `\n\nOutput:\n${truncatePreview(params.output, 2000)}`
+    : '';
+
+  return [
+    `**${params.agentType}** completed in ${durationSeconds}s`,
+    params.commitSha ? `Commit: \`${params.commitSha.slice(0, 7)}\`` : '',
+    changedFiles,
+    output,
+    findings,
+  ].filter(Boolean).join('\n');
+}
+
+function truncatePreview(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  const truncated = text.slice(0, maxLength);
+  const lastNewline = truncated.lastIndexOf('\n');
+  const preview = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
+  return `${preview}\n\n_(truncated)_`;
 }

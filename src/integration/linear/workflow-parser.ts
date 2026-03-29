@@ -1,24 +1,7 @@
-/**
- * WORKFLOW.md parser for Linear integration.
- *
- * Parses a Symphony-inspired WORKFLOW.md file with YAML frontmatter
- * into a typed WorkflowConfig object. Uses a lightweight hand-written
- * parser (no external YAML dependency) following the pattern from
- * src/agent-registry/frontmatter-parser.ts.
- *
- * Supports:
- * - Nested YAML keys (one level deep with dotted path)
- * - Simple arrays (  - value)
- * - Environment variable resolution ($VAR_NAME)
- * - Prompt template from markdown body after frontmatter
- */
-
 import { readFileSync } from 'node:fs';
+import { parse as parseYaml } from 'yaml';
 import { AppError } from '../../shared/errors';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import { validateWorkflowPromptTemplate } from './workflow-prompt';
 
 export interface WorkflowConfig {
   templates: Record<string, string[]>;
@@ -32,10 +15,18 @@ export interface WorkflowConfig {
   github?: {
     events: Record<string, string>;
   };
+  workspace?: {
+    root: string;
+  };
   agents: {
     maxConcurrent: number;
     routing: Record<string, string>;
     defaultTemplate: string;
+  };
+  agent: {
+    maxConcurrentAgents: number;
+    maxRetryBackoffMs: number;
+    maxTurns: number;
   };
   polling: {
     intervalMs: number;
@@ -44,34 +35,44 @@ export interface WorkflowConfig {
   stall: {
     timeoutMs: number;
   };
+  agentRunner: {
+    stallTimeoutMs: number;
+    command: string;
+    turnTimeoutMs: number;
+  };
+  hooks: {
+    afterCreate: string | null;
+    beforeRun: string | null;
+    afterRun: string | null;
+    beforeRemove: string | null;
+    timeoutMs: number;
+  };
   promptTemplate: string;
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/**
- * Parse a WORKFLOW.md file from disk into a WorkflowConfig.
- */
-export function parseWorkflowMd(filePath: string): WorkflowConfig {
-  const content = readFileSync(filePath, 'utf-8');
-  return parseWorkflowMdString(content);
+interface WorkflowDocument {
+  templates?: Record<string, unknown>;
+  tracker?: Record<string, unknown>;
+  github?: Record<string, unknown>;
+  workspace?: Record<string, unknown>;
+  agents?: Record<string, unknown>;
+  agent?: Record<string, unknown>;
+  polling?: Record<string, unknown>;
+  stall?: Record<string, unknown>;
+  agent_runner?: Record<string, unknown>;
+  hooks?: Record<string, unknown>;
 }
 
-/**
- * Parse WORKFLOW.md content (string) into a WorkflowConfig.
- * Useful for testing without disk I/O.
- */
+export function parseWorkflowMd(filePath: string): WorkflowConfig {
+  return parseWorkflowMdString(readFileSync(filePath, 'utf-8'));
+}
+
 export function parseWorkflowMdString(content: string): WorkflowConfig {
   const { frontmatter, body } = extractFrontmatter(content);
-  const flat = parseFlatYaml(frontmatter);
-  return buildConfig(flat, body);
+  const document = parseWorkflowDocument(frontmatter);
+  validatePromptTemplate(body);
+  return buildConfig(resolveEnvInValue(document) as WorkflowDocument, body);
 }
-
-// ---------------------------------------------------------------------------
-// Frontmatter extraction
-// ---------------------------------------------------------------------------
 
 function extractFrontmatter(content: string): { frontmatter: string; body: string } {
   const trimmed = content.trimStart();
@@ -90,352 +91,260 @@ function extractFrontmatter(content: string): { frontmatter: string; body: strin
   }
 
   const frontmatter = trimmed.slice(firstNewline + 1, endIndex);
-
-  if (frontmatter.trim().length === 0) {
+  if (!frontmatter.trim()) {
     throw new WorkflowParseError('WORKFLOW.md frontmatter is empty');
   }
 
-  const body = trimmed.slice(endIndex + 4).trim(); // skip \n---
-
-  return { frontmatter, body };
+  return {
+    frontmatter,
+    body: trimmed.slice(endIndex + 4).trim(),
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Simple nested YAML parser
-// ---------------------------------------------------------------------------
-
-interface FlatMap {
-  [key: string]: string | string[];
-}
-
-/**
- * Parse simple YAML into a flat map with dotted keys.
- * Supports one level of nesting and simple arrays.
- *
- * Example:
- *   tracker:
- *     kind: linear
- *     active_states:
- *       - Todo
- *       - In Progress
- *
- * Produces:
- *   { 'tracker.kind': 'linear', 'tracker.active_states': ['Todo', 'In Progress'] }
- */
-function parseFlatYaml(yaml: string): FlatMap {
-  const result: FlatMap = {};
-  const lines = yaml.split('\n');
-
-  let parentKey: string | null = null;
-  let subParentKey: string | null = null;
-  let currentKey: string | null = null;
-  let currentArray: string[] | null = null;
-
-  for (const line of lines) {
-    // Skip empty lines and comments
-    if (line.trim() === '' || line.trim().startsWith('#')) continue;
-
-    // Array item: "  - value" or "    - value"
-    const arrayMatch = line.match(/^\s+-\s+(.+)$/);
-    if (arrayMatch && currentKey) {
-      if (!currentArray) {
-        currentArray = [];
-      }
-      currentArray.push(unquote(arrayMatch[1].trim()));
-      continue;
+function parseWorkflowDocument(frontmatter: string): WorkflowDocument {
+  try {
+    const parsed = parseYaml(frontmatter);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new WorkflowParseError('frontmatter must be a YAML object');
     }
-
-    // Flush previous array (only if it has items — empty arrays from section
-    // headers should not overwrite scalar values already set for the key)
-    if (currentKey && currentArray && currentArray.length > 0) {
-      result[currentKey] = currentArray;
-      currentArray = null;
-      currentKey = null;
-    } else if (currentArray && currentArray.length === 0) {
-      // Discard empty arrays from section headers without overwriting
-      currentArray = null;
-      currentKey = null;
+    return parsed as WorkflowDocument;
+  } catch (error) {
+    if (error instanceof WorkflowParseError) {
+      throw error;
     }
-
-    const indent = line.search(/\S/);
-
-    // Third-level key-value (indent 4+): "    some.dotted.key: value"
-    if (indent >= 4 && subParentKey) {
-      const match = line.match(/^\s{4,}(\S[\S.]*)\s*:\s*(.*)$/);
-      if (match) {
-        const key = match[1].trim();
-        const value = match[2].trim();
-        const fullKey = `${subParentKey}.${key}`;
-
-        if (value === '' || value === '|') {
-          currentKey = fullKey;
-          currentArray = [];
-        } else {
-          result[fullKey] = unquote(value);
-          currentKey = fullKey;
-        }
-        continue;
-      }
-    }
-
-    // Indented key-value (nested): "  key: value"
-    const nestedMatch = line.match(/^(\s{2,3})(\w[\w_-]*)\s*:\s*(.*)$/);
-    if (nestedMatch && parentKey) {
-      const key = nestedMatch[2];
-      const value = nestedMatch[3].trim();
-      const fullKey = `${parentKey}.${key}`;
-
-      if (value === '' || value === '|' || value === '>') {
-        // This is a sub-section header (second-level nesting).
-        // It may be followed by key-value pairs (map) or array items.
-        // Set currentKey so array items can be collected if they follow.
-        subParentKey = fullKey;
-        currentKey = fullKey;
-        currentArray = [];
-      } else {
-        result[fullKey] = unquote(value);
-        currentKey = fullKey;
-        subParentKey = null;
-      }
-      continue;
-    }
-
-    // Top-level key: "key: value" or "key:"
-    const topMatch = line.match(/^(\w[\w_-]*)\s*:\s*(.*)$/);
-    if (topMatch) {
-      const key = topMatch[1];
-      const value = topMatch[2].trim();
-
-      if (value === '' || value === '|' || value === '>') {
-        // Section header or array start
-        parentKey = key;
-        subParentKey = null;
-        currentKey = null;
-        currentArray = null;
-      } else {
-        parentKey = null;
-        subParentKey = null;
-        result[key] = unquote(value);
-        currentKey = key;
-      }
-      continue;
-    }
+    throw new WorkflowParseError(
+      `invalid YAML frontmatter: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-
-  // Flush final array
-  if (currentKey && currentArray) {
-    result[currentKey] = currentArray;
-  }
-
-  return result;
 }
 
-function unquote(s: string): string {
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    return s.slice(1, -1);
-  }
-  return s;
-}
-
-// ---------------------------------------------------------------------------
-// Config builder
-// ---------------------------------------------------------------------------
-
-function buildConfig(flat: FlatMap, body: string): WorkflowConfig {
-  // Required fields
-  const kind = resolveEnv(getString(flat, 'tracker.kind'));
+function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
+  const tracker = asRecord(document.tracker, 'tracker');
+  const kind = readString(tracker.kind, 'tracker.kind');
   if (kind !== 'linear') {
     throw new WorkflowParseError(`tracker.kind must be 'linear', got '${kind}'`);
   }
 
-  const team = resolveEnv(getString(flat, 'tracker.team'));
-  if (!team) {
-    throw new WorkflowParseError('tracker.team is required');
-  }
-
-  const routingMap = extractRouting(flat);
-  if (!routingMap.default) {
+  const team = readString(tracker.team, 'tracker.team');
+  const templates = readTemplates(document.templates);
+  const routing = readRouting(document.agents);
+  const defaultTemplate = routing.default;
+  if (!defaultTemplate) {
     throw new WorkflowParseError('agents.routing.default is required');
   }
+  delete routing.default;
+  validateTemplateRouting(templates, routing, defaultTemplate);
 
-  const defaultTemplate = routingMap.default;
-  delete routingMap.default;
+  const workspace = asOptionalRecord(document.workspace);
+  const hooks = asOptionalRecord(document.hooks);
+  const agent = asOptionalRecord(document.agent);
+  const agentRunner = asOptionalRecord(document.agent_runner);
+  const polling = asOptionalRecord(document.polling);
+  const stall = asOptionalRecord(document.stall);
 
-  const githubEvents = extractGitHubEvents(flat);
-  const templates = extractTemplates(flat);
+  const maxConcurrent = readNumber(
+    agent?.max_concurrent_agents ?? document.agents?.max_concurrent,
+    'agent.max_concurrent_agents',
+    8,
+  );
+  const stallTimeoutMs = readNumber(
+    agentRunner?.stall_timeout_ms ?? stall?.timeout_ms,
+    'agent_runner.stall_timeout_ms',
+    300_000,
+  );
 
-  const config: WorkflowConfig = {
+  return {
     templates,
     tracker: {
       kind: 'linear',
-      apiKey: resolveEnv(getStringOptional(flat, 'tracker.api_key') ?? ''),
+      apiKey: readOptionalString(tracker.api_key) ?? '',
       team,
-      activeStates: getArray(flat, 'tracker.active_states') ?? ['Todo', 'In Progress'],
-      terminalStates: getArray(flat, 'tracker.terminal_states') ?? ['Done', 'Cancelled'],
+      activeStates: readStringArray(tracker.active_states, 'tracker.active_states', ['Todo', 'In Progress']),
+      terminalStates: readStringArray(tracker.terminal_states, 'tracker.terminal_states', ['Done', 'Cancelled']),
     },
-    ...(githubEvents ? { github: { events: githubEvents } } : {}),
+    ...(buildGitHubConfig(document.github) ? { github: buildGitHubConfig(document.github) } : {}),
+    ...(workspace?.root ? { workspace: { root: readString(workspace.root, 'workspace.root') } } : {}),
     agents: {
-      maxConcurrent: getNumber(flat, 'agents.max_concurrent') ?? 8,
-      routing: routingMap,
+      maxConcurrent,
+      routing,
       defaultTemplate,
     },
+    agent: {
+      maxConcurrentAgents: maxConcurrent,
+      maxRetryBackoffMs: readNumber(agent?.max_retry_backoff_ms, 'agent.max_retry_backoff_ms', 300_000),
+      maxTurns: readNumber(agent?.max_turns, 'agent.max_turns', 20),
+    },
     polling: {
-      intervalMs: getNumber(flat, 'polling.interval_ms') ?? 30_000,
-      enabled: getBoolean(flat, 'polling.enabled') ?? false,
+      intervalMs: readNumber(polling?.interval_ms, 'polling.interval_ms', 30_000),
+      enabled: readBoolean(polling?.enabled, false),
     },
     stall: {
-      timeoutMs: getNumber(flat, 'stall.timeout_ms') ?? 300_000,
+      timeoutMs: stallTimeoutMs,
+    },
+    agentRunner: {
+      stallTimeoutMs,
+      command: readOptionalString(agentRunner?.command) ?? 'claude',
+      turnTimeoutMs: readNumber(agentRunner?.turn_timeout_ms, 'agent_runner.turn_timeout_ms', 3_600_000),
+    },
+    hooks: {
+      afterCreate: readOptionalString(hooks?.after_create) ?? null,
+      beforeRun: readOptionalString(hooks?.before_run) ?? null,
+      afterRun: readOptionalString(hooks?.after_run) ?? null,
+      beforeRemove: readOptionalString(hooks?.before_remove) ?? null,
+      timeoutMs: readNumber(hooks?.timeout_ms, 'hooks.timeout_ms', 60_000),
     },
     promptTemplate: body,
   };
-
-  return config;
 }
 
-/**
- * Extract routing entries from flat map.
- * Keys like 'agents.routing.bug' -> { bug: 'tdd-workflow' }
- */
-function extractRouting(flat: FlatMap): Record<string, string> {
-  const routing: Record<string, string> = {};
-  const prefix = 'agents.routing.';
-
-  for (const key of Object.keys(flat)) {
-    if (key.startsWith(prefix)) {
-      const routeKey = key.slice(prefix.length);
-      const value = flat[key];
-      if (typeof value === 'string') {
-        routing[routeKey] = value;
-      }
-    }
-  }
-
-  // Also check for nested routing under 'routing' parent when agents is the parent
-  // This handles the case where "routing:" is a sub-section of "agents:"
-  // and contains key-value pairs like "bug: tdd-workflow"
-  if (Object.keys(routing).length === 0) {
-    for (const key of Object.keys(flat)) {
-      if (key.startsWith('routing.')) {
-        const routeKey = key.slice('routing.'.length);
-        const value = flat[key];
-        if (typeof value === 'string') {
-          routing[routeKey] = value;
-        }
-      }
-    }
-  }
-
-  return routing;
-}
-
-/**
- * Extract github.events entries from flat map.
- * Keys like 'github.events.pull_request.opened' -> { 'pull_request.opened': 'github-ops' }
- */
-function extractGitHubEvents(flat: FlatMap): Record<string, string> | undefined {
-  const events: Record<string, string> = {};
-  const prefix = 'github.events.';
-
-  for (const key of Object.keys(flat)) {
-    if (key.startsWith(prefix)) {
-      const ruleKey = key.slice(prefix.length);
-      const value = flat[key];
-      if (typeof value === 'string') {
-        events[ruleKey] = value;
-      }
-    }
-  }
-
-  if (Object.keys(events).length === 0) {
+function buildGitHubConfig(github: unknown): WorkflowConfig['github'] | undefined {
+  const record = asOptionalRecord(github);
+  const events = asOptionalRecord(record?.events);
+  if (!events) {
     return undefined;
   }
 
-  return events;
-}
-
-/**
- * Extract templates entries from flat map.
- * Keys like 'templates.tdd-workflow' -> { 'tdd-workflow': ['coder', 'tester'] }
- */
-function extractTemplates(flat: FlatMap): Record<string, string[]> {
-  const templates: Record<string, string[]> = {};
-  const prefix = 'templates.';
-
-  for (const key of Object.keys(flat)) {
-    if (key.startsWith(prefix)) {
-      const templateName = key.slice(prefix.length);
-      const value = flat[key];
-      if (Array.isArray(value)) {
-        templates[templateName] = value;
-      } else if (typeof value === 'string') {
-        // Single-agent template written as a scalar
-        templates[templateName] = [value];
-      }
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(events)) {
+    if (typeof value === 'string' && value.length > 0) {
+      normalized[key] = value;
     }
   }
 
-  return templates;
+  return Object.keys(normalized).length > 0 ? { events: normalized } : undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Value helpers
-// ---------------------------------------------------------------------------
+function readTemplates(value: unknown): Record<string, string[]> {
+  const templates = asRecord(value, 'templates');
+  const normalized = Object.fromEntries(
+    Object.entries(templates).map(([templateName, members]) => {
+      if (typeof members === 'string') {
+        return [templateName, [members]];
+      }
+      if (Array.isArray(members) && members.every((member) => typeof member === 'string')) {
+        return [templateName, members];
+      }
+      throw new WorkflowParseError(`templates.${templateName} must be a string or string[]`);
+    }),
+  );
 
-function getString(flat: FlatMap, key: string): string {
-  const value = flat[key];
+  if (Object.keys(normalized).length === 0) {
+    throw new WorkflowParseError('templates section must define at least one template');
+  }
+
+  return normalized;
+}
+
+function readRouting(value: unknown): Record<string, string> {
+  const agents = asRecord(value, 'agents');
+  const routing = asRecord(agents.routing, 'agents.routing');
+  return Object.fromEntries(
+    Object.entries(routing).map(([route, templateName]) => [route, readString(templateName, `agents.routing.${route}`)]),
+  );
+}
+
+function validateTemplateRouting(
+  templates: Record<string, string[]>,
+  routing: Record<string, string>,
+  defaultTemplate: string,
+): void {
+  const templateNames = new Set(Object.keys(templates));
+  if (!templateNames.has(defaultTemplate)) {
+    throw new WorkflowParseError(`agents.routing.default references unknown template '${defaultTemplate}'`);
+  }
+
+  for (const [route, templateName] of Object.entries(routing)) {
+    if (!templateNames.has(templateName)) {
+      throw new WorkflowParseError(`agents.routing.${route} references unknown template '${templateName}'`);
+    }
+  }
+}
+
+function validatePromptTemplate(body: string): void {
+  const unsupported = validateWorkflowPromptTemplate(body);
+  if (unsupported.length > 0) {
+    throw new WorkflowParseError(`promptTemplate contains unsupported placeholders: ${unsupported.join(', ')}`);
+  }
+}
+
+function resolveEnvInValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_match, varName) => process.env[varName] ?? '');
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => resolveEnvInValue(entry));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, resolveEnvInValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function asRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new WorkflowParseError(`${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function readString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new WorkflowParseError(`${field} is required`);
+  }
+  return value;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readStringArray(value: unknown, field: string, fallback: string[]): string[] {
   if (value === undefined || value === null) {
-    throw new WorkflowParseError(`Required field '${key}' is missing`);
+    return fallback;
   }
-  if (typeof value !== 'string') {
-    throw new WorkflowParseError(`Field '${key}' must be a string`);
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) {
+    throw new WorkflowParseError(`${field} must be a string[]`);
   }
   return value;
 }
 
-function getStringOptional(flat: FlatMap, key: string): string | undefined {
-  const value = flat[key];
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'string') return undefined;
-  return value;
-}
-
-function getNumber(flat: FlatMap, key: string): number | undefined {
-  const value = flat[key];
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'string') return undefined;
-  const parsed = parseInt(value, 10);
-  if (isNaN(parsed)) {
-    throw new WorkflowParseError(`Field '${key}' must be a number, got '${value}'`);
+function readNumber(value: unknown, field: string, fallback: number): number {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
   }
-  return parsed;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  throw new WorkflowParseError(`${field} must be a number`);
 }
 
-function getBoolean(flat: FlatMap, key: string): boolean | undefined {
-  const value = flat[key];
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'string') return undefined;
-  return value === 'true';
+function readBoolean(value: unknown, fallback: boolean): boolean {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return value === 'true';
+  }
+  return fallback;
 }
-
-function getArray(flat: FlatMap, key: string): string[] | undefined {
-  const value = flat[key];
-  if (value === undefined || value === null) return undefined;
-  if (Array.isArray(value)) return value;
-  return undefined;
-}
-
-/**
- * Resolve $VAR_NAME references from process.env.
- */
-function resolveEnv(value: string): string {
-  return value.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_match, varName) => {
-    return process.env[varName] ?? '';
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Error class
-// ---------------------------------------------------------------------------
 
 export class WorkflowParseError extends AppError {
   constructor(message: string) {

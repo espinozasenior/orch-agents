@@ -17,6 +17,18 @@ import {
 // ---------------------------------------------------------------------------
 
 const VALID_WORKFLOW = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+  tdd-workflow:
+    - .claude/agents/core/coder.md
+  feature-build:
+    - .claude/agents/core/coder.md
+  security-audit:
+    - .claude/agents/core/coder.md
+  sparc-full:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
@@ -105,6 +117,93 @@ describe('WorkflowParser', () => {
     const config = parseWorkflowMdString(VALID_WORKFLOW);
 
     assert.equal(config.stall.timeoutMs, 300000);
+    assert.equal(config.agentRunner.stallTimeoutMs, 300000);
+  });
+
+  it('should expose Symphony-aligned agent defaults', () => {
+    const config = parseWorkflowMdString(VALID_WORKFLOW);
+
+    assert.equal(config.agent.maxConcurrentAgents, 8);
+    assert.equal(config.agent.maxRetryBackoffMs, 300000);
+    assert.equal(config.agent.maxTurns, 20);
+    assert.equal(config.agentRunner.command, 'claude');
+    assert.equal(config.agentRunner.turnTimeoutMs, 3600000);
+    assert.equal(config.hooks.timeoutMs, 60000);
+    assert.equal(config.hooks.beforeRun, null);
+  });
+
+  it('should accept new Symphony key names', () => {
+    const workflow = `---
+tracker:
+  kind: linear
+  team: my-team
+
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+agents:
+  routing:
+    default: quick-fix
+
+agent:
+  max_concurrent_agents: 3
+  max_retry_backoff_ms: 120000
+  max_turns: 11
+
+agent_runner:
+  stall_timeout_ms: 45000
+  command: claude
+  turn_timeout_ms: 123000
+
+hooks:
+  before_run: echo before
+  timeout_ms: 4500
+---
+Prompt here.
+`;
+    const config = parseWorkflowMdString(workflow);
+
+    assert.equal(config.agent.maxConcurrentAgents, 3);
+    assert.equal(config.agents.maxConcurrent, 3);
+    assert.equal(config.agent.maxRetryBackoffMs, 120000);
+    assert.equal(config.agent.maxTurns, 11);
+    assert.equal(config.agentRunner.stallTimeoutMs, 45000);
+    assert.equal(config.stall.timeoutMs, 45000);
+    assert.equal(config.agentRunner.turnTimeoutMs, 123000);
+    assert.equal(config.hooks.beforeRun, 'echo before');
+    assert.equal(config.hooks.timeoutMs, 4500);
+  });
+
+  it('should parse workspace settings and multiline hooks with a real YAML path', () => {
+    const workflow = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+
+workspace:
+  root: /tmp/orch-agents
+
+hooks:
+  before_run: |
+    echo before
+    echo after
+---
+Prompt here.
+`;
+
+    const config = parseWorkflowMdString(workflow);
+
+    assert.equal(config.workspace?.root, '/tmp/orch-agents');
+    assert.equal(config.hooks.beforeRun, 'echo before\necho after\n');
   });
 
   it('should extract prompt template from body', () => {
@@ -130,6 +229,10 @@ describe('WorkflowParser', () => {
 
   it('should use defaults for optional polling fields', () => {
     const minimal = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   team: my-team
@@ -147,10 +250,20 @@ Prompt here.
     assert.equal(config.polling.enabled, false);
     assert.equal(config.stall.timeoutMs, 300000);
     assert.equal(config.agents.maxConcurrent, 8);
+    assert.equal(config.agent.maxConcurrentAgents, 8);
+    assert.equal(config.agent.maxRetryBackoffMs, 300000);
+    assert.equal(config.agent.maxTurns, 20);
+    assert.equal(config.agentRunner.command, 'claude');
+    assert.equal(config.agentRunner.turnTimeoutMs, 3600000);
+    assert.equal(config.hooks.timeoutMs, 60000);
   });
 
   it('should use default active/terminal states when not specified', () => {
     const minimal = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   team: my-team
@@ -182,6 +295,10 @@ agents:
 
   it('should throw when tracker.kind is not linear', () => {
     const bad = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: jira
   team: my-team
@@ -199,6 +316,10 @@ agents:
 
   it('should throw when tracker.team is missing', () => {
     const bad = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
 
@@ -215,6 +336,10 @@ agents:
 
   it('should throw when agents.routing.default is missing', () => {
     const bad = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   team: my-team
@@ -232,6 +357,10 @@ agents:
 
   it('should handle quoted values', () => {
     const quoted = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: "linear"
   team: 'my-team'
@@ -250,6 +379,10 @@ agents:
 
   it('should handle polling enabled=true', () => {
     const withPolling = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   team: my-team
@@ -271,6 +404,10 @@ polling:
 
   it('should handle empty body after frontmatter', () => {
     const noBody = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   team: my-team
@@ -283,5 +420,52 @@ agents:
     const config = parseWorkflowMdString(noBody);
 
     assert.equal(config.promptTemplate, '');
+  });
+
+  it('should reject unknown routed templates', () => {
+    const bad = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+    bug: missing-template
+---
+Prompt here.
+`;
+
+    assert.throws(
+      () => parseWorkflowMdString(bad),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('unknown template'),
+    );
+  });
+
+  it('should reject unsupported prompt placeholders', () => {
+    const bad = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+---
+Issue {{ issue.assignee }}
+`;
+
+    assert.throws(
+      () => parseWorkflowMdString(bad),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('unsupported placeholders'),
+    );
   });
 });
