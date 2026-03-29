@@ -11,6 +11,8 @@ export interface WorkflowConfig {
     team: string;
     activeStates: string[];
     terminalStates: string[];
+    activeTypes: string[];
+    terminalTypes: string[];
   };
   github?: {
     events: Record<string, string>;
@@ -161,6 +163,8 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
       team,
       activeStates: readStringArray(tracker.active_states, 'tracker.active_states', ['Todo', 'In Progress']),
       terminalStates: readStringArray(tracker.terminal_states, 'tracker.terminal_states', ['Done', 'Cancelled']),
+      activeTypes: readStringArray(tracker.active_types, 'tracker.active_types', ['unstarted', 'started']),
+      terminalTypes: readStringArray(tracker.terminal_types, 'tracker.terminal_types', ['completed', 'canceled']),
     },
     ...(buildGitHubConfig(document.github) ? { github: buildGitHubConfig(document.github) } : {}),
     ...(workspace?.root ? { workspace: { root: readString(workspace.root, 'workspace.root') } } : {}),
