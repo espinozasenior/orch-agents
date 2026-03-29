@@ -49,8 +49,25 @@ const DEFAULT_WORKFLOW_CONFIG: WorkflowConfig = {
     },
     defaultTemplate: 'quick-fix',
   },
+  agent: {
+    maxConcurrentAgents: 8,
+    maxRetryBackoffMs: 300_000,
+    maxTurns: 20,
+  },
   polling: { intervalMs: 30_000, enabled: false },
   stall: { timeoutMs: 300_000 },
+  agentRunner: {
+    stallTimeoutMs: 300_000,
+    command: 'claude',
+    turnTimeoutMs: 3_600_000,
+  },
+  hooks: {
+    afterCreate: null,
+    beforeRun: null,
+    afterRun: null,
+    beforeRemove: null,
+    timeoutMs: 60_000,
+  },
   promptTemplate: '',
 };
 

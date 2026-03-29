@@ -23,12 +23,14 @@ import { verifySignature } from '../../webhook-gateway/signature-verifier';
 import { normalizeLinearEvent } from './linear-normalizer';
 import type { LinearWebhookPayload } from './types';
 import { handleWebhookError } from '../../shared/webhook-error-handler';
+import type { IntakeEvent } from '../../types';
 
 export interface LinearWebhookHandlerDeps {
   config: AppConfig;
   logger: Logger;
   eventBus: EventBus;
   eventBuffer?: EventBuffer;
+  onLinearIntake?: (intakeEvent: IntakeEvent, meta: { deliveryId: string }) => Promise<void> | void;
 }
 
 /**
@@ -53,6 +55,7 @@ export async function linearWebhookHandler(
         try {
           const raw = body as string;
           (req as unknown as Record<string, unknown>).__rawBody = raw;
+          (req as unknown as Record<string, unknown>).rawBodyString = raw;
           const parsed = JSON.parse(raw);
           done(null, parsed);
         } catch (err) {
@@ -62,7 +65,10 @@ export async function linearWebhookHandler(
     );
 
     fastify.addHook('preHandler', async (request) => {
-      const raw = (request.raw as unknown as Record<string, unknown>).__rawBody;
+      const raw =
+        request.rawBodyString
+        ?? ((request.raw as unknown as Record<string, unknown>).__rawBody as string | undefined)
+        ?? ((request as unknown as Record<string, unknown>).__rawBody as string | undefined);
       if (typeof raw === 'string') {
         request.rawBodyString = raw;
       }
@@ -159,6 +165,7 @@ export async function linearWebhookHandler(
           deliveryId,
         );
         eventBus.publish(domainEvent);
+        await deps.onLinearIntake?.(intakeEvent, { deliveryId });
 
         log.info('Linear webhook processed', {
           deliveryId,

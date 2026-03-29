@@ -20,6 +20,7 @@ import type { GitHubClient } from '../../integration/github-client';
 import type { LinearClient } from '../../integration/linear/linear-client';
 import type { CancellationController } from '../runtime/cancellation-controller';
 import { formatAgentComment, getBotName } from '../../shared/agent-identity';
+import { buildWorkpadComment, postOrUpdateWorkpad } from '../../integration/linear/workpad-reporter';
 
 // ---------------------------------------------------------------------------
 // Execution Engine
@@ -33,6 +34,7 @@ export interface ExecutionEngineDeps {
   githubClient?: GitHubClient;
   linearClient?: LinearClient;
   cancellationController?: CancellationController;
+  linearExecutionMode?: 'generic' | 'symphony';
 }
 
 /**
@@ -60,6 +62,24 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
   unsubscribers.push(eventBus.subscribe('IntakeCompleted', async (event) => {
     const intakeEvent = event.payload.intakeEvent;
     const correlationId = event.correlationId;
+    const executionKey = getExecutionKey(intakeEvent);
+
+    if (intakeEvent.source === 'linear' && deps.linearExecutionMode === 'symphony') {
+      logger.info('Skipping generic execution for Linear intake because Symphony owns the runtime', {
+        workItemId: executionKey,
+        correlationId,
+      });
+      return;
+    }
+
+    const activeItems = tracker.listActive();
+    const alreadyRunning = activeItems.some(item => item.workItemId === executionKey);
+    if (alreadyRunning) {
+      logger.warn('Duplicate execution ignored — work item already running', {
+        workItemId: executionKey,
+      });
+      return;
+    }
 
     // Resolve template name from intake metadata or default
     const templateName = (intakeEvent.sourceMetadata?.template as string)
@@ -77,7 +97,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
         logger.error(reason);
         eventBus.publish(
           createDomainEvent('WorkFailed', {
-            workItemId: intakeEvent.id,
+            workItemId: executionKey,
             failureReason: reason,
             retryCount: 0,
           }, correlationId),
@@ -105,25 +125,41 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
     logger.info('Executing work item', {
       planId,
-      workItemId: intakeEvent.id,
+      workItemId: executionKey,
       template: templateName,
       agents: agentTypes,
       correlationId,
     });
 
-    // Guard against duplicate processing — check by workItemId, not planId
-    // (planId is a fresh UUID every time, so checking it would never match)
-    const activeItems = tracker.listActive();
-    const alreadyRunning = activeItems.some(item => item.workItemId === intakeEvent.id);
-    if (alreadyRunning) {
-      logger.warn('Duplicate execution ignored — work item already running', {
-        workItemId: intakeEvent.id,
-        planId,
-      });
-      return;
-    }
+    tracker.start(planId, executionKey);
 
-    tracker.start(planId, intakeEvent.id);
+    eventBus.publish(
+      createDomainEvent('PlanCreated', {
+        workflowPlan: plan,
+        intakeEvent,
+      }, correlationId),
+    );
+
+    if (deps.linearClient && intakeEvent.sourceMetadata?.linearIssueId) {
+      const issueId = intakeEvent.sourceMetadata.linearIssueId as string;
+      await moveLinearIssueToInProgress(deps.linearClient, issueId, logger);
+      await postOrUpdateWorkpad(
+        deps.linearClient,
+        issueId,
+        buildWorkpadComment({
+          planId,
+          linearIssueId: issueId,
+          currentPhase: 'starting',
+          status: 'active',
+          startedAt: new Date().toISOString(),
+          elapsedMs: 0,
+          agents: [],
+          phases: [],
+          findings: [],
+        }),
+        logger,
+      );
+    }
 
     // AIG: Instant feedback — acknowledge receipt before execution
     if (deps.githubClient && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
@@ -137,17 +173,6 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       ).catch((err: unknown) => logger.warn('AIG instant feedback failed', { error: String(err) }));
     }
 
-    // AIG: Instant feedback for Linear
-    if (deps.linearClient && intakeEvent.sourceMetadata?.linearIssueId) {
-      const issueId = intakeEvent.sourceMetadata.linearIssueId as string;
-      await deps.linearClient.createComment(
-        issueId,
-        formatAgentComment(
-          `**orch-agents** is picking this up...\n\nTemplate: \`${templateName}\` | Agents: ${agentTypes.join(', ')}`,
-        ),
-      ).catch((err: unknown) => logger.warn('AIG Linear instant feedback failed', { error: String(err) }));
-    }
-
     try {
       const result = await simpleExecutor.execute(plan, intakeEvent);
 
@@ -158,7 +183,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
         tracker.fail(planId, reason);
         eventBus.publish(
           createDomainEvent('WorkFailed', {
-            workItemId: intakeEvent.id,
+            workItemId: executionKey,
             failureReason: reason,
             retryCount: 0,
           }, correlationId),
@@ -168,7 +193,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
       eventBus.publish(
         createDomainEvent('WorkCompleted', {
-          workItemId: intakeEvent.id,
+          workItemId: executionKey,
           planId,
           phaseCount: result.agentResults.length,
           totalDuration: result.totalDuration,
@@ -182,7 +207,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
       eventBus.publish(
         createDomainEvent('WorkFailed', {
-          workItemId: intakeEvent.id,
+          workItemId: executionKey,
           failureReason: reason,
           retryCount: 0,
         }, correlationId),
@@ -196,4 +221,46 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       unsub();
     }
   };
+}
+
+function getExecutionKey(intakeEvent: { source: string; id: string; sourceMetadata?: Record<string, unknown> }): string {
+  if (intakeEvent.source === 'linear' && typeof intakeEvent.sourceMetadata?.linearIssueId === 'string') {
+    return `linear:${intakeEvent.sourceMetadata.linearIssueId}`;
+  }
+
+  return intakeEvent.id;
+}
+
+async function moveLinearIssueToInProgress(
+  linearClient: LinearClient,
+  issueId: string,
+  logger: Logger,
+): Promise<void> {
+  try {
+    const issue = await linearClient.fetchIssue(issueId);
+    if (issue.state.name.toLowerCase() === 'in progress') {
+      return;
+    }
+    if (!issue.team?.id) {
+      logger.warn('Linear issue team missing; cannot move to In Progress', { issueId });
+      return;
+    }
+
+    const states = await linearClient.fetchTeamStates(issue.team.id);
+    const inProgressState = states.find((state) => state.name.toLowerCase() === 'in progress');
+    if (!inProgressState) {
+      logger.warn('Linear team has no In Progress state', {
+        issueId,
+        teamId: issue.team.id,
+      });
+      return;
+    }
+
+    await linearClient.updateIssueState(issueId, inProgressState.id);
+  } catch (err) {
+    logger.warn('Failed to move Linear issue to In Progress', {
+      issueId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

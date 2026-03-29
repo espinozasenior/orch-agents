@@ -254,4 +254,34 @@ describe('Pipeline E2E', () => {
 
     handle = undefined;
   });
+
+  it('does not send Linear intake through the old generic execution path in Symphony mode', async () => {
+    const eventBus = createEventBus();
+    const logger = createLogger({ level: 'error' });
+
+    handle = startPipeline({
+      eventBus,
+      logger,
+      simpleExecutor: makeStubExecutor(),
+      workflowConfig: makeWorkflowConfig(),
+      linearExecutionMode: 'symphony',
+    });
+
+    eventBus.subscribe('WorkCompleted', () => {
+      throw new Error('Linear intake should not produce WorkCompleted through the generic execution engine');
+    });
+
+    const intakeEvent = makeIntakeEvent({
+      id: 'linear-pipeline-001',
+      source: 'linear',
+      sourceMetadata: {
+        template: 'quick-fix',
+        linearIssueId: 'issue-linear-001',
+      },
+      intent: 'custom:linear-todo',
+    });
+
+    eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'linear-pipeline-corr-001'));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
 });

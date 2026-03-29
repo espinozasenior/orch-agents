@@ -12,6 +12,7 @@ import { buildServer } from './server';
 import { startPipeline } from './pipeline';
 import { createWorktreeManager } from './execution/workspace/worktree-manager';
 import { createInteractiveExecutor } from './execution/runtime/interactive-executor';
+import { createSdkExecutor } from './execution/runtime/sdk-executor';
 import { createArtifactApplier } from './execution/workspace/artifact-applier';
 import { createReviewGate, createStubDiffReviewer, createCliTestRunner, createPatternSecurityScanner } from './review/review-gate';
 import { createClaudeDiffReviewer } from './review/claude-diff-reviewer';
@@ -22,10 +23,15 @@ import { buildFixPrompt } from './execution/prompt-builder';
 import { isAbsolute as pathIsAbsolute } from 'node:path';
 import { createSimpleExecutor, type SimpleExecutor } from './execution/simple-executor';
 import { getDefaultRegistry } from './agent-registry/agent-registry';
-import { parseWorkflowMd, type WorkflowConfig } from './integration/linear/workflow-parser';
+import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import { resolve as pathResolve } from 'node:path';
 import { createGitHubAppTokenProvider, type GitHubTokenProvider } from './integration/github-app-auth';
 import { setBotName } from './shared/agent-identity';
+import { createLinearClient } from './integration/linear/linear-client';
+import { createSymphonyOrchestrator, type SymphonyOrchestrator } from './execution/orchestrator/symphony-orchestrator';
+import { createWorkpadReporter, type WorkpadReporter } from './integration/linear/workpad-reporter';
+import { createWorkflowConfigStore } from './integration/linear/workflow-config-store';
+import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -42,14 +48,16 @@ async function main(): Promise<void> {
   // Fail hard at startup if missing or invalid.
   const workflowMdPath = process.env.WORKFLOW_MD_PATH
     ?? pathResolve(process.cwd(), 'WORKFLOW.md');
+  const workflowConfigStore = createWorkflowConfigStore({
+    filePath: workflowMdPath,
+    logger,
+    watchFile: true,
+  });
+  workflowConfigStore.start();
+
   let workflowConfig: WorkflowConfig;
   try {
-    workflowConfig = parseWorkflowMd(workflowMdPath);
-    logger.info('Loaded WORKFLOW.md', {
-      path: workflowMdPath,
-      templates: Object.keys(workflowConfig.templates),
-      defaultTemplate: workflowConfig.agents.defaultTemplate,
-    });
+    workflowConfig = workflowConfigStore.requireConfig();
   } catch (err) {
     logger.fatal('Failed to load WORKFLOW.md — cannot start without it', {
       path: workflowMdPath,
@@ -60,7 +68,7 @@ async function main(): Promise<void> {
 
   // GitHub App authentication — prefer over PAT for bot identity
   let tokenProvider: GitHubTokenProvider | undefined;
-  let effectiveGithubToken: string | undefined = config.githubToken || undefined;
+  const effectiveGithubToken: string | undefined = config.githubToken || undefined;
 
   if ((config.githubAppId || config.githubAppPrivateKeyPath || config.githubAppInstallationId)
       && !(config.githubAppId && config.githubAppPrivateKeyPath && config.githubAppInstallationId)) {
@@ -94,6 +102,9 @@ async function main(): Promise<void> {
 
   let simpleExecutor: SimpleExecutor | undefined;
   let reviewGate: ReturnType<typeof createReviewGate> | undefined;
+  let symphonyOrchestrator: SymphonyOrchestrator | undefined;
+  let workpadReporter: WorkpadReporter | undefined;
+  let linearExecutionMode: 'generic' | 'symphony' = 'generic';
 
   if (useInteractiveAgents) {
     const execLogger = logger.child ? logger.child({ module: 'interactive' }) : logger;
@@ -108,8 +119,13 @@ async function main(): Promise<void> {
     const maxFixAttempts = (isNaN(parsedAttempts) || parsedAttempts < 1 || parsedAttempts > 10) ? 3 : parsedAttempts;
 
     const worktreeManager = createWorktreeManager({ logger: execLogger, basePath: worktreeBasePath });
-    const interactiveExecutor = createInteractiveExecutor({ logger: execLogger });
+    const interactiveExecutor = process.env.USE_LEGACY_INTERACTIVE_EXECUTOR === 'true'
+      ? createInteractiveExecutor({ logger: execLogger })
+      : createSdkExecutor({ logger: execLogger });
     const artifactApplier = createArtifactApplier({ logger: execLogger });
+    const linearClient = workflowConfig.tracker.apiKey
+      ? createLinearClient({ apiKey: workflowConfig.tracker.apiKey, logger: execLogger })
+      : undefined;
 
     const diffReviewer = config.enableClaudeDiffReview
       ? createClaudeDiffReviewer({ logger: execLogger })
@@ -204,9 +220,11 @@ async function main(): Promise<void> {
       fixItLoop,
       agentRegistry: getDefaultRegistry(),
       githubClient,
+      linearClient,
       logger: execLogger,
       eventBus,
       maxFixAttempts,
+      agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
     });
 
     logger.info('Interactive agent execution enabled', {
@@ -216,6 +234,41 @@ async function main(): Promise<void> {
       hasGitHubApp: !!tokenProvider,
       simpleExecutor: true,
     });
+
+    if (config.linearEnabled && linearClient) {
+      symphonyOrchestrator = createSymphonyOrchestrator({
+        workflowConfig,
+        workflowConfigProvider: () => workflowConfigStore.requireConfig(),
+        workflowState: () => workflowConfigStore.getSnapshot(),
+        linearClient,
+        logger: execLogger,
+        worktreeBasePath,
+        defaultRepo: process.env.GITHUB_REPOSITORY,
+        defaultBranch: process.env.GITHUB_BASE_BRANCH ?? 'main',
+      });
+      linearExecutionMode = 'symphony';
+
+      if (workflowConfig.polling.enabled) {
+        symphonyOrchestrator.start();
+        logger.info('Symphony orchestrator enabled for Linear polling', {
+          pollIntervalMs: workflowConfig.polling.intervalMs,
+        });
+      } else {
+        logger.info('Symphony orchestrator enabled for Linear webhook handoff', {
+          pollingEnabled: workflowConfig.polling.enabled,
+        });
+      }
+    }
+
+    if (config.linearEnabled && linearClient) {
+      workpadReporter = createWorkpadReporter({
+        eventBus,
+        logger: execLogger,
+        linearClient,
+      });
+      workpadReporter.start();
+      logger.info('Linear workpad reporter enabled');
+    }
   }
 
   if (!simpleExecutor) {
@@ -231,9 +284,36 @@ async function main(): Promise<void> {
 
   const pipeline = startPipeline({
     eventBus, logger, reviewGate, simpleExecutor, workflowConfig,
+    linearExecutionMode,
+    githubClient: tokenProvider
+      ? createGitHubClient({ logger, tokenProvider })
+      : effectiveGithubToken
+        ? createGitHubClient({ logger, token: effectiveGithubToken })
+        : undefined,
+    linearClient: config.linearEnabled && workflowConfig.tracker.apiKey
+      ? createLinearClient({ apiKey: workflowConfig.tracker.apiKey, logger })
+      : undefined,
   });
 
-  const server = await buildServer({ config, logger, eventBus, workflowConfig });
+  const server = await buildServer({
+    config,
+    logger,
+    eventBus,
+    workflowConfig,
+    getStatusSnapshot: (): StatusSurfaceSnapshot => ({
+      workflow: workflowConfigStore.getSnapshot(),
+      orchestrator: symphonyOrchestrator?.getSnapshot(),
+      links: {
+        ...(process.env.OPERATOR_DASHBOARD_URL ? { dashboardUrl: process.env.OPERATOR_DASHBOARD_URL } : {}),
+        ...(process.env.TERMINAL_SNAPSHOT_URL ? { terminalSnapshotUrl: process.env.TERMINAL_SNAPSHOT_URL } : {}),
+      },
+    }),
+    onLinearIntake: symphonyOrchestrator
+      ? async () => {
+        await symphonyOrchestrator?.onTick();
+      }
+      : undefined,
+  });
 
   try {
     const host = process.env.BIND_HOST ?? '0.0.0.0';
@@ -249,6 +329,9 @@ async function main(): Promise<void> {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info('Shutting down', { signal });
+    await symphonyOrchestrator?.stop();
+    workflowConfigStore.stop();
+    workpadReporter?.stop();
     pipeline.shutdown();
     eventBus.removeAllListeners();
     await server.close();
