@@ -23,6 +23,7 @@ import type { WorkflowConfig } from '../integration/linear/workflow-parser';
 import { ValidationError } from '../shared/errors';
 import { handleWebhookError } from '../shared/webhook-error-handler';
 import { getBotName, getBotMarker } from '../shared/agent-identity';
+import type { OrchestratorSnapshot } from '../execution/orchestrator/symphony-orchestrator';
 
 export interface WebhookRouterDeps {
   config: AppConfig;
@@ -30,6 +31,19 @@ export interface WebhookRouterDeps {
   eventBus: EventBus;
   eventBuffer?: EventBuffer;
   workflowConfig?: WorkflowConfig;
+  getStatusSnapshot?: () => StatusSurfaceSnapshot;
+}
+
+export interface StatusSurfaceSnapshot {
+  workflow: {
+    valid: boolean;
+    error?: string;
+  };
+  orchestrator?: OrchestratorSnapshot;
+  links?: {
+    dashboardUrl?: string;
+    terminalSnapshotUrl?: string;
+  };
 }
 
 // Extend FastifyRequest to hold the raw body string
@@ -63,8 +77,10 @@ export async function webhookRouter(
     (req, body, done) => {
       try {
         const raw = body as string;
-        // Stash raw body on the raw request for later retrieval
+        // Stash raw body in multiple places because Fastify exposes different
+        // request objects at parse time vs route time depending on plugin scope.
         (req as unknown as Record<string, unknown>).__rawBody = raw;
+        (req as unknown as Record<string, unknown>).rawBodyString = raw;
         const parsed = JSON.parse(raw);
         done(null, parsed);
       } catch (err) {
@@ -75,10 +91,18 @@ export async function webhookRouter(
 
   // Hook to copy raw body from the underlying request to FastifyRequest
   fastify.addHook('preHandler', async (request) => {
-    const raw = (request.raw as unknown as Record<string, unknown>).__rawBody;
+    const raw =
+      request.rawBodyString
+      ?? ((request.raw as unknown as Record<string, unknown>).__rawBody as string | undefined)
+      ?? ((request as unknown as Record<string, unknown>).__rawBody as string | undefined);
     if (typeof raw === 'string') {
       request.rawBodyString = raw;
     }
+  });
+
+  fastify.get('/status', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const snapshot = deps.getStatusSnapshot?.() ?? buildEmptyStatusSnapshot(deps.workflowConfig);
+    return reply.status(200).send(projectStatusSurface(snapshot));
   });
 
   fastify.post(
@@ -220,4 +244,77 @@ export async function webhookRouter(
       }
     },
   );
+}
+
+function buildEmptyStatusSnapshot(workflowConfig?: WorkflowConfig): StatusSurfaceSnapshot {
+  return {
+    workflow: { valid: true },
+    orchestrator: {
+      starting: false,
+      workflow: { valid: true },
+      running: [],
+      retries: [],
+      claimed: [],
+      completed: [],
+      startup: {
+        cleanedWorkspaces: [],
+      },
+      ...(workflowConfig?.polling.enabled ? { nextPollAt: undefined } : {}),
+    },
+  };
+}
+
+function projectStatusSurface(snapshot: StatusSurfaceSnapshot) {
+  const orchestrator = snapshot.orchestrator ?? {
+    starting: false,
+    workflow: { valid: snapshot.workflow.valid, error: snapshot.workflow.error },
+    running: [],
+    retries: [],
+    claimed: [],
+    completed: [],
+    startup: { cleanedWorkspaces: [] },
+    nextPollAt: undefined,
+  };
+
+  const tokenTotals = orchestrator.running.reduce(
+    (totals, entry) => ({
+      input: totals.input + (entry.tokenUsage?.input ?? 0),
+      output: totals.output + (entry.tokenUsage?.output ?? 0),
+    }),
+    { input: 0, output: 0 },
+  );
+
+  const latestRunningEvent = [...orchestrator.running].sort(
+    (left, right) => right.lastEventTimestamp - left.lastEventTimestamp,
+  )[0];
+
+  const latestError = snapshot.workflow.error
+    ? {
+      source: 'workflow',
+      message: snapshot.workflow.error,
+    }
+    : latestRunningEvent && latestRunningEvent.lastEventType === 'error'
+      ? {
+        source: 'orchestrator',
+        message: latestRunningEvent.lastEventType,
+        issueId: latestRunningEvent.issueId,
+      }
+      : null;
+
+  return {
+    workflow: snapshot.workflow,
+    summary: {
+      activeIssueCount: orchestrator.running.length,
+      retryCount: orchestrator.retries.length,
+      nextRefreshAt: orchestrator.nextPollAt ?? null,
+      tokenTotals,
+    },
+    running: orchestrator.running.map((entry) => ({
+      ...entry,
+      runtimeDurationMs: Math.max(0, Date.now() - entry.startedAt),
+    })),
+    retries: orchestrator.retries,
+    latestError,
+    links: snapshot.links ?? {},
+  };
 }

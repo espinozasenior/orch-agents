@@ -255,7 +255,7 @@ describe('GitHubClient', () => {
       assert.equal(calls.length, 1);
       assert.equal(calls[0].command, 'git');
       assert.deepEqual(calls[0].args, [
-        '-C', '/tmp/wt', 'push', 'origin', 'agent/plan-1/coder:feature-branch',
+        '-C', '/tmp/wt', 'push', 'origin', 'HEAD:refs/heads/feature-branch',
       ]);
     });
 

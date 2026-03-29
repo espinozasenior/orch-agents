@@ -15,12 +15,16 @@ import { linearWebhookHandler } from './integration/linear/linear-webhook-handle
 import { setBotUsername } from './intake/github-workflow-normalizer';
 import { setBotName } from './shared/agent-identity';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
+import type { IntakeEvent } from './types';
+import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 
 export interface ServerDependencies {
   config: AppConfig;
   logger: Logger;
   eventBus: EventBus;
   workflowConfig?: WorkflowConfig;
+  onLinearIntake?: (intakeEvent: IntakeEvent, meta: { deliveryId: string }) => Promise<void> | void;
+  getStatusSnapshot?: () => StatusSurfaceSnapshot;
 }
 
 /**
@@ -53,7 +57,11 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
   });
 
   // ── Webhook gateway routes ──────────────────────────────────
-  await server.register(webhookRouter, { ...deps, workflowConfig: deps.workflowConfig });
+  await server.register(webhookRouter, {
+    ...deps,
+    workflowConfig: deps.workflowConfig,
+    getStatusSnapshot: deps.getStatusSnapshot,
+  });
 
   // ── Linear webhook route ──────────────────────────────────
   if (config.linearEnabled) {
@@ -61,6 +69,7 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
       config,
       logger,
       eventBus: deps.eventBus,
+      onLinearIntake: deps.onLinearIntake,
     });
     logger.info('Linear webhook route registered', { path: '/webhooks/linear' });
   }
