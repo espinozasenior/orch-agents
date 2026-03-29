@@ -7,7 +7,7 @@
  */
 
 import { spawn as _spawn } from 'node:child_process';
-import type { SPARCPhase } from '../../types';
+import type { ContinuationState, SPARCPhase, TokenUsage } from '../../types';
 import type { Logger } from '../../shared/logger';
 import { createAgentSandbox, type AgentSandbox } from './agent-sandbox';
 import { buildSafeEnv } from '../../shared/safe-env';
@@ -31,7 +31,10 @@ export interface TaskExecutionResult {
   output: string;
   duration: number;
   error?: string;
-  tokenUsage?: { input: number; output: number };
+  tokenUsage?: TokenUsage;
+  sessionId?: string;
+  lastActivityAt?: string;
+  continuationState?: ContinuationState;
 }
 
 export interface TaskExecutor {
