@@ -18,8 +18,14 @@ import { AppError } from '../../shared/errors';
 export interface LinearClient {
   /** Fetch a single issue by ID. */
   fetchIssue(issueId: string): Promise<LinearIssueResponse>;
+  /** Fetch workflow states for a team. */
+  fetchTeamStates(teamId: string): Promise<Array<{ id: string; name: string; type?: string }>>;
   /** Fetch all active issues for a team. */
   fetchActiveIssues(teamId: string): Promise<LinearIssueResponse[]>;
+  /** Fetch candidate issues for the configured active states. */
+  fetchIssuesByStates(teamId: string, stateNames: string[]): Promise<LinearIssueResponse[]>;
+  /** Fetch only issue IDs and state names for reconciliation. */
+  fetchIssueStatesByIds(issueIds: string[]): Promise<Array<{ id: string; state: string }>>;
   /** Fetch comments on an issue. */
   fetchComments(issueId: string): Promise<LinearCommentResponse[]>;
   /** Create a comment on an issue. */
@@ -28,6 +34,22 @@ export interface LinearClient {
   updateComment(commentId: string, body: string): Promise<void>;
   /** Update issue state. */
   updateIssueState(issueId: string, stateId: string): Promise<void>;
+  /** Optional attachment creation hook for richer tool bridges. */
+  createAttachment?(issueId: string, title: string, url: string): Promise<string>;
+}
+
+export type LinearToolOperation =
+  | { kind: 'comment.create'; issueId: string; body: string }
+  | { kind: 'comment.update'; commentId: string; body: string }
+  | { kind: 'issue.updateState'; issueId: string; stateId: string }
+  | { kind: 'attachment.create'; issueId: string; title: string; url: string };
+
+export type LinearToolResult =
+  | { ok: true; resourceId?: string }
+  | { ok: false; error: string };
+
+export interface LinearToolBridge {
+  invoke(operation: LinearToolOperation): Promise<LinearToolResult>;
 }
 
 export interface LinearIssueResponse {
@@ -88,6 +110,44 @@ const FETCH_ACTIVE_ISSUES_QUERY = `
     team(id: $teamId) {
       issues(filter: { state: { type: { nin: ["completed", "canceled"] } } }, first: 100) {
         nodes { ${ISSUE_FIELDS} }
+      }
+    }
+  }
+`;
+
+const FETCH_TEAM_STATES_QUERY = `
+  query FetchTeamStates($teamId: String!) {
+    team(id: $teamId) {
+      states {
+        nodes {
+          id
+          name
+          type
+        }
+      }
+    }
+  }
+`;
+
+const FETCH_ISSUES_BY_STATES_QUERY = `
+  query FetchIssuesByStates($teamId: String!, $stateNames: [String!]!) {
+    team(id: $teamId) {
+      issues(
+        filter: { state: { name: { in: $stateNames } } },
+        first: 100
+      ) {
+        nodes { ${ISSUE_FIELDS} }
+      }
+    }
+  }
+`;
+
+const FETCH_ISSUE_STATES_BY_IDS_QUERY = `
+  query FetchIssueStatesByIds($issueIds: [String!]!) {
+    nodes(ids: $issueIds) {
+      ... on Issue {
+        id
+        state { name }
       }
     }
   }
@@ -231,6 +291,35 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
       return data.team.issues.nodes;
     },
 
+    async fetchTeamStates(teamId) {
+      const data = await graphql<{
+        team: { states: { nodes: Array<{ id: string; name: string; type?: string }> } };
+      }>(FETCH_TEAM_STATES_QUERY, { teamId });
+      return data.team.states.nodes;
+    },
+
+    async fetchIssuesByStates(teamId, stateNames) {
+      const data = await graphql<{
+        team: { issues: { nodes: LinearIssueResponse[] } };
+      }>(FETCH_ISSUES_BY_STATES_QUERY, { teamId, stateNames });
+      return data.team.issues.nodes;
+    },
+
+    async fetchIssueStatesByIds(issueIds) {
+      if (issueIds.length === 0) {
+        return [];
+      }
+      const data = await graphql<{
+        nodes: Array<{ id: string; state?: { name: string } | null } | null>;
+      }>(FETCH_ISSUE_STATES_BY_IDS_QUERY, { issueIds });
+      return data.nodes
+        .filter((node): node is { id: string; state?: { name: string } | null } => node !== null)
+        .map((node) => ({
+          id: node.id,
+          state: node.state?.name ?? '',
+        }));
+    },
+
     async fetchComments(issueId) {
       const data = await graphql<{
         issue: { comments: { nodes: LinearCommentResponse[] } };
@@ -257,6 +346,35 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
         UPDATE_ISSUE_STATE_MUTATION,
         { issueId, stateId },
       );
+    },
+  };
+}
+
+export function createLinearToolBridge(
+  client: Pick<LinearClient, 'createComment' | 'updateComment' | 'updateIssueState'> & {
+    createAttachment?: (issueId: string, title: string, url: string) => Promise<string>;
+  },
+): LinearToolBridge {
+  return {
+    async invoke(operation: LinearToolOperation): Promise<LinearToolResult> {
+      switch (operation.kind) {
+        case 'comment.create':
+          return { ok: true, resourceId: await client.createComment(operation.issueId, operation.body) };
+        case 'comment.update':
+          await client.updateComment(operation.commentId, operation.body);
+          return { ok: true };
+        case 'issue.updateState':
+          await client.updateIssueState(operation.issueId, operation.stateId);
+          return { ok: true };
+        case 'attachment.create':
+          if (!client.createAttachment) {
+            return { ok: false, error: 'Linear attachment bridge is not configured' };
+          }
+          return {
+            ok: true,
+            resourceId: await client.createAttachment(operation.issueId, operation.title, operation.url),
+          };
+      }
     },
   };
 }

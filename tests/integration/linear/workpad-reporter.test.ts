@@ -10,6 +10,7 @@ import {
   buildWorkpadComment,
   postOrUpdateWorkpad,
   createWorkpadReporter,
+  syncPersistentWorkpadComment,
 } from '../../../src/integration/linear/workpad-reporter';
 import type { WorkpadState } from '../../../src/integration/linear/types';
 import type { LinearClient } from '../../../src/integration/linear/linear-client';
@@ -27,7 +28,10 @@ function createMockLinearClient(): LinearClient & {
   return {
     commentCalls,
     fetchIssue: async () => ({ id: '', identifier: '', title: '', priority: 0, updatedAt: '', state: { id: '', name: '' }, labels: { nodes: [] }, assignee: null, creator: null, team: null, project: null }),
+    fetchTeamStates: async () => [],
     fetchActiveIssues: async () => [],
+    fetchIssuesByStates: async () => [],
+    fetchIssueStatesByIds: async () => [],
     fetchComments: async (issueId: string) => {
       commentCalls.push({ method: 'fetchComments', args: [issueId] });
       return [];
@@ -70,6 +74,7 @@ describe('WorkpadReporter', () => {
 
       assert.ok(result.includes('## Agent Workpad'));
       assert.ok(result.includes('<!-- orch-agents-workpad -->'));
+      assert.ok(result.includes('**Agent**: orch-agents (agent) is working on this'));
       assert.ok(result.includes('**Status**: specification (active)'));
       assert.ok(result.includes('**Elapsed**: 1m 5s'));
       assert.ok(result.includes('**Plan ID**: `plan-1`'));
@@ -149,6 +154,22 @@ describe('WorkpadReporter', () => {
       const updateCall = client.commentCalls.find((c) => c.method === 'updateComment');
       assert.ok(updateCall);
       assert.deepEqual(updateCall!.args, ['existing-comment', 'Updated workpad']);
+    });
+
+    it('reuses a known comment id without creating a new comment', async () => {
+      const client = createMockLinearClient();
+
+      const commentId = await syncPersistentWorkpadComment(
+        client,
+        'issue-1',
+        'Updated workpad',
+        'existing-comment',
+      );
+
+      assert.equal(commentId, 'existing-comment');
+      assert.equal(client.commentCalls.length, 1);
+      assert.equal(client.commentCalls[0].method, 'updateComment');
+      assert.deepEqual(client.commentCalls[0].args, ['existing-comment', 'Updated workpad']);
     });
   });
 

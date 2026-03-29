@@ -20,6 +20,8 @@ import { startReviewPipeline } from './review/review-pipeline';
 import type { ReviewGate } from './review/review-gate';
 import type { SimpleExecutor } from './execution/simple-executor';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
+import type { GitHubClient } from './integration/github-client';
+import type { LinearClient } from './integration/linear/linear-client';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,6 +33,9 @@ export interface PipelineDeps {
   reviewGate?: ReviewGate;
   simpleExecutor: SimpleExecutor;
   workflowConfig: WorkflowConfig;
+  githubClient?: GitHubClient;
+  linearClient?: LinearClient;
+  linearExecutionMode?: 'generic' | 'symphony';
 }
 
 export interface PipelineHandle {
@@ -64,6 +69,9 @@ export function startPipeline(deps: PipelineDeps): PipelineHandle {
     logger,
     simpleExecutor: deps.simpleExecutor,
     workflowConfig: deps.workflowConfig,
+    githubClient: deps.githubClient,
+    linearClient: deps.linearClient,
+    linearExecutionMode: deps.linearExecutionMode,
   });
 
   // Wire review pipeline: WorkCompleted -> ReviewCompleted

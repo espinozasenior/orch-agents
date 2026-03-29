@@ -80,6 +80,7 @@ export interface WorkflowPlan {
   id: string;
   workItemId: string;
   template: string;
+  promptTemplate?: string;
   agentTeam: PlannedAgent[];
   maxAgents?: number;
   /** @deprecated Kept for backward compat with prompt-builder / fix-it-loop. */
@@ -241,6 +242,12 @@ export interface AgentExecState {
 export interface TokenUsage {
   input: number;
   output: number;
+}
+
+export interface ContinuationState {
+  resumable: boolean;
+  sessionId?: string;
+  reason?: string;
 }
 
 // ---------------------------------------------------------------------------

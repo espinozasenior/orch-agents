@@ -23,6 +23,7 @@ import {
 } from '../../../src/integration/linear/linear-normalizer';
 import type { WorkflowConfig } from '../../../src/integration/linear/workflow-parser';
 import type { IntakeCompletedEvent } from '../../../src/shared/event-types';
+import type { IntakeEvent } from '../../../src/types';
 
 // ---------------------------------------------------------------------------
 // Test workflow config
@@ -174,6 +175,51 @@ describe('linearWebhookHandler (integration)', () => {
     assert.ok(capturedEvent);
     assert.equal(capturedEvent!.payload.intakeEvent.source, 'linear');
     assert.equal(capturedEvent!.payload.intakeEvent.intent, 'custom:linear-todo');
+  });
+
+  it('should hand off normalized Linear intake to Symphony when configured', async () => {
+    await createTestServer()();
+
+    const handedOff: IntakeEvent[] = [];
+    const handoffServer = Fastify({ logger: false });
+    await handoffServer.register(linearWebhookHandler, {
+      config: loadConfig({
+        PORT: '3999',
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'fatal',
+        WEBHOOK_SECRET: 'github-secret',
+        LINEAR_ENABLED: 'true',
+        LINEAR_WEBHOOK_SECRET: TEST_SECRET,
+      }),
+      logger: createLogger({ level: 'fatal' }),
+      eventBus: createEventBus(),
+      eventBuffer: createEventBuffer({ cleanupIntervalMs: 60_000 }),
+      onLinearIntake: async (intakeEvent) => {
+        handedOff.push(intakeEvent);
+      },
+    } as LinearWebhookHandlerDeps);
+    await handoffServer.ready();
+
+    const payload = makeLinearPayload();
+    const body = JSON.stringify(payload);
+
+    const response = await handoffServer.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': computeLinearSignature(body, TEST_SECRET),
+        'linear-delivery': 'delivery-handoff',
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    assert.equal(handedOff.length, 1);
+    assert.equal(handedOff[0]?.source, 'linear');
+    assert.equal(handedOff[0]?.sourceMetadata.linearIssueId, 'issue-1');
+
+    await handoffServer.close();
   });
 
   // AC2: Invalid signature -> 401

@@ -16,6 +16,24 @@ import {
 // ---------------------------------------------------------------------------
 
 const WORKFLOW_WITH_GITHUB = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+  tdd-workflow:
+    - .claude/agents/core/coder.md
+  feature-build:
+    - .claude/agents/core/coder.md
+  security-audit:
+    - .claude/agents/core/coder.md
+  sparc-full:
+    - .claude/agents/core/coder.md
+  github-ops:
+    - .claude/agents/core/coder.md
+  release-pipeline:
+    - .claude/agents/core/coder.md
+  cicd-pipeline:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
@@ -66,6 +84,10 @@ You are an agent.
 `;
 
 const WORKFLOW_WITHOUT_GITHUB = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
@@ -147,6 +169,10 @@ describe('WorkflowParser github.events (GAP-15)', () => {
 
   it('should handle empty github.events section gracefully', () => {
     const emptyEvents = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   team: my-team

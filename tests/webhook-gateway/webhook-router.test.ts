@@ -11,6 +11,7 @@ import { setBotUserId } from '../../src/intake/github-workflow-normalizer';
 import { setBotName } from '../../src/shared/agent-identity';
 import type { IntakeCompletedEvent } from '../../src/shared/event-types';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
+import type { OrchestratorSnapshot } from '../../src/execution/orchestrator/symphony-orchestrator';
 
 function makeTestWorkflowConfig(): WorkflowConfig {
   return {
@@ -676,5 +677,129 @@ describe('webhookRouter (integration)', () => {
 
     assert.ok(receivedEvent);
     assert.equal(receivedEvent!.payload.intakeEvent.intent, 'validate-main');
+  });
+
+  it('returns workflow validity, active issue count, retry entries, latest error details, and next refresh timing', async () => {
+    await server.close();
+    buffer.dispose();
+    buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+
+    const config = loadConfig({
+      PORT: '3999',
+      NODE_ENV: 'test',
+      LOG_LEVEL: 'fatal',
+      WEBHOOK_SECRET: TEST_SECRET,
+    });
+    server = Fastify({ logger: false });
+    await server.register(webhookRouter, {
+      config,
+      logger: createLogger({ level: 'fatal' }),
+      eventBus,
+      eventBuffer: buffer,
+      workflowConfig: makeTestWorkflowConfig(),
+      getStatusSnapshot: () => ({
+        workflow: { valid: false, error: 'unsupported placeholders' },
+        orchestrator: {
+          starting: false,
+          workflow: { valid: false, error: 'unsupported placeholders' },
+          running: [
+            {
+              issueId: 'issue-1',
+              issueIdentifier: 'ENG-1',
+              state: 'Todo',
+              startedAt: 100,
+              lastEventTimestamp: 200,
+              sessionId: 'session-1',
+              lastEventType: 'tokenUsage',
+              lastActivityAt: '2026-03-29T12:00:00.000Z',
+              tokenUsage: { input: 11, output: 7 },
+              workspacePath: '/tmp/orch-agents/issue-1',
+              workerHost: 'local',
+              turnCount: 3,
+              attempt: 1,
+            },
+          ],
+          retries: [
+            {
+              issueId: 'issue-2',
+              attempt: 2,
+              dueAt: 500,
+              reason: 'retry',
+            },
+          ],
+          claimed: ['issue-1'],
+          completed: [],
+          startup: { cleanedWorkspaces: [], checkedAt: 50 },
+          nextPollAt: 1000,
+        } satisfies OrchestratorSnapshot,
+        links: {
+          dashboardUrl: 'https://example.com/dashboard',
+        },
+      }),
+    } satisfies WebhookRouterDeps);
+    await server.ready();
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/status',
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.workflow.valid, false);
+    assert.equal(body.summary.activeIssueCount, 1);
+    assert.equal(body.retries.length, 1);
+    assert.equal(body.summary.nextRefreshAt, 1000);
+    assert.deepEqual(body.summary.tokenTotals, { input: 11, output: 7 });
+    assert.equal(body.running[0].lastEventType, 'tokenUsage');
+    assert.equal(body.latestError.message, 'unsupported placeholders');
+  });
+
+  it('returns HTTP 200 with a well-formed empty snapshot when idle', async () => {
+    await server.close();
+    buffer.dispose();
+    buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+
+    const config = loadConfig({
+      PORT: '3999',
+      NODE_ENV: 'test',
+      LOG_LEVEL: 'fatal',
+      WEBHOOK_SECRET: TEST_SECRET,
+    });
+    server = Fastify({ logger: false });
+    await server.register(webhookRouter, {
+      config,
+      logger: createLogger({ level: 'fatal' }),
+      eventBus,
+      eventBuffer: buffer,
+      workflowConfig: makeTestWorkflowConfig(),
+      getStatusSnapshot: () => ({
+        workflow: { valid: true },
+        orchestrator: {
+          starting: false,
+          workflow: { valid: true },
+          running: [],
+          retries: [],
+          claimed: [],
+          completed: [],
+          startup: { cleanedWorkspaces: [], checkedAt: 50 },
+        } satisfies OrchestratorSnapshot,
+      }),
+    } satisfies WebhookRouterDeps);
+    await server.ready();
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/status',
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.workflow.valid, true);
+    assert.deepEqual(body.running, []);
+    assert.deepEqual(body.retries, []);
+    assert.equal(body.summary.activeIssueCount, 0);
+    assert.deepEqual(body.summary.tokenTotals, { input: 0, output: 0 });
+    assert.equal(body.latestError, null);
   });
 });

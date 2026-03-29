@@ -312,7 +312,10 @@ describe('AIG Compliance', () => {
 
       const mockLinearClient = {
         fetchIssue: async () => ({ id: '', identifier: '', title: '', priority: 0, state: { id: '', name: '' }, labels: { nodes: [] }, updatedAt: '' }),
+        fetchTeamStates: async () => [],
         fetchActiveIssues: async () => [],
+        fetchIssuesByStates: async () => [],
+        fetchIssueStatesByIds: async () => [],
         fetchComments: async () => [],
         createComment: async (issueId: string, body: string) => {
           linearComments.push({ issueId, body });
@@ -352,7 +355,7 @@ describe('AIG Compliance', () => {
 
       assert.equal(linearComments.length, 1, 'Should have posted Linear instant feedback');
       assert.equal(linearComments[0].issueId, 'issue-123');
-      assert.ok(linearComments[0].body.includes('is picking this up'), 'Should indicate work starting');
+      assert.ok(linearComments[0].body.includes('is working on this'), 'Should indicate work starting');
 
       unsub();
       bus.removeAllListeners();

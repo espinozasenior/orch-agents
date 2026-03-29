@@ -25,6 +25,7 @@ import type { ReviewGate } from '../../src/review/review-gate';
 import type { FixItLoop, FixItResult, FixItContext } from '../../src/execution/fix-it-loop';
 import type { AgentRegistry } from '../../src/agent-registry/agent-registry';
 import type { GitHubClient } from '../../src/integration/github-client';
+import type { LinearClient } from '../../src/integration/linear/linear-client';
 import type { Logger } from '../../src/shared/logger';
 import { isAgentCommit, clearTrackedCommits } from '../../src/shared/agent-commit-tracker';
 
@@ -154,6 +155,7 @@ interface Mocks {
   fixItLoop: FixItLoop;
   agentRegistry: AgentRegistry;
   githubClient: GitHubClient;
+  linearClient: Pick<LinearClient, 'createComment'>;
   logger: Logger;
 }
 
@@ -217,6 +219,10 @@ function createMocks(): Mocks {
     submitReview: mock.fn(async () => {}),
   };
 
+  const linearClient: Pick<LinearClient, 'createComment'> = {
+    createComment: mock.fn(async () => 'comment-1'),
+  };
+
   return {
     interactiveExecutor,
     worktreeManager,
@@ -225,6 +231,7 @@ function createMocks(): Mocks {
     fixItLoop,
     agentRegistry,
     githubClient,
+    linearClient,
     logger: makeNoopLogger(),
   };
 }
@@ -251,6 +258,7 @@ describe('SimpleExecutor', () => {
       fixItLoop: mocks.fixItLoop,
       agentRegistry: mocks.agentRegistry,
       githubClient: mocks.githubClient,
+      linearClient: mocks.linearClient,
       logger: mocks.logger,
       ...overrides,
     });
@@ -538,6 +546,41 @@ describe('SimpleExecutor', () => {
     assert.equal(result.status, 'completed');
   });
 
+  it('should post a Linear comment when linearIssueId exists', async () => {
+    executor = buildExecutor();
+    const plan = makePlan();
+    const intake = makeIntakeEvent({
+      source: 'linear',
+      sourceMetadata: { linearIssueId: 'issue-123', linearIdentifier: 'ENG-123' },
+      entities: { branch: 'main' },
+    });
+
+    await executor.execute(plan, intake);
+
+    assert.equal((mocks.linearClient.createComment as ReturnType<typeof mock.fn>).mock.callCount(), 1);
+    const [issueId, body] = (mocks.linearClient.createComment as ReturnType<typeof mock.fn>).mock.calls[0].arguments;
+    assert.equal(issueId, 'issue-123');
+    assert.ok((body as string).includes('Commit: `abc1234`'));
+  });
+
+  it('should not crash when Linear comment posting fails', async () => {
+    (mocks.linearClient.createComment as ReturnType<typeof mock.fn>).mock.mockImplementation(
+      async () => { throw new Error('Linear API error'); },
+    );
+
+    executor = buildExecutor();
+    const result = await executor.execute(
+      makePlan(),
+      makeIntakeEvent({
+        source: 'linear',
+        sourceMetadata: { linearIssueId: 'issue-123' },
+        entities: { branch: 'main' },
+      }),
+    );
+
+    assert.equal(result.status, 'completed');
+  });
+
   // -----------------------------------------------------------------------
   // 9. PR comment failure doesn't crash execution
   // -----------------------------------------------------------------------
@@ -736,6 +779,18 @@ describe('SimpleExecutor', () => {
 
     assert.equal(isAgentCommit('undefined'), false);
   });
+
+  it('should fail the agent before execution when workflow prompt rendering fails', async () => {
+    executor = buildExecutor();
+    const plan = makePlan({ promptTemplate: 'Issue {{ issue.assignee }}' });
+    const intake = makeIntakeEvent();
+
+    const result = await executor.execute(plan, intake);
+
+    assert.equal(result.status, 'failed');
+    assert.equal(result.agentResults[0]?.status, 'failed');
+    assert.equal((mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.callCount(), 0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -748,7 +803,7 @@ describe('buildAgentPrompt', () => {
   it('should include agent role and type', () => {
     const plan = makePlan();
     const intake = makeIntakeEvent();
-    const prompt = buildAgentPrompt('', intake, agent, plan);
+    const prompt = buildAgentPrompt('', '', intake, agent, plan);
 
     assert.ok(prompt.includes('.claude/agents/core/coder.md'));
     assert.ok(prompt.includes('role: coder'));
@@ -757,7 +812,7 @@ describe('buildAgentPrompt', () => {
   it('should include agent instructions when provided', () => {
     const plan = makePlan();
     const intake = makeIntakeEvent();
-    const prompt = buildAgentPrompt('Use TDD approach', intake, agent, plan);
+    const prompt = buildAgentPrompt('', 'Use TDD approach', intake, agent, plan);
 
     assert.ok(prompt.includes('Use TDD approach'));
     assert.ok(prompt.includes('## Your Instructions'));
@@ -766,7 +821,7 @@ describe('buildAgentPrompt', () => {
   it('should not include instructions section when empty', () => {
     const plan = makePlan();
     const intake = makeIntakeEvent();
-    const prompt = buildAgentPrompt('', intake, agent, plan);
+    const prompt = buildAgentPrompt('', '', intake, agent, plan);
 
     assert.ok(!prompt.includes('## Your Instructions'));
   });
@@ -776,7 +831,7 @@ describe('buildAgentPrompt', () => {
     const intake = makeIntakeEvent({
       entities: { repo: 'owner/repo', branch: 'feat', prNumber: 10, issueNumber: 5 },
     });
-    const prompt = buildAgentPrompt('', intake, agent, plan);
+    const prompt = buildAgentPrompt('', '', intake, agent, plan);
 
     assert.ok(prompt.includes('Repository: owner/repo'));
     assert.ok(prompt.includes('Branch: feat'));
@@ -787,7 +842,7 @@ describe('buildAgentPrompt', () => {
   it('should include rawText as description', () => {
     const plan = makePlan();
     const intake = makeIntakeEvent({ rawText: 'Fix the login page' });
-    const prompt = buildAgentPrompt('', intake, agent, plan);
+    const prompt = buildAgentPrompt('', '', intake, agent, plan);
 
     assert.ok(prompt.includes('## Description'));
     assert.ok(prompt.includes('Fix the login page'));
@@ -796,7 +851,7 @@ describe('buildAgentPrompt', () => {
   it('should include labels when present', () => {
     const plan = makePlan();
     const intake = makeIntakeEvent({ entities: { labels: ['bug', 'urgent'], repo: 'x/y' } });
-    const prompt = buildAgentPrompt('', intake, agent, plan);
+    const prompt = buildAgentPrompt('', '', intake, agent, plan);
 
     assert.ok(prompt.includes('Labels: bug, urgent'));
   });
@@ -804,8 +859,38 @@ describe('buildAgentPrompt', () => {
   it('should include workItemId from plan', () => {
     const plan = makePlan({ workItemId: 'ITEM-42' });
     const intake = makeIntakeEvent();
-    const prompt = buildAgentPrompt('', intake, agent, plan);
+    const prompt = buildAgentPrompt('', '', intake, agent, plan);
 
     assert.ok(prompt.includes('Work item: ITEM-42'));
+  });
+
+  it('should include prior agent output when provided', () => {
+    const plan = makePlan();
+    const intake = makeIntakeEvent();
+    const prompt = buildAgentPrompt('', '', intake, agent, plan, ['first output', 'second output']);
+
+    assert.ok(prompt.includes('## Prior Agent Output'));
+    assert.ok(prompt.includes('first output'));
+    assert.ok(prompt.includes('second output'));
+  });
+
+  it('should include the Linear issue identifier when available', () => {
+    const plan = makePlan();
+    const intake = makeIntakeEvent({
+      sourceMetadata: { linearIdentifier: 'ENG-9' },
+    });
+    const prompt = buildAgentPrompt('', '', intake, agent, plan);
+
+    assert.ok(prompt.includes('Linear issue: ENG-9'));
+  });
+
+  it('should include the rendered workflow contract before task metadata', () => {
+    const plan = makePlan();
+    const intake = makeIntakeEvent();
+    const prompt = buildAgentPrompt('Issue ENG-9 contract', '', intake, agent, plan);
+
+    assert.ok(prompt.includes('## Workflow Contract'));
+    assert.ok(prompt.includes('Issue ENG-9 contract'));
+    assert.ok(prompt.indexOf('## Workflow Contract') < prompt.indexOf('## Task'));
   });
 });

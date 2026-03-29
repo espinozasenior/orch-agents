@@ -181,7 +181,7 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
 
       // Token-authenticated HTTPS push with refspec
       if (remoteBranch) {
-        const refspec = `${branch}:${remoteBranch}`;
+        const refspec = `HEAD:refs/heads/${remoteBranch}`;
         const token = await getEffectiveToken();
 
         if (token && repo) {

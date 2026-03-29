@@ -115,6 +115,76 @@ describe('LinearClient', () => {
     });
   });
 
+  describe('fetchTeamStates', () => {
+    it('fetches workflow states for a team', async () => {
+      const { fetchFn, calls } = createMockFetch({
+        team: {
+          states: {
+            nodes: [
+              { id: 'state-1', name: 'Todo', type: 'unstarted' },
+              { id: 'state-2', name: 'In Progress', type: 'started' },
+            ],
+          },
+        },
+      });
+      const client = createLinearClient({ apiKey: 'test-key', fetchFn });
+
+      const result = await client.fetchTeamStates('team-1');
+
+      assert.deepEqual(result, [
+        { id: 'state-1', name: 'Todo', type: 'unstarted' },
+        { id: 'state-2', name: 'In Progress', type: 'started' },
+      ]);
+      const body = JSON.parse(calls[0].init.body as string);
+      assert.equal(body.variables.teamId, 'team-1');
+    });
+  });
+
+  describe('fetchIssuesByStates', () => {
+    it('fetches candidate issues for specific states', async () => {
+      const issues = [makeIssueResponse(), makeIssueResponse({ id: 'issue-2' })];
+      const { fetchFn, calls } = createMockFetch({ team: { issues: { nodes: issues } } });
+      const client = createLinearClient({ apiKey: 'test-key', fetchFn });
+
+      const result = await client.fetchIssuesByStates('team-1', ['Todo', 'In Progress']);
+
+      assert.equal(result.length, 2);
+      const body = JSON.parse(calls[0].init.body as string);
+      assert.deepEqual(body.variables, {
+        teamId: 'team-1',
+        stateNames: ['Todo', 'In Progress'],
+      });
+    });
+  });
+
+  describe('fetchIssueStatesByIds', () => {
+    it('returns id/state pairs for reconciliation', async () => {
+      const { fetchFn } = createMockFetch({
+        nodes: [
+          { id: 'issue-1', state: { name: 'Todo' } },
+          { id: 'issue-2', state: { name: 'Done' } },
+        ],
+      });
+      const client = createLinearClient({ apiKey: 'test-key', fetchFn });
+
+      const result = await client.fetchIssueStatesByIds(['issue-1', 'issue-2']);
+
+      assert.deepEqual(result, [
+        { id: 'issue-1', state: 'Todo' },
+        { id: 'issue-2', state: 'Done' },
+      ]);
+    });
+
+    it('returns an empty array when no ids are provided', async () => {
+      const { fetchFn } = createMockFetch({ nodes: [] });
+      const client = createLinearClient({ apiKey: 'test-key', fetchFn });
+
+      const result = await client.fetchIssueStatesByIds([]);
+
+      assert.deepEqual(result, []);
+    });
+  });
+
   describe('fetchComments', () => {
     it('fetches comments for an issue', async () => {
       const comments = [
