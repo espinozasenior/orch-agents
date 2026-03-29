@@ -36,8 +36,10 @@ const DEFAULT_WORKFLOW_CONFIG: WorkflowConfig = {
     kind: 'linear',
     apiKey: '',
     team: '',
-    activeStates: ['todo', 'in progress'],
-    terminalStates: ['done', 'cancelled'],
+    activeTypes: ['unstarted', 'started'],
+    terminalTypes: ['completed', 'canceled'],
+    activeStates: [],
+    terminalStates: [],
   },
   agents: {
     maxConcurrent: 8,
@@ -165,11 +167,17 @@ export function normalizeLinearEvent(
     return null;
   }
 
-  // Terminal state check
-  const currentState = issue.state?.name?.toLowerCase();
-  if (currentState) {
+  // Terminal state check — prefer type-based matching (resilient to name changes)
+  const currentStateType = issue.state?.type?.toLowerCase();
+  const currentStateName = issue.state?.name?.toLowerCase();
+  if (currentStateType) {
+    if (wf.tracker.terminalTypes.includes(currentStateType as never)) {
+      return null;
+    }
+  } else if (currentStateName) {
+    // Fallback: match by name when type is unavailable
     const terminalStates = wf.tracker.terminalStates.map((s) => s.toLowerCase());
-    if (terminalStates.includes(currentState)) {
+    if (terminalStates.includes(currentStateName)) {
       return null;
     }
   }
@@ -185,10 +193,18 @@ export function normalizeLinearEvent(
   const intent = buildIntent(template, issue, fields);
 
   // Check if we should process: active state or label/assignee/priority change
-  if (stateChanged && currentState) {
-    const activeStates = wf.tracker.activeStates.map((s) => s.toLowerCase());
-    if (!activeStates.includes(currentState)) {
-      return null;
+  if (stateChanged) {
+    if (currentStateType) {
+      // Prefer type-based matching
+      if (!wf.tracker.activeTypes.includes(currentStateType as never)) {
+        return null;
+      }
+    } else if (currentStateName) {
+      // Fallback: match by name when type is unavailable
+      const activeStates = wf.tracker.activeStates.map((s) => s.toLowerCase());
+      if (!activeStates.includes(currentStateName)) {
+        return null;
+      }
     }
   }
 
@@ -249,7 +265,8 @@ function buildIntent(
   const labelsChanged = fields.labelIds !== undefined;
   const assigneeChanged = fields.assigneeId !== undefined;
   const priorityChanged = fields.priority !== undefined;
-  const stateChanged = fields.state !== undefined;
+  // Linear sends "stateId" (not "state") in updatedFrom — check both for compat
+  const stateChanged = fields.state !== undefined || fields.stateId !== undefined;
 
   // Label-based intents
   if (labelsChanged && issue.labels) {
@@ -272,12 +289,16 @@ function buildIntent(
     return 'custom:linear-assigned';
   }
 
-  // State-based intents
+  // State-based intents — match by type, resilient to display name changes
   if (stateChanged && issue.state) {
-    const stateName = issue.state.name.toLowerCase();
-    if (stateName === 'todo') return 'custom:linear-todo';
-    if (stateName === 'in progress') return 'custom:linear-start';
-    return `custom:linear-${stateName.replace(/\s+/g, '-')}`;
+    const stateType = issue.state.type?.toLowerCase();
+    if (stateType) {
+      if (stateType === 'unstarted') return 'custom:linear-todo';
+      if (stateType === 'started') return 'custom:linear-start';
+      return `custom:linear-${stateType}`;
+    }
+    // Fallback: type unavailable — derive intent from name as last resort
+    return `custom:linear-${issue.state.name.toLowerCase().replace(/\s+/g, '-')}`;
   }
 
   return `custom:linear-${template}`;

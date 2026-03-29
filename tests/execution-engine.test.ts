@@ -44,7 +44,7 @@ function makeWorkflowConfig(): WorkflowConfig {
       'tdd-workflow': ['.claude/agents/core/coder.md', '.claude/agents/core/tester.md'],
       'quick-fix': ['.claude/agents/core/coder.md'],
     },
-    tracker: { kind: 'linear', apiKey: '', team: 'test', activeStates: ['Todo'], terminalStates: ['Done'] },
+    tracker: { kind: 'linear', apiKey: '', team: 'test', activeTypes: ['unstarted', 'started'], terminalTypes: ['completed', 'canceled'], activeStates: [], terminalStates: [] },
     agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },
     agent: { maxConcurrentAgents: 8, maxRetryBackoffMs: 300000, maxTurns: 20 },
     polling: { intervalMs: 30000, enabled: false },

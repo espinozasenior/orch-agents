@@ -65,6 +65,8 @@ export interface LinearIssueSnapshot {
   id: string;
   state: string;
   stateId: string;
+  /** Linear state type (backlog|unstarted|started|completed|canceled). */
+  stateType: string | undefined;
   labels: string[];
   labelIds: string[];
   assigneeId: string | null;

@@ -24,8 +24,10 @@ const TEST_WORKFLOW_CONFIG: WorkflowConfig = {
     kind: 'linear',
     apiKey: '',
     team: 'ENG',
-    activeStates: ['Todo', 'In Progress'],
-    terminalStates: ['Done', 'Cancelled'],
+    activeTypes: ['unstarted', 'started'],
+    terminalTypes: ['completed', 'canceled'],
+    activeStates: [],
+    terminalStates: [],
   },
   agents: {
     maxConcurrent: 8,
@@ -62,7 +64,7 @@ function makeLinearPayload(
       description: 'Something is broken',
       url: 'https://linear.app/team/issue/ENG-42',
       priority: 2,
-      state: { id: 'state-1', name: 'Todo' },
+      state: { id: 'state-1', name: 'Todo', type: 'unstarted' },
       labels: [],
       assignee: null,
       creator: { id: 'creator-1', name: 'Jane' },
@@ -101,7 +103,7 @@ describe('LinearNormalizer', () => {
 
   it('should produce IntakeEvent for state change to In Progress', () => {
     const payload = makeLinearPayload({}, {
-      state: { id: 'state-2', name: 'In Progress' },
+      state: { id: 'state-2', name: 'In Progress', type: 'started' },
     });
     const updatedFrom = { state: { id: 'state-1' } };
 
@@ -243,7 +245,7 @@ describe('LinearNormalizer', () => {
 
   it('should return null for terminal state (Done)', () => {
     const payload = makeLinearPayload({}, {
-      state: { id: 'state-x', name: 'Done' },
+      state: { id: 'state-x', name: 'Done', type: 'completed' },
     });
     const updatedFrom = { state: { id: 'old-state' } };
 
@@ -254,7 +256,7 @@ describe('LinearNormalizer', () => {
 
   it('should return null for terminal state (Cancelled)', () => {
     const payload = makeLinearPayload({}, {
-      state: { id: 'state-x', name: 'Cancelled' },
+      state: { id: 'state-x', name: 'Cancelled', type: 'canceled' },
     });
     const updatedFrom = { state: { id: 'old-state' } };
 
@@ -263,9 +265,60 @@ describe('LinearNormalizer', () => {
     assert.equal(result, null);
   });
 
+  // Resilience to state renames: "Todo" renamed to "Ready" still has type "unstarted"
+  it('should match by type when state is renamed (e.g. Todo -> Ready)', () => {
+    const payload = makeLinearPayload({}, {
+      state: { id: 'state-1', name: 'Ready', type: 'unstarted' },
+    });
+    const updatedFrom = { state: { id: 'old-state' } };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.intent, 'custom:linear-todo');
+  });
+
+  // Resilience: "In Progress" renamed to "Doing" still has type "started"
+  it('should match by type when In Progress is renamed to Doing', () => {
+    const payload = makeLinearPayload({}, {
+      state: { id: 'state-2', name: 'Doing', type: 'started' },
+    });
+    const updatedFrom = { state: { id: 'old-state' } };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.intent, 'custom:linear-start');
+  });
+
+  // Resilience: "Done" renamed to "Shipped" still has type "completed" → terminal, skip
+  it('should reject renamed terminal state (Done -> Shipped, type completed)', () => {
+    const payload = makeLinearPayload({}, {
+      state: { id: 'state-x', name: 'Shipped', type: 'completed' },
+    });
+    const updatedFrom = { state: { id: 'old-state' } };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.equal(result, null);
+  });
+
+  // Polling reconciler sends stateId in updatedFrom, not state
+  it('should detect state change when updatedFrom uses stateId (polling compat)', () => {
+    const payload = makeLinearPayload({}, {
+      state: { id: 'state-2', name: 'Todo', type: 'unstarted' },
+    });
+    const updatedFrom = { stateId: 'old-state-id' };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.intent, 'custom:linear-todo');
+  });
+
   it('should return null when state changed to non-active, non-terminal state', () => {
     const payload = makeLinearPayload({}, {
-      state: { id: 'state-x', name: 'Backlog' },
+      state: { id: 'state-x', name: 'Backlog', type: 'backlog' },
     });
     const updatedFrom = { state: { id: 'old-state' } };
 

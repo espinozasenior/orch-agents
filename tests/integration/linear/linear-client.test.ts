@@ -61,7 +61,7 @@ function makeIssueResponse(overrides: Record<string, unknown> = {}) {
     title: 'Test issue',
     priority: 2,
     updatedAt: '2026-01-01T00:00:00Z',
-    state: { id: 'state-1', name: 'Todo' },
+    state: { id: 'state-1', name: 'Todo', type: 'unstarted' },
     labels: { nodes: [] },
     assignee: null,
     creator: { id: 'user-1', name: 'Test User' },
