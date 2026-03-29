@@ -14,6 +14,7 @@ import type { Logger } from '../../shared/logger';
 import { formatDuration } from '../../shared/format';
 import type { LinearClient } from './linear-client';
 import type { WorkpadState } from './types';
+import { getBotMarker, getBotName } from '../../shared/agent-identity';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -36,13 +37,14 @@ export interface WorkpadReporter {
 // Workpad content builder
 // ---------------------------------------------------------------------------
 
-const WORKPAD_MARKER = '<!-- orch-agents-workpad -->';
+export const WORKPAD_MARKER = '<!-- orch-agents-workpad -->';
 
 export function buildWorkpadComment(state: WorkpadState): string {
   const sections: string[] = [];
 
   sections.push('## Agent Workpad');
   sections.push(WORKPAD_MARKER);
+  sections.push(`**Agent**: ${getBotName()} (agent) is working on this`);
   sections.push('');
 
   sections.push(`**Status**: ${state.currentPhase} (${state.status})`);
@@ -79,6 +81,7 @@ export function buildWorkpadComment(state: WorkpadState): string {
 
   sections.push('---');
   sections.push(`*Last updated: ${new Date().toISOString()}*`);
+  sections.push(getBotMarker());
 
   return sections.join('\n');
 }
@@ -93,20 +96,37 @@ export async function postOrUpdateWorkpad(
   workpadContent: string,
   logger?: Logger,
 ): Promise<void> {
+  await syncPersistentWorkpadComment(linearClient, issueId, workpadContent, undefined, logger);
+}
+
+export async function syncPersistentWorkpadComment(
+  linearClient: Pick<LinearClient, 'fetchComments' | 'createComment' | 'updateComment'>,
+  issueId: string,
+  workpadContent: string,
+  currentCommentId?: string,
+  logger?: Logger,
+): Promise<string | undefined> {
   try {
+    if (currentCommentId) {
+      await linearClient.updateComment(currentCommentId, workpadContent);
+      return currentCommentId;
+    }
+
     const comments = await linearClient.fetchComments(issueId);
     const existing = comments.find((c) => c.body.includes(WORKPAD_MARKER));
 
     if (existing) {
       await linearClient.updateComment(existing.id, workpadContent);
+      return existing.id;
     } else {
-      await linearClient.createComment(issueId, workpadContent);
+      return await linearClient.createComment(issueId, workpadContent);
     }
   } catch (err) {
     logger?.error('Failed to post/update workpad', {
       issueId,
       error: err instanceof Error ? err.message : String(err),
     });
+    return currentCommentId;
   }
 }
 
