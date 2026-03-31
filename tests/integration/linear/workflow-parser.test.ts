@@ -194,6 +194,9 @@ agents:
 
 workspace:
   root: /tmp/orch-agents
+  repos:
+    - name: orch-agents
+      url: git@github.com:org/orch-agents.git
 
 hooks:
   before_run: |
@@ -206,6 +209,7 @@ Prompt here.
     const config = parseWorkflowMdString(workflow);
 
     assert.equal(config.workspace?.root, '/tmp/orch-agents');
+    assert.ok(config.workspace?.repos.length === 1);
     assert.equal(config.hooks.beforeRun, 'echo before\necho after\n');
   });
 
@@ -476,6 +480,197 @@ Prompt here.
     assert.throws(
       () => parseWorkflowMdString(bad),
       (err: Error) => err instanceof WorkflowParseError && err.message.includes('unknown template'),
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 8: workspace.repos parsing
+  // ---------------------------------------------------------------------------
+
+  it('should parse workspace.repos with all fields', () => {
+    const workflow = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+
+workspace:
+  root: /tmp/orch-agents
+  default_repo: orch-agents
+  repos:
+    - name: orch-agents
+      url: git@github.com:espinozasenior/orch-agents.git
+      teams: [AUT]
+      labels: [backend, agent, infra]
+      default_branch: main
+    - name: frontend-app
+      url: git@github.com:espinozasenior/frontend-app.git
+      teams: [FE]
+      labels: [frontend, ui]
+      default_branch: main
+---
+Prompt here.
+`;
+    const config = parseWorkflowMdString(workflow);
+
+    assert.ok(config.workspace);
+    assert.equal(config.workspace.root, '/tmp/orch-agents');
+    assert.equal(config.workspace.defaultRepo, 'orch-agents');
+    assert.ok(config.workspace.repos);
+    assert.equal(config.workspace.repos.length, 2);
+    assert.equal(config.workspace.repos[0].name, 'orch-agents');
+    assert.equal(config.workspace.repos[0].url, 'git@github.com:espinozasenior/orch-agents.git');
+    assert.deepEqual(config.workspace.repos[0].teams, ['AUT']);
+    assert.deepEqual(config.workspace.repos[0].labels, ['backend', 'agent', 'infra']);
+    assert.equal(config.workspace.repos[0].defaultBranch, 'main');
+    assert.equal(config.workspace.repos[1].name, 'frontend-app');
+    assert.deepEqual(config.workspace.repos[1].teams, ['FE']);
+    assert.deepEqual(config.workspace.repos[1].labels, ['frontend', 'ui']);
+  });
+
+  it('should parse workspace.repos with minimal fields (name + url only)', () => {
+    const workflow = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+
+workspace:
+  root: /tmp/orch-agents
+  repos:
+    - name: my-repo
+      url: git@github.com:org/my-repo.git
+---
+Prompt here.
+`;
+    const config = parseWorkflowMdString(workflow);
+
+    assert.ok(config.workspace);
+    assert.equal(config.workspace.repos.length, 1);
+    assert.equal(config.workspace.repos[0].name, 'my-repo');
+    assert.equal(config.workspace.repos[0].url, 'git@github.com:org/my-repo.git');
+    assert.equal(config.workspace.repos[0].teams, undefined);
+    assert.equal(config.workspace.repos[0].labels, undefined);
+    assert.equal(config.workspace.repos[0].defaultBranch, undefined);
+    assert.equal(config.workspace.defaultRepo, undefined);
+  });
+
+  it('should throw when workspace.repos is missing (workspace present but no repos)', () => {
+    const workflow = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+
+workspace:
+  root: /tmp/orch-agents
+---
+Prompt here.
+`;
+    assert.throws(
+      () => parseWorkflowMdString(workflow),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('workspace.repos'),
+    );
+  });
+
+  it('should throw when workspace.repos is an empty array', () => {
+    const workflow = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+
+workspace:
+  root: /tmp/orch-agents
+  repos: []
+---
+Prompt here.
+`;
+    assert.throws(
+      () => parseWorkflowMdString(workflow),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('workspace.repos'),
+    );
+  });
+
+  it('should throw when workspace.repos entry is missing name', () => {
+    const workflow = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+
+workspace:
+  root: /tmp/orch-agents
+  repos:
+    - url: git@github.com:org/my-repo.git
+---
+Prompt here.
+`;
+    assert.throws(
+      () => parseWorkflowMdString(workflow),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('name'),
+    );
+  });
+
+  it('should throw when workspace.repos entry is missing url', () => {
+    const workflow = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
+tracker:
+  kind: linear
+  team: my-team
+
+agents:
+  routing:
+    default: quick-fix
+
+workspace:
+  root: /tmp/orch-agents
+  repos:
+    - name: my-repo
+---
+Prompt here.
+`;
+    assert.throws(
+      () => parseWorkflowMdString(workflow),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('url'),
     );
   });
 

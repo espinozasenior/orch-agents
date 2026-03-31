@@ -35,6 +35,8 @@ interface IssueWorkerData {
   worktreeBasePath: string;
   defaultRepo?: string;
   defaultBranch?: string;
+  /** Phase 8: Resolved repo for multi-repo workspace. */
+  resolvedRepo?: { name: string; url: string; defaultBranch?: string };
   /** Agent session ID for plan sync (Phase 7F). */
   agentSessionId?: string;
   /** Agent app user ID for delegate assignment (Phase 7H). */
@@ -118,27 +120,35 @@ async function main(): Promise<void> {
     });
   }
 
+  // Phase 8: Determine effective base branch and workspace path from resolved repo
+  const effectiveBranch = data.resolvedRepo?.defaultBranch ?? data.defaultBranch ?? 'main';
+  const effectiveRepo = data.resolvedRepo?.name;
+
   const workerStartedAt = new Date().toISOString();
   const result = await runIssueWorkerLifecycle({
     issue: data.issue,
     attempt: data.attempt,
     workflowConfig: data.workflowConfig,
     acquireWorkspace: async (planId) => {
-      const workspacePath = joinPath(data.worktreeBasePath, planId);
+      // Phase 8: Use workspace.root/issues/{issueId}/ when resolved repo is available
+      const workspacePath = data.resolvedRepo
+        ? joinPath(data.worktreeBasePath, 'issues', planId)
+        : joinPath(data.worktreeBasePath, planId);
+
       if (existsSync(workspacePath)) {
-        logger.info('Reusing persistent issue workspace', { planId, path: workspacePath });
+        logger.info('Reusing persistent issue workspace', { planId, path: workspacePath, repo: effectiveRepo });
         return {
           planId,
           path: workspacePath,
           branch: `issue/${planId}`,
-          baseBranch: data.defaultBranch ?? 'main',
+          baseBranch: effectiveBranch,
           status: 'active',
         };
       }
 
       return worktreeManager.create(
         planId,
-        data.defaultBranch ?? 'main',
+        effectiveBranch,
         `issue/${planId}`,
       );
     },
@@ -215,8 +225,8 @@ async function main(): Promise<void> {
 
       return persistentExecutor.execute(plan, intakeEvent);
     },
-    defaultRepo: data.defaultRepo,
-    defaultBranch: data.defaultBranch,
+    defaultRepo: data.resolvedRepo?.name ?? data.defaultRepo,
+    defaultBranch: effectiveBranch,
     linearClient,
     agentSessionId: data.agentSessionId,
     agentAppUserId: data.agentAppUserId,

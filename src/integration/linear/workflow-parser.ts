@@ -3,6 +3,24 @@ import { parse as parseYaml } from 'yaml';
 import { AppError } from '../../shared/errors';
 import { validateWorkflowPromptTemplate } from './workflow-prompt';
 
+// ---------------------------------------------------------------------------
+// Phase 8: Multi-Repository Workspace types
+// ---------------------------------------------------------------------------
+
+export interface RepoConfig {
+  name: string;
+  url: string;
+  teams?: string[];
+  labels?: string[];
+  defaultBranch?: string;
+}
+
+export interface WorkspaceConfig {
+  root: string;
+  defaultRepo?: string;
+  repos: RepoConfig[];
+}
+
 export interface WorkflowConfig {
   templates: Record<string, string[]>;
   tracker: {
@@ -17,9 +35,7 @@ export interface WorkflowConfig {
   github?: {
     events: Record<string, string>;
   };
-  workspace?: {
-    root: string;
-  };
+  workspace?: WorkspaceConfig;
   agents: {
     maxConcurrent: number;
     routing: Record<string, string>;
@@ -167,7 +183,7 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
       terminalTypes: readStringArray(tracker.terminal_types, 'tracker.terminal_types', ['completed', 'canceled']),
     },
     ...(buildGitHubConfig(document.github) ? { github: buildGitHubConfig(document.github) } : {}),
-    ...(workspace?.root ? { workspace: { root: readString(workspace.root, 'workspace.root') } } : {}),
+    ...(workspace ? { workspace: buildWorkspaceConfig(workspace) } : {}),
     agents: {
       maxConcurrent,
       routing,
@@ -199,6 +215,36 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
     },
     promptTemplate: body,
   };
+}
+
+function buildWorkspaceConfig(workspace: Record<string, unknown>): WorkspaceConfig {
+  const root = readString(workspace.root, 'workspace.root');
+  const defaultRepo = readOptionalString(workspace.default_repo);
+  const rawRepos = workspace.repos;
+
+  if (!rawRepos || !Array.isArray(rawRepos) || rawRepos.length === 0) {
+    throw new WorkflowParseError('workspace.repos is required and must be a non-empty array');
+  }
+
+  const repos: RepoConfig[] = rawRepos.map((entry: unknown, index: number) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new WorkflowParseError(`workspace.repos[${index}] must be an object`);
+    }
+    const record = entry as Record<string, unknown>;
+    const name = readString(record.name, `workspace.repos[${index}].name`);
+    const url = readString(record.url, `workspace.repos[${index}].url`);
+    const teams = record.teams != null ? readStringArray(record.teams, `workspace.repos[${index}].teams`, []) : undefined;
+    const labels = record.labels != null ? readStringArray(record.labels, `workspace.repos[${index}].labels`, []) : undefined;
+    const defaultBranch = readOptionalString(record.default_branch);
+
+    const repo: RepoConfig = { name, url };
+    if (teams && teams.length > 0) repo.teams = teams;
+    if (labels && labels.length > 0) repo.labels = labels;
+    if (defaultBranch) repo.defaultBranch = defaultBranch;
+    return repo;
+  });
+
+  return { root, defaultRepo, repos };
 }
 
 function buildGitHubConfig(github: unknown): WorkflowConfig['github'] | undefined {

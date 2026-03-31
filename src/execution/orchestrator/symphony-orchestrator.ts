@@ -14,6 +14,8 @@ import type { EventBus } from '../../shared/event-bus';
 import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
 import type { TokenUsage } from '../../types';
+import { resolveRepoForIssue } from './repo-resolver';
+import type { RepoConfig } from '../../integration/linear/workflow-parser';
 
 export interface SymphonyOrchestratorDeps {
   workflowConfig: WorkflowConfig;
@@ -217,7 +219,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       return;
     }
 
-    dispatchEligibleCandidates(candidates);
+    await dispatchEligibleCandidates(candidates);
 
     scheduleNextTick();
   }
@@ -345,9 +347,13 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     issue: LinearIssueResponse,
     attempt: number,
     previousRuntime?: RetryEntry['runtime'],
+    resolvedRepo?: RepoConfig,
   ): void {
     const workflowConfig = getWorkflowConfig();
     const workerPath = pathResolve(__dirname, 'issue-worker.js');
+    const resolvedRepoData = resolvedRepo
+      ? { name: resolvedRepo.name, url: resolvedRepo.url, defaultBranch: resolvedRepo.defaultBranch }
+      : undefined;
     const worker = deps.workerFactory
       ? deps.workerFactory(workerPath, {
         issue,
@@ -356,6 +362,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
         worktreeBasePath,
         defaultRepo: deps.defaultRepo,
         defaultBranch: deps.defaultBranch,
+        resolvedRepo: resolvedRepoData,
       })
       : new Worker(workerPath, {
         workerData: {
@@ -365,6 +372,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
           worktreeBasePath,
           defaultRepo: deps.defaultRepo,
           defaultBranch: deps.defaultBranch,
+          resolvedRepo: resolvedRepoData,
         },
       });
 
@@ -674,7 +682,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     }
   }
 
-  function dispatchEligibleCandidates(candidates: LinearIssueResponse[]): void {
+  async function dispatchEligibleCandidates(candidates: LinearIssueResponse[]): Promise<void> {
     const workflowConfig = getWorkflowConfig();
     const unblocked = candidates.filter((issue) => !isBlockedIssue(issue));
 
@@ -687,7 +695,27 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
           return;
         }
         if (isEligible(issue)) {
-          dispatch(issue, 0);
+          let resolvedRepo: RepoConfig | undefined;
+          if (workflowConfig.workspace?.repos && workflowConfig.workspace.repos.length > 0) {
+            try {
+              const result = await resolveRepoForIssue(
+                issue, workflowConfig.workspace, deps.linearClient, undefined, logger,
+              );
+              if (result.status === 'pending') {
+                logger.debug('Repo resolution pending for issue; skipping dispatch', {
+                  issueId: issue.id,
+                });
+                continue;
+              }
+              resolvedRepo = result.repo;
+            } catch (err) {
+              logger.warn('Repo resolution failed for issue; using default dispatch', {
+                issueId: issue.id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+          dispatch(issue, 0, undefined, resolvedRepo);
         }
       }
     }
