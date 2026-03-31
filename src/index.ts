@@ -27,7 +27,8 @@ import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import { resolve as pathResolve } from 'node:path';
 import { createGitHubAppTokenProvider, type GitHubTokenProvider } from './integration/github-app-auth';
 import { setBotName } from './shared/agent-identity';
-import { createLinearClient } from './integration/linear/linear-client';
+import { createLinearClient, type LinearAuthStrategy } from './integration/linear/linear-client';
+import { createOAuthTokenStore, type OAuthTokenStore } from './integration/linear/oauth-token-store';
 import { createSymphonyOrchestrator, type SymphonyOrchestrator } from './execution/orchestrator/symphony-orchestrator';
 import { createWorkpadReporter, type WorkpadReporter } from './integration/linear/workpad-reporter';
 import { createWorkflowConfigStore } from './integration/linear/workflow-config-store';
@@ -97,6 +98,71 @@ async function main(): Promise<void> {
     logger.warn('No GitHub authentication configured');
   }
 
+  // ── Build Linear auth strategy ──────────────────────────────
+  let linearAuthStrategy: LinearAuthStrategy | undefined;
+  let oauthTokenStore: OAuthTokenStore | undefined;
+
+  // API key is always available for data queries (fetchIssues, etc.)
+  // OAuth is layered on top for agent-specific mutations (activities, sessions)
+  const linearApiKey = workflowConfig.tracker.apiKey ?? config.linearApiKey;
+
+  if (config.linearAuthMode === 'oauth') {
+    if (!config.linearClientId || !config.linearClientSecret) {
+      logger.warn('OAuth mode requires LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET');
+    } else {
+      // Persistent token storage via SQLite — survives restarts
+      const { createOAuthTokenPersistence } = require('./integration/linear/oauth-token-persistence');
+      const tokenPersistence = createOAuthTokenPersistence({
+        dbPath: process.env.OAUTH_TOKEN_DB_PATH ?? './data/oauth-tokens.db',
+        logger,
+      });
+
+      // Load saved tokens from last session
+      const savedTokens = tokenPersistence.load('default');
+
+      oauthTokenStore = createOAuthTokenStore({
+        clientId: config.linearClientId,
+        clientSecret: config.linearClientSecret,
+        initialTokens: savedTokens ?? undefined,
+        logger,
+        onTokenRefreshed: (tokens) => {
+          // Persist to SQLite so they survive restarts
+          tokenPersistence.save('default', tokens);
+          // Keep the strategy object in sync for worker thread seeding
+          if (linearAuthStrategy && linearAuthStrategy.mode === 'oauth') {
+            linearAuthStrategy.accessToken = tokens.accessToken;
+            linearAuthStrategy.refreshToken = tokens.refreshToken;
+            linearAuthStrategy.expiresAt = tokens.expiresAt;
+          }
+        },
+      });
+      linearAuthStrategy = {
+        mode: 'oauth',
+        clientId: config.linearClientId,
+        clientSecret: config.linearClientSecret,
+        accessToken: savedTokens?.accessToken ?? '',
+        refreshToken: savedTokens?.refreshToken ?? '',
+        expiresAt: savedTokens?.expiresAt ?? 0,
+      };
+
+      if (savedTokens) {
+        logger.info('Linear OAuth tokens restored from persistence', {
+          clientId: config.linearClientId,
+          expiresAt: new Date(savedTokens.expiresAt).toISOString(),
+        });
+      } else {
+        logger.info('Linear OAuth configured (no saved tokens — authorize via /oauth/authorize)', {
+          clientId: config.linearClientId,
+        });
+      }
+    }
+  }
+
+  // Fall back to API key if OAuth not configured or as the primary strategy
+  if (!linearAuthStrategy && linearApiKey) {
+    linearAuthStrategy = { mode: 'apiKey', apiKey: linearApiKey };
+  }
+
   // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
   const useInteractiveAgents = process.env.ENABLE_INTERACTIVE_AGENTS === 'true';
 
@@ -123,8 +189,8 @@ async function main(): Promise<void> {
       ? createInteractiveExecutor({ logger: execLogger })
       : createSdkExecutor({ logger: execLogger });
     const artifactApplier = createArtifactApplier({ logger: execLogger });
-    const linearClient = workflowConfig.tracker.apiKey
-      ? createLinearClient({ apiKey: workflowConfig.tracker.apiKey, logger: execLogger })
+    const linearClient = linearAuthStrategy
+      ? createLinearClient({ apiKey: linearApiKey, authStrategy: linearAuthStrategy, tokenStore: oauthTokenStore, logger: execLogger })
       : undefined;
 
     const diffReviewer = config.enableClaudeDiffReview
@@ -290,8 +356,8 @@ async function main(): Promise<void> {
       : effectiveGithubToken
         ? createGitHubClient({ logger, token: effectiveGithubToken })
         : undefined,
-    linearClient: config.linearEnabled && workflowConfig.tracker.apiKey
-      ? createLinearClient({ apiKey: workflowConfig.tracker.apiKey, logger })
+    linearClient: config.linearEnabled && linearAuthStrategy
+      ? createLinearClient({ apiKey: linearApiKey, authStrategy: linearAuthStrategy, tokenStore: oauthTokenStore, logger })
       : undefined,
   });
 
@@ -312,6 +378,11 @@ async function main(): Promise<void> {
       ? async () => {
         await symphonyOrchestrator?.onTick();
       }
+      : undefined,
+    linearAuthStrategy,
+    oauthTokenStore,
+    linearClient: config.linearEnabled && linearAuthStrategy
+      ? createLinearClient({ apiKey: linearApiKey, authStrategy: linearAuthStrategy, tokenStore: oauthTokenStore, logger })
       : undefined,
   });
 

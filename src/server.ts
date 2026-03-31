@@ -17,6 +17,8 @@ import { setBotName } from './shared/agent-identity';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import type { IntakeEvent } from './types';
 import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
+import type { LinearAuthStrategy } from './integration/linear/linear-client';
+import type { OAuthTokenStore } from './integration/linear/oauth-token-store';
 
 export interface ServerDependencies {
   config: AppConfig;
@@ -25,6 +27,12 @@ export interface ServerDependencies {
   workflowConfig?: WorkflowConfig;
   onLinearIntake?: (intakeEvent: IntakeEvent, meta: { deliveryId: string }) => Promise<void> | void;
   getStatusSnapshot?: () => StatusSurfaceSnapshot;
+  /** OAuth auth strategy for Linear (optional, enables /oauth/* routes). */
+  linearAuthStrategy?: LinearAuthStrategy;
+  /** OAuth token store for Linear (optional, enables /oauth/* routes). */
+  oauthTokenStore?: OAuthTokenStore;
+  /** Linear client for Agent Activity emission in webhook handler. */
+  linearClient?: import('./integration/linear/linear-client').LinearClient;
 }
 
 /**
@@ -70,8 +78,71 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
       logger,
       eventBus: deps.eventBus,
       onLinearIntake: deps.onLinearIntake,
+      linearClient: deps.linearClient,
     });
     logger.info('Linear webhook route registered', { path: '/webhooks/linear' });
+  }
+
+  // ── OAuth routes (Phase 7A) ──────────────────────────────────
+  if (config.linearAuthMode === 'oauth' && config.linearClientId) {
+    server.get('/oauth/authorize', async (_request, reply) => {
+      const params = new URLSearchParams({
+        client_id: config.linearClientId,
+        redirect_uri: config.linearRedirectUri,
+        response_type: 'code',
+        scope: 'read,write,app:assignable,app:mentionable',
+        actor: 'app',
+      });
+      const url = `https://linear.app/oauth/authorize?${params.toString()}`;
+      return reply.redirect(url);
+    });
+
+    server.get<{ Querystring: { code?: string; error?: string } }>(
+      '/oauth/callback',
+      async (request, reply) => {
+        const { code, error: oauthError } = request.query;
+        if (oauthError) {
+          logger.error('OAuth callback error', { error: oauthError });
+          return reply.status(400).send({ error: oauthError });
+        }
+        if (!code) {
+          return reply.status(400).send({ error: 'Missing authorization code' });
+        }
+
+        const tokenStore = deps.oauthTokenStore;
+        if (!tokenStore) {
+          return reply.status(500).send({ error: 'OAuth token store not configured' });
+        }
+
+        try {
+          await tokenStore.exchangeCode(code, config.linearRedirectUri);
+
+          // Future: query viewer.organization.id to determine workspace ID.
+          // For now, use a static key; the viewer query can be added when
+          // the LinearClient gains a dedicated `fetchViewer()` method.
+          const workspaceId = 'default';
+
+          logger.info('OAuth code exchange successful', { workspaceId });
+          return reply.send({
+            ok: true,
+            workspaceId,
+            tokenKey: `linear_oauth_token_${workspaceId}`,
+          });
+        } catch (err) {
+          logger.error('OAuth code exchange failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return reply.status(500).send({
+            error: 'Code exchange failed',
+          });
+        }
+      },
+    );
+
+    logger.info('OAuth routes registered', {
+      authorize: '/oauth/authorize',
+      callback: '/oauth/callback',
+    });
   }
 
   // ── Request logging hook ─────────────────────────────────────
