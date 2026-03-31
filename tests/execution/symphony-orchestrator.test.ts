@@ -4,6 +4,7 @@ import {
   createSymphonyOrchestrator,
   sortForDispatch,
   type OrchestratorSnapshot,
+  type SymphonyOrchestrator,
   type WorkerLike,
 } from '../../src/execution/orchestrator/symphony-orchestrator';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
@@ -20,6 +21,7 @@ class MockWorker implements WorkerLike {
     exit: [],
   };
   public terminated = 0;
+  public postedMessages: unknown[] = [];
 
   on(event: 'message' | 'error' | 'exit', listener: (value: unknown) => void): WorkerLike {
     this.listeners[event].push(listener);
@@ -29,6 +31,10 @@ class MockWorker implements WorkerLike {
   async terminate(): Promise<number> {
     this.terminated += 1;
     return 0;
+  }
+
+  postMessage(message: unknown): void {
+    this.postedMessages.push(message);
   }
 
   emitMessage(message: unknown): void {
@@ -410,6 +416,141 @@ describe('SymphonyOrchestrator', () => {
     assert.equal(snapshot.retries[0]?.issueId, 'issue-2');
     assert.equal(typeof snapshot.retries[0]?.dueAt, 'number');
     assert.equal(snapshot.workflow.valid, true);
+    await orchestrator.stop();
+  });
+
+  it('forwards AgentPrompted event to running worker via postMessage', async () => {
+    const workers: MockWorker[] = [];
+    const linearClient = makeLinearClient({
+      fetchIssuesByStates: async () => [makeIssue()],
+      fetchIssueStatesByIds: async () => [{ id: 'issue-1', state: 'Todo' }],
+    });
+
+    const orchestrator = createSymphonyOrchestrator({
+      workflowConfig: makeWorkflowConfig(),
+      linearClient,
+      logger: makeLogger(),
+      workerFactory: () => {
+        const worker = new MockWorker();
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    await orchestrator.onTick();
+    assert.equal(workers.length, 1);
+
+    // Forward an AgentPrompted event
+    orchestrator.forwardPromptedMessage('issue-1', {
+      body: 'Please also add tests',
+      agentSessionId: 'session-1',
+    });
+
+    assert.equal(workers[0].postedMessages.length, 1);
+    const msg = workers[0].postedMessages[0] as { type: string; body: string; agentSessionId: string };
+    assert.equal(msg.type, 'prompted');
+    assert.equal(msg.body, 'Please also add tests');
+    assert.equal(msg.agentSessionId, 'session-1');
+    await orchestrator.stop();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 7G: WorkCancelled → stop forwarding tests
+  // ---------------------------------------------------------------------------
+
+  it('forwards stop message to running worker when WorkCancelled event is received (Phase 7G)', async () => {
+    const workers: MockWorker[] = [];
+    const { createEventBus } = await import('../../src/shared/event-bus');
+    const eventBus = createEventBus();
+
+    const linearClient = makeLinearClient({
+      fetchIssuesByStates: async () => [makeIssue()],
+      fetchIssueStatesByIds: async () => [{ id: 'issue-1', state: 'Todo' }],
+    });
+
+    const orchestrator = createSymphonyOrchestrator({
+      workflowConfig: makeWorkflowConfig(),
+      linearClient,
+      logger: makeLogger(),
+      eventBus,
+      workerFactory: () => {
+        const worker = new MockWorker();
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    await orchestrator.onTick();
+    assert.equal(workers.length, 1);
+
+    // Simulate WorkCancelled event (as published by webhook handler on stop signal)
+    const { createDomainEvent } = await import('../../src/shared/event-bus');
+    eventBus.publish(createDomainEvent('WorkCancelled', {
+      workItemId: 'linear-session-session-abc',
+      cancellationReason: 'User sent stop signal via Linear',
+    }));
+
+    // The orchestrator should find the worker by session and forward stop
+    // For this test, we need a mapping from session to issue. We simulate that
+    // by forwarding the stop to the worker that has a matching session.
+    // First, update the worker entry with a sessionId
+    const state = orchestrator.getState();
+    const entry = state.running.get('issue-1');
+    if (entry) {
+      (entry as unknown as Record<string, unknown>).sessionId = 'session-abc';
+      (entry as unknown as Record<string, unknown>).agentSessionId = 'session-abc';
+    }
+
+    // Re-publish to trigger the handler with the updated sessionId
+    eventBus.publish(createDomainEvent('WorkCancelled', {
+      workItemId: 'linear-session-session-abc',
+      cancellationReason: 'User sent stop signal via Linear',
+    }));
+
+    // Worker should have received a stop message
+    const stopMessages = workers[0].postedMessages.filter(
+      (msg: unknown) => (msg as { type: string }).type === 'stop',
+    );
+    assert.ok(stopMessages.length > 0, 'Worker should receive a stop message');
+    const stopMsg = stopMessages[0] as { type: string; reason: string };
+    assert.equal(stopMsg.type, 'stop');
+    assert.ok(stopMsg.reason.includes('stop signal'));
+
+    await orchestrator.stop();
+  });
+
+  it('does not crash when WorkCancelled is received for unknown issue (Phase 7G)', async () => {
+    const workers: MockWorker[] = [];
+    const { createEventBus } = await import('../../src/shared/event-bus');
+    const eventBus = createEventBus();
+
+    const orchestrator = createSymphonyOrchestrator({
+      workflowConfig: makeWorkflowConfig(),
+      linearClient: makeLinearClient({
+        fetchIssuesByStates: async () => [],
+        fetchIssueStatesByIds: async () => [],
+      }),
+      logger: makeLogger(),
+      eventBus,
+      workerFactory: () => {
+        const worker = new MockWorker();
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    await orchestrator.onTick();
+    assert.equal(workers.length, 0);
+
+    // Publish WorkCancelled for a non-existent session — should be a no-op
+    const { createDomainEvent } = await import('../../src/shared/event-bus');
+    eventBus.publish(createDomainEvent('WorkCancelled', {
+      workItemId: 'linear-session-unknown-session',
+      cancellationReason: 'User sent stop signal via Linear',
+    }));
+
+    // Should not throw; orchestrator state should be unchanged
+    assert.equal(orchestrator.getState().running.size, 0);
     await orchestrator.stop();
   });
 

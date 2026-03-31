@@ -10,6 +10,7 @@ import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import type { Logger } from '../../shared/logger';
+import type { EventBus } from '../../shared/event-bus';
 import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
 import type { TokenUsage } from '../../types';
@@ -24,6 +25,8 @@ export interface SymphonyOrchestratorDeps {
   defaultRepo?: string;
   defaultBranch?: string;
   workerFactory?: (workerPath: string, workerData: Record<string, unknown>) => WorkerLike;
+  /** Optional event bus for subscribing to WorkCancelled events (Phase 7G). */
+  eventBus?: EventBus;
 }
 
 export interface WorkerLike {
@@ -31,6 +34,8 @@ export interface WorkerLike {
   on(event: 'error', listener: (error: Error) => void): WorkerLike;
   on(event: 'exit', listener: (code: number) => void): WorkerLike;
   terminate(): Promise<number>;
+  /** Send an inbound message to the worker (Phase 7F). */
+  postMessage?(message: unknown): void;
 }
 
 interface RunningEntry {
@@ -40,6 +45,8 @@ interface RunningEntry {
   lastEventTimestamp: number;
   attempt: number;
   sessionId?: string;
+  /** Agent session ID for signal routing (Phase 7G). */
+  agentSessionId?: string;
   lastEventType?: string;
   lastActivityAt?: string;
   tokenUsage?: TokenUsage;
@@ -74,6 +81,8 @@ export interface SymphonyOrchestrator {
   onTick(): Promise<void>;
   getState(): OrchestratorState;
   getSnapshot(): OrchestratorSnapshot;
+  /** Forward a prompted message to a running worker for a specific issue (Phase 7F). */
+  forwardPromptedMessage(issueId: string, message: { body: string; agentSessionId: string }): void;
 }
 
 const MAX_RETRY_ATTEMPTS = 10;
@@ -138,6 +147,35 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     cleanedWorkspaces: [],
   };
 
+  // Phase 7G: Subscribe to WorkCancelled events and forward stop to workers
+  let unsubscribeWorkCancelled: (() => void) | undefined;
+  if (deps.eventBus) {
+    unsubscribeWorkCancelled = deps.eventBus.subscribe('WorkCancelled', (event) => {
+      const workItemId = event.payload.workItemId;
+      const reason = event.payload.cancellationReason;
+
+      // Extract session ID from workItemId pattern: "linear-session-{sessionId}"
+      const sessionPrefix = 'linear-session-';
+      if (!workItemId.startsWith(sessionPrefix)) {
+        return;
+      }
+      const sessionId = workItemId.slice(sessionPrefix.length);
+
+      // Find the running worker that matches this session
+      for (const [, entry] of state.running.entries()) {
+        if (entry.agentSessionId === sessionId || entry.sessionId === sessionId) {
+          if (entry.worker.postMessage) {
+            entry.worker.postMessage({ type: 'stop', reason });
+            logger.info('Forwarded stop signal to worker', { sessionId, reason });
+          }
+          return;
+        }
+      }
+
+      logger.debug('WorkCancelled for unknown session (no running worker)', { sessionId, workItemId });
+    });
+  }
+
   function getWorkflowConfig(): WorkflowConfig {
     return deps.workflowConfigProvider?.() ?? deps.workflowConfig;
   }
@@ -199,6 +237,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
 
   async function stop(): Promise<void> {
     stopped = true;
+    unsubscribeWorkCancelled?.();
     if (pollTimer) {
       clearTimeout(pollTimer);
       pollTimer = null;
@@ -354,6 +393,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       const payload = message as {
         type?: string;
         sessionId?: string;
+        agentSessionId?: string;
         usage?: TokenUsage;
         timestamp?: number;
         status?: 'completed' | 'failed' | 'paused';
@@ -365,6 +405,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       entry.turnCount += 1;
       entry.sessionId = payload.sessionId ?? entry.sessionId;
       entry.lastActivityAt = payload.lastActivityAt ?? entry.lastActivityAt;
+      entry.agentSessionId = payload.agentSessionId ?? entry.agentSessionId;
       entry.workspacePath = payload.workspacePath ?? entry.workspacePath;
       if (payload.type === 'tokenUsage' && payload.usage) {
         entry.tokenUsage = payload.usage;
@@ -566,12 +607,30 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     rmSync(workspacePath, { recursive: true, force: true });
   }
 
+  function forwardPromptedMessage(issueId: string, message: { body: string; agentSessionId: string }): void {
+    const entry = state.running.get(issueId);
+    if (!entry) {
+      logger.warn('Cannot forward prompted message: no running worker for issue', { issueId });
+      return;
+    }
+    if (!entry.worker.postMessage) {
+      logger.warn('Worker does not support postMessage', { issueId });
+      return;
+    }
+    entry.worker.postMessage({
+      type: 'prompted',
+      body: message.body,
+      agentSessionId: message.agentSessionId,
+    });
+  }
+
   return {
     start,
     stop,
     onTick,
     getState,
     getSnapshot,
+    forwardPromptedMessage,
   };
 
   async function handleCleanWorkerExit(issue: LinearIssueResponse, entry: RunningEntry): Promise<void> {

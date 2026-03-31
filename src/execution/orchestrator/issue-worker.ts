@@ -15,6 +15,7 @@ import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import type { LinearIssueResponse } from '../../integration/linear/linear-client';
 import { createLinearClient } from '../../integration/linear/linear-client';
 import { createLinearToolBridge } from '../../integration/linear/linear-client';
+import { createOAuthTokenStore } from '../../integration/linear/oauth-token-store';
 import { createSimpleExecutor } from '../simple-executor';
 import { createWorktreeManager } from '../workspace/worktree-manager';
 import { createArtifactApplier } from '../workspace/artifact-applier';
@@ -24,6 +25,7 @@ import { createGitHubClient } from '../../integration/github-client';
 import { createGitHubAppTokenProvider } from '../../integration/github-app-auth';
 import { buildWorkpadComment, syncPersistentWorkpadComment } from '../../integration/linear/workpad-reporter';
 import { runIssueWorkerLifecycle } from './issue-worker-runner';
+import type { WorkerInboundMessage } from './issue-worker-runner';
 import type { WorkpadState } from '../../integration/linear/types';
 
 interface IssueWorkerData {
@@ -33,6 +35,18 @@ interface IssueWorkerData {
   worktreeBasePath: string;
   defaultRepo?: string;
   defaultBranch?: string;
+  /** Agent session ID for plan sync (Phase 7F). */
+  agentSessionId?: string;
+  /** Agent app user ID for delegate assignment (Phase 7H). */
+  agentAppUserId?: string;
+  /** OAuth credentials for Linear actor=app auth (optional). */
+  oauthCredentials?: {
+    clientId: string;
+    clientSecret: string;
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+  };
 }
 
 async function main(): Promise<void> {
@@ -46,12 +60,36 @@ async function main(): Promise<void> {
     },
   });
 
-  const linearClient = data.workflowConfig.tracker.apiKey
-    ? createLinearClient({
+  let linearClient: ReturnType<typeof createLinearClient> | undefined;
+  if (data.oauthCredentials) {
+    const tokenStore = createOAuthTokenStore({
+      clientId: data.oauthCredentials.clientId,
+      clientSecret: data.oauthCredentials.clientSecret,
+      initialTokens: {
+        accessToken: data.oauthCredentials.accessToken,
+        refreshToken: data.oauthCredentials.refreshToken,
+        expiresAt: data.oauthCredentials.expiresAt,
+      },
+      logger,
+    });
+    linearClient = createLinearClient({
+      authStrategy: {
+        mode: 'oauth',
+        clientId: data.oauthCredentials.clientId,
+        clientSecret: data.oauthCredentials.clientSecret,
+        accessToken: data.oauthCredentials.accessToken,
+        refreshToken: data.oauthCredentials.refreshToken,
+        expiresAt: data.oauthCredentials.expiresAt,
+      },
+      tokenStore,
+      logger,
+    });
+  } else if (data.workflowConfig.tracker.apiKey) {
+    linearClient = createLinearClient({
       apiKey: data.workflowConfig.tracker.apiKey,
       logger,
-    })
-    : undefined;
+    });
+  }
 
   const githubClient = createWorkerGitHubClient(logger);
   const worktreeManager = createWorktreeManager({
@@ -64,6 +102,21 @@ async function main(): Promise<void> {
     eventSink: (payload) => parentPort?.postMessage(payload),
     linearToolBridge: linearClient ? createLinearToolBridge(linearClient) : undefined,
   });
+
+  // Phase 7F: Inbound message channel — listen for prompted + stop messages
+  const pendingPrompts: string[] = [];
+  if (parentPort) {
+    parentPort.on('message', (msg: unknown) => {
+      if (!msg || typeof msg !== 'object') return;
+      const typed = msg as WorkerInboundMessage;
+      if (typed.type === 'prompted' && 'body' in typed) {
+        pendingPrompts.push(typed.body);
+      } else if (typed.type === 'stop') {
+        // Signal graceful stop — exit with code 0
+        process.exit(0);
+      }
+    });
+  }
 
   const workerStartedAt = new Date().toISOString();
   const result = await runIssueWorkerLifecycle({
@@ -164,6 +217,11 @@ async function main(): Promise<void> {
     },
     defaultRepo: data.defaultRepo,
     defaultBranch: data.defaultBranch,
+    linearClient,
+    agentSessionId: data.agentSessionId,
+    agentAppUserId: data.agentAppUserId,
+    pendingPrompts,
+    logger,
   });
   parentPort?.postMessage({
     type: 'completed',
