@@ -13,7 +13,7 @@ import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
 import { formatDuration } from '../../shared/format';
 import type { LinearClient } from './linear-client';
-import type { WorkpadState } from './types';
+import type { AgentActivityContent, AgentActivityOptions, WorkpadState } from './types';
 import { getBotMarker, getBotName } from '../../shared/agent-identity';
 
 // ---------------------------------------------------------------------------
@@ -24,6 +24,8 @@ export interface WorkpadReporterDeps {
   eventBus: EventBus;
   logger: Logger;
   linearClient: LinearClient;
+  /** When present, activities are emitted to this Linear Agent Session alongside comment updates. */
+  agentSessionId?: string;
 }
 
 export interface WorkpadReporter {
@@ -135,8 +137,23 @@ export async function syncPersistentWorkpadComment(
 // ---------------------------------------------------------------------------
 
 export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporter {
-  const { eventBus, logger, linearClient } = deps;
+  const { eventBus, logger, linearClient, agentSessionId } = deps;
   const unsubscribers: Array<() => void> = [];
+
+  /** Best-effort activity emission -- never blocks, never throws. */
+  async function emitActivity(
+    content: AgentActivityContent,
+    options?: AgentActivityOptions,
+  ): Promise<void> {
+    if (!agentSessionId || !linearClient.createAgentActivity) return;
+    try {
+      await linearClient.createAgentActivity(agentSessionId, content, options);
+    } catch (err) {
+      logger.warn('Activity emission failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   // Track workpad state per plan (planId -> state)
   const workpadStates = new Map<string, WorkpadState>();
@@ -221,6 +238,10 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
               error: err instanceof Error ? err.message : String(err),
             });
           });
+          void emitActivity(
+            { type: 'thought', body: `Starting ${phaseType} phase with ${agents.length} agent(s)` },
+            { ephemeral: true },
+          );
         }),
       );
 
@@ -241,6 +262,12 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
               error: err instanceof Error ? err.message : String(err),
             });
           });
+          void emitActivity({
+            type: 'action',
+            action: 'Phase completed',
+            parameter: result.phaseType,
+            result: `${result.status} in ${result.metrics.duration}ms`,
+          });
         }),
       );
 
@@ -260,6 +287,10 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
               error: err instanceof Error ? err.message : String(err),
             });
           });
+          void emitActivity(
+            { type: 'action', action: 'Spawning agent', parameter: `${agentType} (${agentRole})` },
+            { ephemeral: true },
+          );
         }),
       );
 
@@ -285,7 +316,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
 
       unsubscribers.push(
         eventBus.subscribe('WorkCompleted', (event) => {
-          const { planId } = event.payload;
+          const { planId, totalDuration } = event.payload;
           const state = workpadStates.get(planId);
           if (state) {
             state.status = 'completed';
@@ -297,12 +328,16 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
               error: err instanceof Error ? err.message : String(err),
             });
           });
+          void emitActivity({
+            type: 'response',
+            body: `Work completed. Duration: ${totalDuration}ms`,
+          });
         }),
       );
 
       unsubscribers.push(
         eventBus.subscribe('WorkFailed', (event) => {
-          const { workItemId } = event.payload;
+          const { workItemId, failureReason } = event.payload;
           const state = workpadStates.get(workItemId);
           if (state) {
             state.status = 'failed';
@@ -312,6 +347,10 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
               planId: workItemId,
               error: err instanceof Error ? err.message : String(err),
             });
+          });
+          void emitActivity({
+            type: 'error',
+            body: `Work failed: ${failureReason}`,
           });
         }),
       );

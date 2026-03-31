@@ -250,4 +250,349 @@ describe('WorkpadReporter', () => {
       // No error
     });
   });
+
+  // Phase 7E: Agent Activity Emission
+  describe('Agent Activity Emission (Phase 7E)', () => {
+    let eventBus: EventBus;
+
+    beforeEach(() => {
+      eventBus = createEventBus();
+    });
+
+    afterEach(() => {
+      eventBus.removeAllListeners();
+    });
+
+    function setupReporterWithSession(opts?: { agentSessionId?: string; createAgentActivityFn?: (...args: unknown[]) => Promise<string> }) {
+      const activityCalls: Array<{ sessionId: string; content: unknown; options?: unknown }> = [];
+      const createAgentActivity = opts?.createAgentActivityFn ?? (async (sessionId: string, content: unknown, options?: unknown) => {
+        activityCalls.push({ sessionId, content, options });
+        return 'activity-id';
+      });
+
+      const client = {
+        ...createMockLinearClient(),
+        createAgentActivity,
+      } as unknown as LinearClient;
+
+      const reporter = createWorkpadReporter({
+        eventBus,
+        logger: createLogger({ level: 'fatal' }),
+        linearClient: client,
+        agentSessionId: opts?.agentSessionId ?? 'session-123',
+      });
+
+      return { reporter, activityCalls, client };
+    }
+
+    function publishPlanCreated() {
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: {
+          id: 'plan-1',
+          workItemId: 'work-1',
+          methodology: 'sparc-full' as const,
+          template: 'adhoc',
+          topology: 'hierarchical' as const,
+          swarmStrategy: 'specialized' as const,
+          consensus: 'raft' as const,
+          maxAgents: 3,
+          phases: [],
+          agentTeam: [],
+          estimatedDuration: 0,
+          estimatedCost: 0,
+        },
+        intakeEvent: {
+          id: 'intake-1',
+          timestamp: new Date().toISOString(),
+          source: 'linear' as const,
+          sourceMetadata: { linearIssueId: 'issue-lin-1' },
+          intent: 'custom:linear-todo' as const,
+          entities: {},
+        },
+      }));
+    }
+
+    it('PhaseStarted emits ephemeral thought activity when agentSessionId present', async () => {
+      const { reporter, activityCalls } = setupReporterWithSession();
+      reporter.start();
+      publishPlanCreated();
+
+      eventBus.publish(createDomainEvent('PhaseStarted', {
+        planId: 'plan-1',
+        phaseType: 'specification',
+        agents: ['coder', 'reviewer'],
+      }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const call = activityCalls.find((c) =>
+        (c.content as { type: string }).type === 'thought',
+      );
+      assert.ok(call, 'Expected a thought activity to be emitted');
+      assert.equal(call!.sessionId, 'session-123');
+      assert.deepEqual(call!.content, {
+        type: 'thought',
+        body: 'Starting specification phase with 2 agent(s)',
+      });
+      assert.deepEqual(call!.options, { ephemeral: true });
+
+      reporter.stop();
+    });
+
+    it('AgentSpawned emits ephemeral action activity when agentSessionId present', async () => {
+      const { reporter, activityCalls } = setupReporterWithSession();
+      reporter.start();
+      publishPlanCreated();
+
+      eventBus.publish(createDomainEvent('AgentSpawned', {
+        execId: 'exec-1',
+        planId: 'plan-1',
+        agentRole: 'coder',
+        agentType: 'sparc-coder',
+      }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const call = activityCalls.find((c) =>
+        (c.content as { type: string }).type === 'action' &&
+        (c.content as { action?: string }).action === 'Spawning agent',
+      );
+      assert.ok(call, 'Expected an action activity for AgentSpawned');
+      assert.equal(call!.sessionId, 'session-123');
+      assert.deepEqual(call!.content, {
+        type: 'action',
+        action: 'Spawning agent',
+        parameter: 'sparc-coder (coder)',
+      });
+      assert.deepEqual(call!.options, { ephemeral: true });
+
+      reporter.stop();
+    });
+
+    it('PhaseCompleted emits action activity with result when agentSessionId present', async () => {
+      const { reporter, activityCalls } = setupReporterWithSession();
+      reporter.start();
+      publishPlanCreated();
+
+      eventBus.publish(createDomainEvent('PhaseCompleted', {
+        phaseResult: {
+          planId: 'plan-1',
+          phaseType: 'specification',
+          status: 'completed',
+          metrics: { duration: 4500 },
+          outputs: [],
+        },
+      }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const call = activityCalls.find((c) =>
+        (c.content as { type: string }).type === 'action' &&
+        (c.content as { action?: string }).action === 'Phase completed',
+      );
+      assert.ok(call, 'Expected an action activity for PhaseCompleted');
+      assert.equal(call!.sessionId, 'session-123');
+      assert.deepEqual(call!.content, {
+        type: 'action',
+        action: 'Phase completed',
+        parameter: 'specification',
+        result: 'completed in 4500ms',
+      });
+      // Not ephemeral — no ephemeral flag
+      assert.equal(call!.options, undefined);
+
+      reporter.stop();
+    });
+
+    it('WorkCompleted emits response activity when agentSessionId present', async () => {
+      const { reporter, activityCalls } = setupReporterWithSession();
+      reporter.start();
+      publishPlanCreated();
+
+      // Need to create state first via PhaseStarted
+      eventBus.publish(createDomainEvent('PhaseStarted', {
+        planId: 'plan-1',
+        phaseType: 'specification',
+        agents: ['coder'],
+      }));
+
+      await new Promise((r) => setTimeout(r, 20));
+
+      eventBus.publish(createDomainEvent('WorkCompleted', {
+        planId: 'plan-1',
+        totalDuration: 12000,
+      }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const call = activityCalls.find((c) =>
+        (c.content as { type: string }).type === 'response',
+      );
+      assert.ok(call, 'Expected a response activity for WorkCompleted');
+      assert.equal(call!.sessionId, 'session-123');
+      assert.deepEqual(call!.content, {
+        type: 'response',
+        body: 'Work completed. Duration: 12000ms',
+      });
+
+      reporter.stop();
+    });
+
+    it('WorkFailed emits error activity when agentSessionId present', async () => {
+      const { reporter, activityCalls } = setupReporterWithSession();
+      reporter.start();
+      publishPlanCreated();
+
+      // Create state via PhaseStarted
+      eventBus.publish(createDomainEvent('PhaseStarted', {
+        planId: 'plan-1',
+        phaseType: 'specification',
+        agents: ['coder'],
+      }));
+
+      await new Promise((r) => setTimeout(r, 20));
+
+      eventBus.publish(createDomainEvent('WorkFailed', {
+        workItemId: 'plan-1',
+        failureReason: 'Agent timed out',
+      }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const call = activityCalls.find((c) =>
+        (c.content as { type: string }).type === 'error',
+      );
+      assert.ok(call, 'Expected an error activity for WorkFailed');
+      assert.equal(call!.sessionId, 'session-123');
+      assert.deepEqual(call!.content, {
+        type: 'error',
+        body: 'Work failed: Agent timed out',
+      });
+
+      reporter.stop();
+    });
+
+    it('no activity emission when agentSessionId is absent (backward compat)', async () => {
+      const activityCalls: unknown[] = [];
+      const client = {
+        ...createMockLinearClient(),
+        createAgentActivity: async (...args: unknown[]) => {
+          activityCalls.push(args);
+          return 'activity-id';
+        },
+      } as unknown as LinearClient;
+
+      const reporter = createWorkpadReporter({
+        eventBus,
+        logger: createLogger({ level: 'fatal' }),
+        linearClient: client,
+        // No agentSessionId
+      });
+
+      reporter.start();
+
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: {
+          id: 'plan-1',
+          workItemId: 'work-1',
+          methodology: 'sparc-full' as const,
+          template: 'adhoc',
+          topology: 'hierarchical' as const,
+          swarmStrategy: 'specialized' as const,
+          consensus: 'raft' as const,
+          maxAgents: 3,
+          phases: [],
+          agentTeam: [],
+          estimatedDuration: 0,
+          estimatedCost: 0,
+        },
+        intakeEvent: {
+          id: 'intake-1',
+          timestamp: new Date().toISOString(),
+          source: 'linear' as const,
+          sourceMetadata: { linearIssueId: 'issue-lin-1' },
+          intent: 'custom:linear-todo' as const,
+          entities: {},
+        },
+      }));
+
+      eventBus.publish(createDomainEvent('PhaseStarted', {
+        planId: 'plan-1',
+        phaseType: 'specification',
+        agents: ['coder'],
+      }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(activityCalls.length, 0, 'No activities should be emitted without agentSessionId');
+
+      reporter.stop();
+    });
+
+    it('activity emission failure does NOT prevent comment update', async () => {
+      const failingCreateActivity = async () => {
+        throw new Error('Linear API rate limited');
+      };
+      const { reporter } = setupReporterWithSession({
+        createAgentActivityFn: failingCreateActivity,
+      });
+      const client = createMockLinearClient();
+      // We need a reporter with both a working linearClient for comments AND a failing createAgentActivity
+      const combinedClient = {
+        ...client,
+        createAgentActivity: failingCreateActivity,
+      } as unknown as LinearClient;
+
+      const reporter2 = createWorkpadReporter({
+        eventBus,
+        logger: createLogger({ level: 'fatal' }),
+        linearClient: combinedClient,
+        agentSessionId: 'session-123',
+      });
+
+      reporter2.start();
+
+      eventBus.publish(createDomainEvent('PlanCreated', {
+        workflowPlan: {
+          id: 'plan-1',
+          workItemId: 'work-1',
+          methodology: 'sparc-full' as const,
+          template: 'adhoc',
+          topology: 'hierarchical' as const,
+          swarmStrategy: 'specialized' as const,
+          consensus: 'raft' as const,
+          maxAgents: 3,
+          phases: [],
+          agentTeam: [],
+          estimatedDuration: 0,
+          estimatedCost: 0,
+        },
+        intakeEvent: {
+          id: 'intake-1',
+          timestamp: new Date().toISOString(),
+          source: 'linear' as const,
+          sourceMetadata: { linearIssueId: 'issue-lin-1' },
+          intent: 'custom:linear-todo' as const,
+          entities: {},
+        },
+      }));
+
+      eventBus.publish(createDomainEvent('PhaseStarted', {
+        planId: 'plan-1',
+        phaseType: 'specification',
+        agents: ['coder'],
+      }));
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Comment update should still have been attempted (fetchComments + createComment)
+      assert.ok(
+        client.commentCalls.length >= 1,
+        'Comment update should still proceed despite activity emission failure',
+      );
+
+      reporter.stop();
+      reporter2.stop();
+    });
+  });
 });
