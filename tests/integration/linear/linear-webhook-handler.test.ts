@@ -22,8 +22,9 @@ import {
   setLinearBotUserId,
 } from '../../../src/integration/linear/linear-normalizer';
 import type { WorkflowConfig } from '../../../src/integration/linear/workflow-parser';
-import type { IntakeCompletedEvent } from '../../../src/shared/event-types';
+import type { IntakeCompletedEvent, AgentPromptedEvent, WorkCancelledEvent } from '../../../src/shared/event-types';
 import type { IntakeEvent } from '../../../src/types';
+import type { LinearClient } from '../../../src/integration/linear/linear-client';
 
 // ---------------------------------------------------------------------------
 // Test workflow config
@@ -362,5 +363,367 @@ describe('linearWebhookHandler (integration)', () => {
     assert.equal(response.statusCode, 202);
     const json = JSON.parse(response.body);
     assert.equal(json.status, 'skipped');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 7D: AgentSessionEvent tests
+  // ---------------------------------------------------------------------------
+
+  function makeAgentSessionPayload(
+    action: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      type: 'AgentSessionEvent',
+      action,
+      createdAt: '2026-03-29T00:00:00.000Z',
+      data: { id: 'issue-1', identifier: 'ENG-42', title: 'Fix bug', priority: 2 },
+      agentSession: {
+        id: 'session-abc',
+        issue: { id: 'issue-1', identifier: 'ENG-42', title: 'Fix bug' },
+      },
+      promptContext: '<issue identifier="ENG-42"><title>Fix bug</title><description>broken</description></issue>',
+      ...overrides,
+    };
+  }
+
+  function createMockLinearClient(overrides: Partial<LinearClient> = {}): LinearClient {
+    return {
+      fetchIssue: async () => ({} as never),
+      fetchTeamStates: async () => [],
+      fetchActiveIssues: async () => [],
+      fetchIssuesByStates: async () => [],
+      fetchIssueStatesByIds: async () => [],
+      fetchComments: async () => [],
+      createComment: async () => '',
+      updateComment: async () => {},
+      updateIssueState: async () => {},
+      createAgentActivity: async () => 'activity-1',
+      agentSessionUpdate: async () => {},
+      agentSessionCreateOnIssue: async () => '',
+      agentSessionCreateOnComment: async () => '',
+      fetchSessionActivities: async () => ({ activities: [], hasNextPage: false }),
+      issueRepositorySuggestions: async () => [],
+      ...overrides,
+    };
+  }
+
+  function createTestServerWithLinearClient(
+    linearClient: LinearClient,
+    configOverrides: Record<string, string> = {},
+  ) {
+    return async () => {
+      setWorkflowConfig(TEST_WORKFLOW_CONFIG);
+      setLinearBotUserId('');
+
+      const config = loadConfig({
+        PORT: '3998',
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'fatal',
+        WEBHOOK_SECRET: 'github-secret',
+        LINEAR_ENABLED: 'true',
+        LINEAR_WEBHOOK_SECRET: TEST_SECRET,
+        ...configOverrides,
+      });
+      const logger = createLogger({ level: 'fatal' });
+      eventBus = createEventBus();
+      buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
+
+      server = Fastify({ logger: false });
+      await server.register(linearWebhookHandler, {
+        config,
+        logger,
+        eventBus,
+        eventBuffer: buffer,
+        linearClient,
+      } as LinearWebhookHandlerDeps);
+      await server.ready();
+    };
+  }
+
+  // 7D: AgentSessionEvent 'created' emits thought activity and publishes IntakeCompleted
+  it('should emit thought activity and publish IntakeCompleted for AgentSessionEvent created', async () => {
+    const activityCalls: Array<{ sessionId: string; content: unknown }> = [];
+    const mockClient = createMockLinearClient({
+      createAgentActivity: async (sessionId, content) => {
+        activityCalls.push({ sessionId, content });
+        return 'activity-1';
+      },
+    });
+    await createTestServerWithLinearClient(mockClient)();
+
+    let capturedEvent: IntakeCompletedEvent | null = null;
+    eventBus.subscribe('IntakeCompleted', (event) => {
+      capturedEvent = event;
+    });
+
+    const payload = makeAgentSessionPayload('created');
+    const body = JSON.stringify(payload);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': computeLinearSignature(body, TEST_SECRET),
+        'linear-delivery': 'delivery-session-1',
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const json = JSON.parse(response.body);
+    assert.equal(json.status, 'queued');
+
+    // Thought activity was emitted
+    assert.equal(activityCalls.length, 1);
+    assert.equal(activityCalls[0]!.sessionId, 'session-abc');
+    assert.deepStrictEqual(activityCalls[0]!.content, { type: 'thought', body: 'Analyzing your request...' });
+
+    // IntakeCompleted was published
+    assert.ok(capturedEvent);
+    assert.equal(capturedEvent!.payload.intakeEvent.source, 'linear');
+  });
+
+  // 7D: AgentSessionEvent 'created' includes agentSessionId in IntakeEvent sourceMetadata
+  it('should include agentSessionId in IntakeEvent sourceMetadata for AgentSessionEvent created', async () => {
+    const mockClient = createMockLinearClient();
+    await createTestServerWithLinearClient(mockClient)();
+
+    let capturedEvent: IntakeCompletedEvent | null = null;
+    eventBus.subscribe('IntakeCompleted', (event) => {
+      capturedEvent = event;
+    });
+
+    const payload = makeAgentSessionPayload('created');
+    const body = JSON.stringify(payload);
+
+    await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': computeLinearSignature(body, TEST_SECRET),
+        'linear-delivery': 'delivery-session-meta',
+      },
+      payload: body,
+    });
+
+    assert.ok(capturedEvent);
+    const meta = capturedEvent!.payload.intakeEvent.sourceMetadata;
+    assert.equal(meta.agentSessionId, 'session-abc');
+    assert.ok(meta.promptContext !== undefined);
+  });
+
+  // 7D: AgentSessionEvent 'prompted' publishes AgentPrompted event with body
+  it('should publish AgentPrompted for AgentSessionEvent prompted', async () => {
+    const mockClient = createMockLinearClient();
+    await createTestServerWithLinearClient(mockClient)();
+
+    let capturedEvent: AgentPromptedEvent | null = null;
+    eventBus.subscribe('AgentPrompted', (event) => {
+      capturedEvent = event;
+    });
+
+    const payload = makeAgentSessionPayload('prompted', {
+      agentActivity: { body: 'Can you also fix the tests?', signal: null },
+    });
+    const body = JSON.stringify(payload);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': computeLinearSignature(body, TEST_SECRET),
+        'linear-delivery': 'delivery-session-prompted',
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const json = JSON.parse(response.body);
+    assert.equal(json.status, 'queued');
+
+    assert.ok(capturedEvent);
+    assert.equal(capturedEvent!.payload.agentSessionId, 'session-abc');
+    assert.equal(capturedEvent!.payload.issueId, 'issue-1');
+    assert.equal(capturedEvent!.payload.body, 'Can you also fix the tests?');
+  });
+
+  // 7D: AgentSessionEvent 'prompted' with stop signal publishes WorkCancelled and emits response
+  it('should publish WorkCancelled and emit response for stop signal', async () => {
+    const activityCalls: Array<{ sessionId: string; content: unknown }> = [];
+    const mockClient = createMockLinearClient({
+      createAgentActivity: async (sessionId, content) => {
+        activityCalls.push({ sessionId, content });
+        return 'activity-stop';
+      },
+    });
+    await createTestServerWithLinearClient(mockClient)();
+
+    let cancelledEvent: WorkCancelledEvent | null = null;
+    eventBus.subscribe('WorkCancelled', (event) => {
+      cancelledEvent = event;
+    });
+
+    const payload = makeAgentSessionPayload('prompted', {
+      agentActivity: { body: '', signal: 'stop' },
+    });
+    const body = JSON.stringify(payload);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': computeLinearSignature(body, TEST_SECRET),
+        'linear-delivery': 'delivery-session-stop',
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const json = JSON.parse(response.body);
+    assert.equal(json.status, 'cancelling');
+
+    // WorkCancelled was published
+    assert.ok(cancelledEvent);
+    assert.equal(cancelledEvent!.payload.workItemId, 'linear-session-session-abc');
+    assert.ok(cancelledEvent!.payload.cancellationReason.includes('stop signal'));
+
+    // Response activity was emitted
+    assert.equal(activityCalls.length, 1);
+    assert.deepStrictEqual(activityCalls[0]!.content, {
+      type: 'response',
+      body: 'Stopped. No further changes will be made.',
+    });
+  });
+
+  // 7D: Unknown AgentSessionEvent action returns 202 skipped
+  it('should return 202 skipped for unknown AgentSessionEvent action', async () => {
+    const mockClient = createMockLinearClient();
+    await createTestServerWithLinearClient(mockClient)();
+
+    const payload = makeAgentSessionPayload('unknown_action');
+    const body = JSON.stringify(payload);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': computeLinearSignature(body, TEST_SECRET),
+        'linear-delivery': 'delivery-session-unknown',
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const json = JSON.parse(response.body);
+    assert.equal(json.status, 'skipped');
+  });
+
+  // 7D: Issue payload regression test (continues to work unchanged)
+  it('should still process Issue payloads after AgentSessionEvent handler added (regression)', async () => {
+    const mockClient = createMockLinearClient();
+    await createTestServerWithLinearClient(mockClient)();
+
+    let capturedEvent: IntakeCompletedEvent | null = null;
+    eventBus.subscribe('IntakeCompleted', (event) => {
+      capturedEvent = event;
+    });
+
+    const payload = makeLinearPayload();
+    const body = JSON.stringify(payload);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': computeLinearSignature(body, TEST_SECRET),
+        'linear-delivery': 'delivery-regression-1',
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    assert.ok(capturedEvent);
+    assert.equal(capturedEvent!.payload.intakeEvent.source, 'linear');
+    assert.equal(capturedEvent!.payload.intakeEvent.intent, 'custom:linear-todo');
+  });
+
+  // 7D: Thought activity failure does NOT block intake dispatch
+  it('should dispatch intake even when thought activity emission fails', async () => {
+    const mockClient = createMockLinearClient({
+      createAgentActivity: async () => {
+        throw new Error('Linear API timeout');
+      },
+    });
+    await createTestServerWithLinearClient(mockClient)();
+
+    let capturedEvent: IntakeCompletedEvent | null = null;
+    eventBus.subscribe('IntakeCompleted', (event) => {
+      capturedEvent = event;
+    });
+
+    const payload = makeAgentSessionPayload('created');
+    const body = JSON.stringify(payload);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': computeLinearSignature(body, TEST_SECRET),
+        'linear-delivery': 'delivery-session-fail-activity',
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 202);
+    const json = JSON.parse(response.body);
+    assert.equal(json.status, 'queued');
+
+    // IntakeCompleted was still published even though thought emission failed
+    assert.ok(capturedEvent);
+    assert.equal(capturedEvent!.payload.intakeEvent.source, 'linear');
+  });
+
+  // 7D: AgentSessionEvent dedup via event buffer (FR-7D.07)
+  it('should deduplicate AgentSessionEvent via event buffer', async () => {
+    const mockClient = createMockLinearClient();
+    await createTestServerWithLinearClient(mockClient)();
+
+    const payload = makeAgentSessionPayload('created');
+    const body = JSON.stringify(payload);
+    const sig = computeLinearSignature(body, TEST_SECRET);
+
+    // First request: 202 queued
+    const r1 = await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': sig,
+        'linear-delivery': 'delivery-session-dup-1',
+      },
+      payload: body,
+    });
+    assert.equal(r1.statusCode, 202);
+
+    // Second request with same payload: 409 duplicate
+    const r2 = await server.inject({
+      method: 'POST',
+      url: '/webhooks/linear',
+      headers: {
+        'content-type': 'application/json',
+        'linear-signature': sig,
+        'linear-delivery': 'delivery-session-dup-2',
+      },
+      payload: body,
+    });
+    assert.equal(r2.statusCode, 409);
   });
 });

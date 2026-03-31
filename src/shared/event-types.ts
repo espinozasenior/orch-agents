@@ -199,6 +199,15 @@ export type AgentCancelledEvent = DomainEvent<
 >;
 
 // ---------------------------------------------------------------------------
+// Agent session events (Phase 7D)
+// ---------------------------------------------------------------------------
+
+export type AgentPromptedEvent = DomainEvent<
+  'AgentPrompted',
+  { agentSessionId: string; issueId: string; body: string }
+>;
+
+// ---------------------------------------------------------------------------
 // Union of all domain event types
 // ---------------------------------------------------------------------------
 
@@ -232,7 +241,8 @@ export type AnyDomainEvent =
   | AgentChunkEvent
   | AgentCompletedEvent
   | AgentFailedEvent
-  | AgentCancelledEvent;
+  | AgentCancelledEvent
+  | AgentPromptedEvent;
 
 // ---------------------------------------------------------------------------
 // Event type string literals for use with the event bus
@@ -275,4 +285,5 @@ export interface DomainEventMap {
   AgentCompleted: AgentCompletedEvent;
   AgentFailed: AgentFailedEvent;
   AgentCancelled: AgentCancelledEvent;
+  AgentPrompted: AgentPromptedEvent;
 }
