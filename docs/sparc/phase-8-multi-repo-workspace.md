@@ -15,7 +15,7 @@ The current system hardcodes a single repository via `GITHUB_REPOSITORY` env var
 - FR-8.04: Cache cloned repos in `workspace.root` so subsequent issues for the same repo reuse the clone
 - FR-8.05: Worktree creation uses the resolved repo's local clone as the git source
 - FR-8.06: Pass resolved repo URL and branch to the issue worker via `workerData`
-- FR-8.07: Backward compatible — if no `workspace.repos` config, use existing `GITHUB_REPOSITORY` behavior
+- FR-8.07: `workspace.repos` is REQUIRED — fail startup if missing or empty. No fallback to `GITHUB_REPOSITORY` env var
 - FR-8.08: Support `issueRepositorySuggestions` with all configured repos as candidates
 - FR-8.09: Auto-select when suggestion confidence > 0.8; emit `select` signal when ambiguous
 
@@ -84,9 +84,11 @@ FUNCTION resolveRepoForIssue(issue, workspaceConfig, linearClient?, agentSession
       // Wait for prompted webhook with user's selection
       RETURN PENDING  // orchestrator handles async resolution
 
-  // 5. Fallback to default
-  defaultRepo = repos.find(r => r.name == workspaceConfig.defaultRepo) ?? repos[0]
-  RETURN defaultRepo
+  // 5. Fallback to default repo from config (NOT env var)
+  defaultRepo = repos.find(r => r.name == workspaceConfig.defaultRepo)
+  IF defaultRepo:
+    RETURN defaultRepo
+  THROW Error("No repo resolved for issue — check workspace.repos config")
 
 FUNCTION ensureRepoCloned(repo, workspaceRoot):
   clonePath = join(workspaceRoot, 'repos', repo.name)
@@ -155,7 +157,7 @@ issue-worker runs Claude in the correct repo context
 - **Shared clone directory** — avoids re-cloning the same repo for every issue
 - **Worktrees from clones** — `git worktree add` from the shared clone, not from `process.cwd()`
 - **Async repo resolution** — the `select` signal path is inherently async (waits for user response via webhook). The orchestrator must handle a PENDING state.
-- **Backward compat** — no `workspace.repos` = existing single-repo behavior unchanged
+- **No backward compat** — `workspace.repos` is required. Fail fast at startup if missing. Eliminates the `GITHUB_REPOSITORY` env var dependency for repo resolution
 
 ## Refinement
 
@@ -199,8 +201,9 @@ workspace:
   - issueRepositorySuggestions called when no label/team match
   - High-confidence suggestion (>0.8) auto-selects
   - Low-confidence triggers select elicitation
-  - No repos configured returns default
-  - Empty workspace.repos uses GITHUB_REPOSITORY fallback
+  - No repos configured throws error
+  - Empty workspace.repos throws startup error
+  - Missing workspace section throws startup error
 - `tests/integration/linear/workflow-parser.test.ts`
   - Parse workspace.repos with all fields
   - Parse workspace.repos with minimal fields (name + url only)
