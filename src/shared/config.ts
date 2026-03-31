@@ -47,6 +47,14 @@ export interface AppConfig {
   readonly githubAppPrivateKeyPath?: string;
   /** GitHub App installation ID (optional) */
   readonly githubAppInstallationId?: string;
+  /** Linear auth mode: 'apiKey' (default) or 'oauth' (actor=app) */
+  readonly linearAuthMode: 'apiKey' | 'oauth';
+  /** Linear OAuth client ID */
+  readonly linearClientId: string;
+  /** Linear OAuth client secret */
+  readonly linearClientSecret: string;
+  /** Linear OAuth redirect URI for code exchange */
+  readonly linearRedirectUri: string;
 }
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = [
@@ -96,6 +104,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const workflowMdPath = env.WORKFLOW_MD_PATH ?? 'WORKFLOW.md';
   const workflowMdGithub = env.WORKFLOW_MD_GITHUB === 'true';
 
+  const linearAuthMode = (env.LINEAR_AUTH_MODE === 'oauth' ? 'oauth' : 'apiKey') as 'apiKey' | 'oauth';
+  const linearClientId = env.LINEAR_CLIENT_ID ?? '';
+  const linearClientSecret = env.LINEAR_CLIENT_SECRET ?? '';
+  const linearRedirectUri = env.LINEAR_REDIRECT_URI ?? '';
+
+  if (isProduction && linearAuthMode === 'oauth' && (!linearClientId || !linearClientSecret)) {
+    throw new Error('LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET are required when LINEAR_AUTH_MODE=oauth');
+  }
+
   return Object.freeze({
     port,
     nodeEnv,
@@ -116,6 +133,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     githubAppId,
     githubAppPrivateKeyPath,
     githubAppInstallationId,
+    linearAuthMode,
+    linearClientId,
+    linearClientSecret,
+    linearRedirectUri,
   });
 }
 
