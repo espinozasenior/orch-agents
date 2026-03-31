@@ -134,3 +134,57 @@ export interface WorkpadFinding {
   severity: string;
   message: string;
 }
+
+// ---------------------------------------------------------------------------
+// Agent Activity API (Phase 7B)
+// ---------------------------------------------------------------------------
+
+export type AgentActivityContent =
+  | { type: 'thought'; body: string }
+  | { type: 'action'; action: string; parameter: string; result?: string }
+  | { type: 'elicitation'; body: string }
+  | { type: 'response'; body: string }
+  | { type: 'error'; body: string };
+
+export interface AgentActivityOptions {
+  ephemeral?: boolean;
+  signal?: 'stop' | 'auth' | 'select';
+  signalMetadata?: Record<string, unknown>;
+}
+
+export type AgentPlanStep = {
+  content: string;
+  status: 'pending' | 'inProgress' | 'completed' | 'canceled';
+};
+
+export interface AgentSessionUpdateInput {
+  externalUrls?: Array<{ label: string; url: string }>;
+  addedExternalUrls?: Array<{ label: string; url: string }>;
+  removedExternalUrls?: Array<{ url: string }>;
+  plan?: AgentPlanStep[];
+}
+
+export interface AgentSessionActivity {
+  type: string;
+  body?: string;
+  action?: string;
+  parameter?: string;
+  result?: string;
+}
+
+export interface FetchSessionActivitiesResult {
+  activities: AgentSessionActivity[];
+  hasNextPage: boolean;
+  endCursor?: string;
+}
+
+export interface RepositoryCandidate {
+  hostname: string;
+  repositoryFullName: string;
+}
+
+export interface RepositorySuggestion {
+  repositoryFullName: string;
+  hostname: string;
+  confidence: number;
+}

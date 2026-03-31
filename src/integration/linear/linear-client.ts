@@ -10,6 +10,35 @@
 
 import type { Logger } from '../../shared/logger';
 import { AppError } from '../../shared/errors';
+import type { OAuthTokenStore } from './oauth-token-store';
+import type {
+  AgentActivityContent,
+  AgentActivityOptions,
+  AgentSessionUpdateInput,
+  AgentSessionActivity,
+  FetchSessionActivitiesResult,
+  RepositoryCandidate,
+  RepositorySuggestion,
+} from './types';
+import {
+  FETCH_ISSUE_QUERY,
+  FETCH_ACTIVE_ISSUES_QUERY,
+  FETCH_TEAM_STATES_QUERY,
+  FETCH_ISSUES_BY_STATES_QUERY,
+  FETCH_ISSUE_STATES_BY_IDS_QUERY,
+  FETCH_COMMENTS_QUERY,
+  CREATE_COMMENT_MUTATION,
+  UPDATE_COMMENT_MUTATION,
+  UPDATE_ISSUE_STATE_MUTATION,
+  AGENT_ACTIVITY_CREATE_MUTATION,
+  AGENT_SESSION_UPDATE_MUTATION,
+  AGENT_SESSION_CREATE_ON_ISSUE_MUTATION,
+  AGENT_SESSION_CREATE_ON_COMMENT_MUTATION,
+  FETCH_SESSION_ACTIVITIES_QUERY,
+  ISSUE_REPOSITORY_SUGGESTIONS_QUERY,
+  ISSUE_UPDATE_MUTATION,
+  FETCH_VIEWER_QUERY,
+} from './graphql-queries';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -19,7 +48,7 @@ export interface LinearClient {
   /** Fetch a single issue by ID. */
   fetchIssue(issueId: string): Promise<LinearIssueResponse>;
   /** Fetch workflow states for a team. */
-  fetchTeamStates(teamId: string): Promise<Array<{ id: string; name: string; type?: string }>>;
+  fetchTeamStates(teamId: string): Promise<Array<{ id: string; name: string; type?: string; position?: number }>>;
   /** Fetch all active issues for a team. */
   fetchActiveIssues(teamId: string): Promise<LinearIssueResponse[]>;
   /** Fetch candidate issues for the configured active states. */
@@ -36,6 +65,22 @@ export interface LinearClient {
   updateIssueState(issueId: string, stateId: string): Promise<void>;
   /** Optional attachment creation hook for richer tool bridges. */
   createAttachment?(issueId: string, title: string, url: string): Promise<string>;
+  /** Create a typed agent activity in a session. */
+  createAgentActivity(sessionId: string, content: AgentActivityContent, options?: AgentActivityOptions): Promise<string>;
+  /** Update an agent session (plan, external URLs). */
+  agentSessionUpdate(id: string, updates: AgentSessionUpdateInput): Promise<void>;
+  /** Proactively create an agent session on an issue. */
+  agentSessionCreateOnIssue(issueId: string): Promise<string>;
+  /** Create an agent session from a comment thread. */
+  agentSessionCreateOnComment(commentId: string): Promise<string>;
+  /** Fetch paginated activity history for a session. */
+  fetchSessionActivities(sessionId: string, options?: { after?: string }): Promise<FetchSessionActivitiesResult>;
+  /** Get ranked repository suggestions for an issue. */
+  issueRepositorySuggestions(issueId: string, sessionId: string, candidates: RepositoryCandidate[]): Promise<RepositorySuggestion[]>;
+  /** Update an issue (delegate, state, etc). */
+  issueUpdate(issueId: string, input: { delegateId?: string; stateId?: string }): Promise<void>;
+  /** Fetch the authenticated viewer's user ID and organization. */
+  fetchViewer(): Promise<{ id: string; organization?: { id: string; name: string } }>;
 }
 
 export type LinearToolOperation =
@@ -62,6 +107,7 @@ export interface LinearIssueResponse {
   state: { id: string; name: string; type?: string };
   labels: { nodes: Array<{ id: string; name: string }> };
   assignee?: { id: string; name?: string } | null;
+  delegate?: { id: string; name?: string } | null;
   creator?: { id: string; name?: string } | null;
   team?: { id: string; key: string; name?: string } | null;
   project?: { id: string; name?: string } | null;
@@ -76,115 +122,34 @@ export interface LinearCommentResponse {
   user?: { id: string; name?: string };
 }
 
+// ---------------------------------------------------------------------------
+// Auth strategy types
+// ---------------------------------------------------------------------------
+
+export type LinearAuthStrategy =
+  | { mode: 'apiKey'; apiKey: string }
+  | {
+      mode: 'oauth';
+      clientId: string;
+      clientSecret: string;
+      accessToken: string;
+      refreshToken: string;
+      expiresAt: number;
+    };
+
 export interface LinearClientDeps {
-  apiKey: string;
+  /** API key for legacy auth mode. Optional when authStrategy is provided. */
+  apiKey?: string;
   logger?: Logger;
   /** Injectable fetch for testing. Defaults to global fetch. */
   fetchFn?: (url: string, init: RequestInit) => Promise<Response>;
   /** Base URL for Linear API (default: https://api.linear.app) */
   baseUrl?: string;
+  /** Auth strategy — takes precedence over apiKey when provided. */
+  authStrategy?: LinearAuthStrategy;
+  /** OAuth token store for refresh logic. Required when authStrategy.mode === 'oauth'. */
+  tokenStore?: OAuthTokenStore;
 }
-
-// ---------------------------------------------------------------------------
-// GraphQL queries
-// ---------------------------------------------------------------------------
-
-const ISSUE_FIELDS = `
-  id identifier title description url priority updatedAt
-  state { id name type }
-  labels { nodes { id name } }
-  assignee { id name }
-  creator { id name }
-  team { id key name }
-  project { id name }
-`;
-
-const FETCH_ISSUE_QUERY = `
-  query FetchIssue($id: String!) {
-    issue(id: $id) { ${ISSUE_FIELDS} }
-  }
-`;
-
-const FETCH_ACTIVE_ISSUES_QUERY = `
-  query FetchActiveIssues($teamId: String!) {
-    team(id: $teamId) {
-      issues(filter: { state: { type: { nin: ["completed", "canceled"] } } }, first: 100) {
-        nodes { ${ISSUE_FIELDS} }
-      }
-    }
-  }
-`;
-
-const FETCH_TEAM_STATES_QUERY = `
-  query FetchTeamStates($teamId: String!) {
-    team(id: $teamId) {
-      states {
-        nodes {
-          id
-          name
-          type
-        }
-      }
-    }
-  }
-`;
-
-const FETCH_ISSUES_BY_STATES_QUERY = `
-  query FetchIssuesByStates($teamId: String!, $stateNames: [String!]!) {
-    team(id: $teamId) {
-      issues(
-        filter: { state: { name: { in: $stateNames } } },
-        first: 100
-      ) {
-        nodes { ${ISSUE_FIELDS} }
-      }
-    }
-  }
-`;
-
-const FETCH_ISSUE_STATES_BY_IDS_QUERY = `
-  query FetchIssueStatesByIds($issueIds: [String!]!) {
-    nodes(ids: $issueIds) {
-      ... on Issue {
-        id
-        state { name }
-      }
-    }
-  }
-`;
-
-const FETCH_COMMENTS_QUERY = `
-  query FetchComments($issueId: String!) {
-    issue(id: $issueId) {
-      comments { nodes { id body createdAt updatedAt user { id name } } }
-    }
-  }
-`;
-
-const CREATE_COMMENT_MUTATION = `
-  mutation CreateComment($issueId: String!, $body: String!) {
-    commentCreate(input: { issueId: $issueId, body: $body }) {
-      success
-      comment { id }
-    }
-  }
-`;
-
-const UPDATE_COMMENT_MUTATION = `
-  mutation UpdateComment($commentId: String!, $body: String!) {
-    commentUpdate(id: $commentId, input: { body: $body }) {
-      success
-    }
-  }
-`;
-
-const UPDATE_ISSUE_STATE_MUTATION = `
-  mutation UpdateIssueState($issueId: String!, $stateId: String!) {
-    issueUpdate(id: $issueId, input: { stateId: $stateId }) {
-      success
-    }
-  }
-`;
 
 // ---------------------------------------------------------------------------
 // Rate limit handling
@@ -213,15 +178,69 @@ function calculateBackoff(currentBackoffMs: number): number {
 
 export function createLinearClient(deps: LinearClientDeps): LinearClient {
   const log = deps.logger;
-  const apiKey = deps.apiKey;
   const baseUrl = deps.baseUrl ?? 'https://api.linear.app';
   const fetchFn = deps.fetchFn ?? globalThis.fetch;
+
+  // Resolve auth strategy: explicit strategy > legacy apiKey
+  const resolvedStrategy: LinearAuthStrategy | undefined = deps.authStrategy
+    ?? (deps.apiKey ? { mode: 'apiKey', apiKey: deps.apiKey } : undefined);
+
+  if (!resolvedStrategy) {
+    throw new LinearApiError('LinearClient requires either authStrategy or apiKey', 400);
+  }
+
+  const authStrategy: LinearAuthStrategy = resolvedStrategy;
+  const tokenStore = deps.tokenStore;
+
+  async function getAuthHeader(): Promise<string> {
+    if (authStrategy.mode === 'apiKey') {
+      return authStrategy.apiKey;
+    }
+    // OAuth mode: proactively refresh if needed, then return Bearer token
+    if (tokenStore) {
+      const currentToken = tokenStore.getAccessToken();
+      if (!currentToken) {
+        // OAuth tokens not yet available (pre-authorization).
+        // Fall back to API key if one was provided alongside OAuth config.
+        if (deps.apiKey) {
+          return deps.apiKey;
+        }
+        log?.warn('linear-client: no OAuth token and no API key fallback');
+        return '';
+      }
+      try {
+        await tokenStore.refreshIfNeeded();
+      } catch (err) {
+        // Refresh failed — use current token if still valid, or fall back to API key
+        log?.warn('linear-client: token refresh failed, using current token or API key fallback', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (!tokenStore.getAccessToken() && deps.apiKey) {
+          return deps.apiKey;
+        }
+      }
+      return `Bearer ${tokenStore.getAccessToken()}`;
+    }
+    return `Bearer ${authStrategy.accessToken}`;
+  }
 
   const rateLimitState: RateLimitState = {
     requestCount: 0,
     windowStart: Date.now(),
     backoffMs: BASE_BACKOFF_MS,
   };
+
+  async function doFetch<T>(query: string, variables: Record<string, unknown>, authHeader: string): Promise<{ response: Response; parsed?: { data?: T; errors?: Array<{ message: string }> } }> {
+    const response = await fetchFn(`${baseUrl}/graphql`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authHeader,
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    return { response };
+  }
 
   async function graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     // Rate limit tracking
@@ -242,14 +261,20 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
 
     log?.debug('linear-client graphql', { query: query.slice(0, 50), variables });
 
-    const response = await fetchFn(`${baseUrl}/graphql`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: apiKey,
-      },
-      body: JSON.stringify({ query, variables }),
-    });
+    let authHeader = await getAuthHeader();
+    let { response } = await doFetch<T>(query, variables, authHeader);
+
+    // 401 retry for OAuth mode: force-refresh token and retry once
+    if (response.status === 401 && authStrategy.mode === 'oauth' && tokenStore) {
+      log?.debug('linear-client: 401 received, attempting token refresh and retry');
+      await tokenStore.refreshIfNeeded(true);
+      authHeader = await getAuthHeader();
+      ({ response } = await doFetch<T>(query, variables, authHeader));
+
+      if (response.status === 401) {
+        throw new LinearAuthError('Authentication failed after token refresh', 401);
+      }
+    }
 
     if (response.status === 429) {
       const retryAfter = parseInt(response.headers.get('retry-after') ?? '60', 10);
@@ -293,7 +318,7 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
 
     async fetchTeamStates(teamId) {
       const data = await graphql<{
-        team: { states: { nodes: Array<{ id: string; name: string; type?: string }> } };
+        team: { states: { nodes: Array<{ id: string; name: string; type?: string; position?: number }> } };
       }>(FETCH_TEAM_STATES_QUERY, { teamId });
       return data.team.states.nodes;
     },
@@ -347,6 +372,101 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
         { issueId, stateId },
       );
     },
+
+    // Agent Activity API (Phase 7B)
+
+    async createAgentActivity(sessionId, content, options) {
+      const input: Record<string, unknown> = {
+        agentSessionId: sessionId,
+        content,
+      };
+      if (options?.ephemeral) {
+        input.ephemeral = true;
+      }
+      if (options?.signal) {
+        input.signal = options.signal;
+        if (options.signalMetadata) {
+          input.signalMetadata = options.signalMetadata;
+        }
+      }
+      const data = await graphql<{
+        agentActivityCreate: { success: boolean; agentActivity: { id: string } };
+      }>(AGENT_ACTIVITY_CREATE_MUTATION, { input });
+      return data.agentActivityCreate.agentActivity.id;
+    },
+
+    async agentSessionUpdate(id, updates) {
+      await graphql<{ agentSessionUpdate: { success: boolean } }>(
+        AGENT_SESSION_UPDATE_MUTATION,
+        { id, input: updates },
+      );
+    },
+
+    async agentSessionCreateOnIssue(issueId) {
+      const data = await graphql<{
+        agentSessionCreateOnIssue: { success: boolean; agentSession: { id: string } };
+      }>(AGENT_SESSION_CREATE_ON_ISSUE_MUTATION, { issueId });
+      return data.agentSessionCreateOnIssue.agentSession.id;
+    },
+
+    async agentSessionCreateOnComment(commentId) {
+      const data = await graphql<{
+        agentSessionCreateOnComment: { success: boolean; agentSession: { id: string } };
+      }>(AGENT_SESSION_CREATE_ON_COMMENT_MUTATION, { commentId });
+      return data.agentSessionCreateOnComment.agentSession.id;
+    },
+
+    async fetchSessionActivities(sessionId, options) {
+      const variables: Record<string, unknown> = { sessionId };
+      if (options?.after) {
+        variables.after = options.after;
+      }
+      const data = await graphql<{
+        agentSession: {
+          activities: {
+            nodes: Array<{ content: Record<string, unknown> }>;
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          };
+        };
+      }>(FETCH_SESSION_ACTIVITIES_QUERY, variables);
+
+      const activities: AgentSessionActivity[] = data.agentSession.activities.nodes.map(
+        (node) => node.content as unknown as AgentSessionActivity,
+      );
+      const { hasNextPage, endCursor } = data.agentSession.activities.pageInfo;
+      return {
+        activities,
+        hasNextPage,
+        endCursor: endCursor ?? undefined,
+      };
+    },
+
+    async issueRepositorySuggestions(issueId, sessionId, candidates) {
+      const data = await graphql<{
+        issueRepositorySuggestions: {
+          suggestions: RepositorySuggestion[];
+        };
+      }>(ISSUE_REPOSITORY_SUGGESTIONS_QUERY, {
+        issueId,
+        agentSessionId: sessionId,
+        candidates,
+      });
+      return data.issueRepositorySuggestions.suggestions;
+    },
+
+    async issueUpdate(issueId, input) {
+      await graphql<{ issueUpdate: { success: boolean } }>(
+        ISSUE_UPDATE_MUTATION,
+        { id: issueId, input },
+      );
+    },
+
+    async fetchViewer() {
+      const data = await graphql<{
+        viewer: { id: string; organization?: { id: string; name: string } };
+      }>(FETCH_VIEWER_QUERY, {});
+      return data.viewer;
+    },
   };
 }
 
@@ -391,6 +511,17 @@ export class LinearApiError extends AppError {
       isOperational: true,
     });
     this.name = 'LinearApiError';
+  }
+}
+
+export class LinearAuthError extends LinearApiError {
+  constructor(message: string, statusCode: number, options: { cause?: unknown } = {}) {
+    super(message, statusCode);
+    this.name = 'LinearAuthError';
+    if (options.cause) {
+      // Attach cause for debugging without exposing secrets
+      Object.defineProperty(this, 'cause', { value: options.cause, enumerable: false });
+    }
   }
 }
 
