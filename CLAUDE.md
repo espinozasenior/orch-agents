@@ -1,4 +1,4 @@
-# Claude Code Configuration - Claude Flow V3
+# Claude Code Configuration - Orch-Agents
 
 ## Behavioral Rules (Always Enforced)
 
@@ -10,6 +10,14 @@
 - Never continuously check status after spawning a swarm — wait for results
 - ALWAYS read a file before editing it
 - NEVER commit secrets, credentials, or .env files
+- Single-word approvals ("yes", "do it", "push") trigger immediate execution — no repetition or commentary
+
+## Pre-Work Discipline
+
+- Dead code accelerates context compaction. Before ANY structural refactor on a file >300 LOC, first remove dead props, unused exports, unused imports, and debug logs
+- Study existing code thoroughly before building — match patterns exactly rather than following English descriptions
+- Work directly from error logs and console output rather than guessing. Request actual data when missing
+- Non-trivial features require plan mode with user interviews about implementation, UX, and tradeoffs before code
 
 ## File Organization
 
@@ -19,24 +27,16 @@
 - Use `/docs` for documentation and markdown files
 - Use `/config` for configuration files
 - Use `/scripts` for utility scripts
-- Use `/examples` for example code
+- Use `/data` for runtime data (SQLite, tokens — gitignored)
 
 ## Project Architecture
 
 - Follow Domain-Driven Design with bounded contexts
-- Keep files under 500 lines
+- Keep files under 500 lines — suggest splitting when reasoning becomes difficult
 - Use typed interfaces for all public APIs
 - Prefer TDD London School (mock-first) for new code
 - Use event sourcing for state changes
 - Ensure input validation at system boundaries
-
-### Project Config
-
-- **Topology**: hierarchical-mesh
-- **Max Agents**: 15
-- **Memory**: hybrid
-- **HNSW**: Enabled
-- **Neural**: Enabled
 
 ## Build & Test
 
@@ -49,10 +49,33 @@ npm test
 
 # Lint
 npm run lint
+
+# Type check
+npx tsc --noEmit
 ```
 
 - ALWAYS run tests after making code changes
 - ALWAYS verify build succeeds before committing
+- Report tasks complete ONLY after: running build, running tests, and checking for errors
+- Never claim "should work" or "I'm confident" — run it and show output
+
+## Verification Gate (Iron Law)
+
+**NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE.**
+
+- "Should work now" → RUN IT
+- "I'm confident" → Confidence is not evidence
+- "I already tested earlier" → Code changed since then. Test again
+- "It's a trivial change" → Trivial changes break production
+- If code changed after the last test run, re-run before claiming done
+
+## Edit Safety
+
+- Re-read files before AND after every edit — the Edit tool fails silently when old_string doesn't match stale context
+- After 10+ messages in a conversation, re-read any file before editing — auto-compaction may have destroyed context
+- When renaming functions/types/variables, search for: direct calls, type references, string literals, dynamic imports, re-exports, barrel files, test files and mocks
+- Never fix display problems by duplicating state — all non-source elements must read from one canonical source
+- Never delete files without verifying no references exist
 
 ## Security Rules
 
@@ -60,7 +83,23 @@ npm run lint
 - NEVER commit .env files or any file containing secrets
 - Always validate user input at system boundaries
 - Always sanitize file paths to prevent directory traversal
-- Run `npx @claude-flow/cli@latest security scan` after security-related changes
+- OAuth tokens stored in SQLite (`data/oauth-tokens.db`) — never log token values
+- Webhook signatures verified via HMAC-SHA256 — never skip verification
+
+## Context Management
+
+- Tasks touching >5 independent files should launch parallel sub-agents (5-8 files per agent)
+- Files over 500 LOC must use offset and limit parameters for sequential chunking
+- Use the file system actively: write intermediate results to disk for multi-pass problem-solving
+- Store summaries, decisions, and pending work in persistent markdown files
+- Save debugging artifacts for reproducible verification
+
+## Self-Improvement
+
+- After user corrections, log patterns to memory — convert mistakes into strict rules
+- Explain why bugs occurred and identify preventive measures — understand root causes
+- After two failed attempts at the same approach, stop and re-read relevant sections
+- If told to step back, drop everything and propose a fundamentally different approach
 
 ## Concurrency: 1 MESSAGE = ALL RELATED OPERATIONS
 
@@ -89,19 +128,6 @@ npm run lint
 - Always check for `[AGENT_BOOSTER_AVAILABLE]` or `[TASK_MODEL_RECOMMENDATION]` before spawning agents
 - Use Edit tool directly when `[AGENT_BOOSTER_AVAILABLE]`
 
-## Swarm Configuration & Anti-Drift
-
-- ALWAYS use hierarchical topology for coding swarms
-- Keep maxAgents at 6-8 for tight coordination
-- Use specialized strategy for clear role boundaries
-- Use `raft` consensus for hive-mind (leader maintains authoritative state)
-- Run frequent checkpoints via `post-task` hooks
-- Keep shared memory namespace for all agents
-
-```bash
-npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --strategy specialized
-```
-
 ## Swarm Execution Rules
 
 - ALWAYS use `run_in_background: true` for all agent Task calls
@@ -110,71 +136,23 @@ npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8 --
 - Never poll TaskOutput or check swarm status — trust agents to return
 - When agent results arrive, review ALL results before proceeding
 
-## V3 CLI Commands
+## Linear Agent Integration
 
-### Core Commands
+- OAuth `actor=app` tokens stored in SQLite — persist across restarts
+- AgentSessionEvent webhooks: emit thought activity within 10 seconds (SLA)
+- Move issue to first "started" state before orchestrator dispatch
+- Agent Activities (thought/action/elicitation/response/error) emitted alongside workpad comments
+- Stop signal: immediately halt worker, emit final response
+- Plan steps: update full array on each lifecycle phase transition
+- `workspace.repos` in WORKFLOW.md is required — no env var fallback
 
-| Command | Subcommands | Description |
-|---------|-------------|-------------|
-| `init` | 4 | Project initialization |
-| `agent` | 8 | Agent lifecycle management |
-| `swarm` | 6 | Multi-agent swarm coordination |
-| `memory` | 11 | AgentDB memory with HNSW search |
-| `task` | 6 | Task creation and lifecycle |
-| `session` | 7 | Session state management |
-| `hooks` | 17 | Self-learning hooks + 12 workers |
-| `hive-mind` | 6 | Byzantine fault-tolerant consensus |
+## Testing
 
-### Quick CLI Examples
-
-```bash
-npx @claude-flow/cli@latest init --wizard
-npx @claude-flow/cli@latest agent spawn -t coder --name my-coder
-npx @claude-flow/cli@latest swarm init --v3-mode
-npx @claude-flow/cli@latest memory search --query "authentication patterns"
-npx @claude-flow/cli@latest doctor --fix
-```
-
-## Available Agents (60+ Types)
-
-### Core Development
-`coder`, `reviewer`, `tester`, `planner`, `researcher`
-
-### Specialized
-`security-architect`, `security-auditor`, `memory-specialist`, `performance-engineer`
-
-### Swarm Coordination
-`hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`
-
-### GitHub & Repository
-`pr-manager`, `code-review-swarm`, `issue-tracker`, `release-manager`
-
-### SPARC Methodology
-`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`
-
-## Memory Commands Reference
-
-```bash
-# Store (REQUIRED: --key, --value; OPTIONAL: --namespace, --ttl, --tags)
-npx @claude-flow/cli@latest memory store --key "pattern-auth" --value "JWT with refresh" --namespace patterns
-
-# Search (REQUIRED: --query; OPTIONAL: --namespace, --limit, --threshold)
-npx @claude-flow/cli@latest memory search --query "authentication patterns"
-
-# List (OPTIONAL: --namespace, --limit)
-npx @claude-flow/cli@latest memory list --namespace patterns --limit 10
-
-# Retrieve (REQUIRED: --key; OPTIONAL: --namespace)
-npx @claude-flow/cli@latest memory retrieve --key "pattern-auth" --namespace patterns
-```
-
-## Quick Setup
-
-```bash
-claude mcp add claude-flow -- npx -y @claude-flow/cli@latest
-npx @claude-flow/cli@latest daemon start
-npx @claude-flow/cli@latest doctor --fix
-```
+- TDD London School: write failing tests FIRST, then implement minimum code
+- 100% coverage is the goal for new code paths
+- Each SPARC phase agent self-reviews against its spec before reporting done
+- Node test runner: `node --import tsx --test tests/**/*.test.ts`
+- Test conventions: `node:test` + `node:assert/strict`, mock-first, typed fixtures
 
 ## Claude Code vs CLI Tools
 

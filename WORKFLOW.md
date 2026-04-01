@@ -66,6 +66,21 @@ polling:
 
 stall:
   timeout_ms: 300000
+
+workspace:
+  root: /tmp/orch-agents
+  default_repo: marketplace-monorepo
+  repos:
+    - name: marketplace-monorepo
+      url: git@github.com:somnio-projects/marketplace-monorepo.git
+      teams: [AUT]
+      labels: [marketplace-monorepo, backend, infra]
+      default_branch: main
+
+    - name: orch-agents
+      url: git@github.com:espinozasenior/orch-agents.git
+      labels: [agent, orchestrator, bot]
+      default_branch: main
 ---
 
 You are an autonomous development agent working on {{ issue.identifier }}.

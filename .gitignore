@@ -8,6 +8,7 @@ dist/
 .env
 .env.local
 .env.*.local
+*.sqlite
 
 # OS files
 .DS_Store
@@ -23,7 +24,7 @@ Thumbs.db
 .swarm
 .claude-flow
 vectors.db
-
+data/
 
 # Logs
 *.log
@@ -35,3 +36,6 @@ npm-debug.log*
 # Coverage
 coverage/
 .nyc_output/
+
+# Testing
+src/staging/
