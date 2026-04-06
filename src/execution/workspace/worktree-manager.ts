@@ -134,16 +134,40 @@ export function createWorktreeManager(deps: WorktreeManagerDeps = {}): WorktreeM
       const worktreePath = `${basePath}/${planId}`;
       logger?.info('Creating worktree', { planId, baseBranch, workBranch, path: worktreePath });
 
+      // Reuse existing worktree if it already exists for this issue
+      // (happens when a second AgentSessionEvent arrives for the same issue)
+      try {
+        const { existsSync } = await import('node:fs');
+        if (existsSync(worktreePath)) {
+          logger?.info('Worktree already exists, reusing', { planId, path: worktreePath, workBranch });
+          return {
+            planId,
+            path: worktreePath,
+            branch: workBranch,
+            baseBranch,
+            status: 'active' as const,
+          };
+        }
+      } catch {
+        // existsSync failed — proceed with creation
+      }
+
       try {
         await run('git', ['worktree', 'add', worktreePath, '-b', workBranch, baseBranch]);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
 
         // If the branch already exists (e.g., from a previous failed run),
-        // delete it and retry once.
+        // remove the stale worktree first, then delete the branch and retry.
         if (message.includes('already exists')) {
-          logger?.warn('Branch already exists, deleting and retrying', { planId, workBranch });
+          logger?.warn('Branch already exists, cleaning up and retrying', { planId, workBranch });
           try {
+            // Remove stale worktree if it exists (handles "used by worktree" error)
+            try {
+              await run('git', ['worktree', 'remove', worktreePath, '--force']);
+            } catch {
+              // Worktree may not exist — that's fine
+            }
             await run('git', ['branch', '-D', workBranch]);
             await run('git', ['worktree', 'add', worktreePath, '-b', workBranch, baseBranch]);
           } catch (retryErr) {

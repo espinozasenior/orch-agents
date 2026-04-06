@@ -668,15 +668,18 @@ describe('WorktreeManager', () => {
 
       const handle = await manager.create('plan-retry', 'main', 'agent/plan-retry');
 
-      // Should have called: worktree add (fail), branch -D, worktree add (success)
-      assert.equal(calls.length, 3);
+      // Should have called: worktree add (fail), worktree remove (cleanup), branch -D, worktree add (success)
+      assert.equal(calls.length, 4);
       assert.deepEqual(calls[0].args, [
         'worktree', 'add', '/tmp/orch-agents/plan-retry', '-b', 'agent/plan-retry', 'main',
       ]);
       assert.deepEqual(calls[1].args, [
-        'branch', '-D', 'agent/plan-retry',
+        'worktree', 'remove', '/tmp/orch-agents/plan-retry', '--force',
       ]);
       assert.deepEqual(calls[2].args, [
+        'branch', '-D', 'agent/plan-retry',
+      ]);
+      assert.deepEqual(calls[3].args, [
         'worktree', 'add', '/tmp/orch-agents/plan-retry', '-b', 'agent/plan-retry', 'main',
       ]);
 

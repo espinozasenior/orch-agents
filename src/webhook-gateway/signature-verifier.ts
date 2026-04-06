@@ -25,6 +25,7 @@ export function verifySignature(
   // SECURITY: Require explicit opt-in to skip verification, never in production
   if (!secret) {
     if (process.env.SKIP_SIGNATURE_VERIFICATION === 'true' && process.env.NODE_ENV !== 'production') {
+      console.warn('[SECURITY] Webhook signature verification SKIPPED — SKIP_SIGNATURE_VERIFICATION is set in non-production mode');
       return;
     }
     throw new AuthenticationError(

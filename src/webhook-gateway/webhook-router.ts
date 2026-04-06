@@ -125,13 +125,15 @@ export async function webhookRouter(
         }
 
         // Get raw body for signature verification.
-        // SECURITY: rawBodyString should always be set by the content type parser.
-        // The JSON.stringify fallback may produce a different byte sequence than the
-        // original payload, which could cause HMAC verification to accept a modified body.
+        // SECURITY: rawBodyString MUST be set by the content type parser.
+        // Falling back to JSON.stringify would produce a different byte sequence
+        // than the original payload, potentially bypassing HMAC verification.
         if (!request.rawBodyString) {
-          log.warn('Raw body not captured by content type parser — signature verification may be unreliable');
+          throw new ValidationError('Raw body not captured — cannot verify webhook signature safely', {
+            hint: 'Content type parser did not preserve the raw request body',
+          });
         }
-        const rawBody = request.rawBodyString ?? JSON.stringify(request.body);
+        const rawBody = request.rawBodyString;
 
         // Step 1: Verify signature
         verifySignature(rawBody, signature ?? '', config.webhookSecret);
