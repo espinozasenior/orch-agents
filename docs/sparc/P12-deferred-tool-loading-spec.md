@@ -2,9 +2,25 @@
 
 **Phase:** P12 (High)
 **Priority:** High
-**Estimated Effort:** 5 days
-**Dependencies:** P11 (query loop is the registration/resolution host)
-**Source Blueprint:** Claude Code Original — `src/services/tools/toolExecution.ts`, `src/services/tools/toolOrchestration.ts`, `src/services/tools/StreamingToolExecutor.ts`, `src/services/tools/toolHooks.ts`, `src/tools/ToolSearchTool/ToolSearchTool.ts`
+**Estimated Effort:** 3 days
+**Dependencies:** P11 (query loop host), P6 (task lifecycle), P10 (compaction)
+
+> **Spec revised after CC source audit (2026-04-04).** The original Wave 1 spec
+> described features (hot/warm/cold tiers, sha256-keyed result memoization, lazy
+> per-instance proxy schema loading, Bash command parser for parallelism) that
+> **do not exist** in Claude Code. This revision matches CC's actual
+> `ToolSearchTool` + `defer_loading` pattern as observed in:
+>
+> - `src/tools/ToolSearchTool/ToolSearchTool.ts` (473 LOC)
+> - `src/tools/ToolSearchTool/prompt.ts:62-107` (`shouldDefer` / `alwaysLoad`)
+> - `src/tools.ts:193-250` (eager instantiation at startup)
+> - `src/utils/api.ts:223-226` (`defer_loading: true` per-tool API field)
+> - `src/services/tools/toolOrchestration.ts:91-116` (`isConcurrencySafe(input)`)
+>
+> CC has 40 built-in tools, ~133 KB of tool prompt text, 27 of 40 deferred via
+> the schema flag. Tools are eagerly instantiated; only their *advertisement*
+> in the API request is deferred. There is no runtime lazy proxy and no result
+> memoization.
 
 ---
 
@@ -16,98 +32,93 @@
 specification:
   functional_requirements:
     - id: "FR-P12-001"
-      description: "Tool registration API stores name + 1-line description only; full schema deferred until first invocation"
+      description: "Eager tool registry with per-tool shouldDefer + alwaysLoad flags"
       priority: "critical"
       acceptance_criteria:
-        - "deferredToolRegistry.register({ name, description, loader }) accepts a thunk that resolves the full ToolDef"
-        - "Registered entries occupy < 200 bytes per tool in the prompt advertisement"
-        - "Schema, prompt, inputSchema, outputSchema NOT resolved at registration time"
+        - "registry.register({ name, description, schema, execute, shouldDefer, alwaysLoad, isConcurrencySafe }) stores the full ToolDef in-memory"
+        - "Tools are instantiated at registry.register() time — there is no lazy loader thunk"
+        - "alwaysLoad core tools (Read, Edit, Write, Bash, Grep, Glob, Agent, ToolSearch) default to shouldDefer=false"
+        - "Newly registered orch-agents-specific or MCP tools default to shouldDefer=true"
         - "Re-registering the same name throws DuplicateToolError"
-        - "Registry exposes listDeferred() returning name + description tuples"
+        - "registry.list() returns all tools; listDeferred() filters by shouldDefer; listAlwaysLoad() filters by alwaysLoad"
 
     - id: "FR-P12-002"
-      description: "Lazy schema resolution on first invocation via lazyToolProxy"
+      description: "Tool descriptions exposed in system prompt as 1-line summaries; full schemas held in registry until requested"
       priority: "critical"
       acceptance_criteria:
-        - "lazyToolProxy.resolve(name) calls the registered loader exactly once, then memoizes"
-        - "Concurrent resolve() calls for the same name share a single in-flight Promise"
-        - "Resolved ToolDef cached in deferredIndex keyed by name"
-        - "Loader failure surfaces as ToolResolutionError with the offending name"
-        - "Resolved tools become eligible for executor.run() without re-registration"
+        - "buildPromptAdvertisement(registry) emits one line per deferred tool: '- {name}: {description}'"
+        - "AlwaysLoad tools (incl. ToolSearch) emit their full schema inline"
+        - "Output is plain markdown — no JSON schema noise — for the deferred set"
+        - "Output stays under the 8 KB cap regardless of how many deferred tools are registered"
 
     - id: "FR-P12-003"
-      description: "Partitioner heuristic (hot/warm/cold tiers) keeps prompt budget bounded as N grows"
-      priority: "high"
-      acceptance_criteria:
-        - "partitioner.classify(tool) returns 'hot' | 'warm' | 'cold'"
-        - "Hot: always advertised in prompt with full description (e.g. Read, Write, Edit, Bash, Glob, Grep)"
-        - "Warm: advertised by name only in deferred index, no schema"
-        - "Cold: not advertised at all; surfaced only via ToolSearch keyword query"
-        - "Classification inputs: usage frequency from diskResultCache, tool category, isReadOnly flag"
-        - "Total hot+warm prompt advertisement remains < 8KB regardless of cold tool count"
-
-    - id: "FR-P12-004"
-      description: "queryLoopAdapter hook surfaces deferred tool list to model via the ToolSearch pattern"
+      description: "ToolSearch meta-tool — direct selection or keyword search"
       priority: "critical"
       acceptance_criteria:
-        - "queryLoopAdapter.injectToolList(systemPrompt) appends hot tools fully, warm tools as name+description, cold tools as count"
-        - "ToolSearch tool itself is always in the hot tier (model needs it to discover others)"
-        - "Adapter handles `select:<name>` queries by calling lazyToolProxy.resolve and returning tool_reference blocks"
-        - "Adapter handles keyword queries by scoring against name parts + description (mirrors CC's searchToolsWithKeywords)"
-        - "MCP-prefixed tools matched via prefix match on `mcp__server__` form"
+        - "Input schema: { query: string, max_results?: number }"
+        - "select:ToolName form returns the named tool's full descriptor (comma-separated multi-select supported)"
+        - "Keyword form scores against name + description; +required terms must match the name; bare terms are ranked"
+        - "MCP server prefix matching: a query of mcp__server__ matches all tools under that server"
+        - "Returns { matches: Array<{name, description}>, query, total_deferred_tools }"
+        - "Memoized description cache (Map keyed by name) — populated lazily, never invalidated within a process lifetime"
+
+    - id: "FR-P12-004"
+      description: "Tool registry built once at startup; API schema serializer filters by defer_loading per-tool"
+      priority: "critical"
+      acceptance_criteria:
+        - "buildApiToolList(registry) returns the full tool list serialized for the model API"
+        - "AlwaysLoad tools serialize with their full input_schema inline"
+        - "Deferred tools serialize with input_schema=null and a defer_loading: true marker (mirrors CC api.ts:223-226)"
+        - "Output preserves registration order"
+        - "Pure function — no side effects on the registry"
 
     - id: "FR-P12-005"
-      description: "Disk result cache keyed by (tool, args-hash) with TTL eviction"
+      description: "Memoized description cache for ToolSearch keyword matching"
       priority: "high"
       acceptance_criteria:
-        - "diskResultCache.get(toolName, argsHash) returns cached result or undefined"
-        - "diskResultCache.put(toolName, argsHash, result, ttlMs) writes JSON file under data/tool-cache/"
-        - "Cache key = sha256(JSON.stringify(args, sortedKeys))"
-        - "TTL eviction sweep runs on cache open and every 5 minutes thereafter"
-        - "Only tools marked cacheable=true in their ToolDef participate"
-        - "Cache hits emit ToolCacheHit domain event for observability"
+        - "First call to tool-search.describe(name) reads registry; subsequent calls hit a Map cache"
+        - "Cache survives across ToolSearch invocations within the same process"
+        - "Not an LRU — deferred tool count is bounded and the cache is small (< 1 KB per entry)"
+        - "Cache stats observable via toolSearch.getCacheStats() for tests"
 
     - id: "FR-P12-006"
-      description: "ConcurrencyClassifier marks tools as parallel-safe vs serial-only"
+      description: "Per-tool isConcurrencySafe(input) consumed by the existing P4 partitioner"
       priority: "high"
       acceptance_criteria:
-        - "concurrencyClassifier.isConcurrencySafe(toolDef, parsedInput) returns boolean"
-        - "Read-only tools (isReadOnly=true) default to concurrency-safe"
-        - "Mutating tools (Write, Edit, Bash) default to serial-only"
-        - "Bash classifier inspects parsed command for write redirects, mv, rm, etc., per CC pattern"
-        - "Classification result feeds executor.partition() for batching"
-        - "Classifier failures fall back to serial-only (conservative)"
+        - "DeferredToolDef.isConcurrencySafe(input) is the same shape as the existing P4 ToolDefinition.isConcurrencySafe"
+        - "DeferredToolRegistry can produce a P4-compatible Map<string, ToolDefinition> via registry.toP4Registry()"
+        - "P4's partitionToolCalls and runTools work unchanged against this map"
+        - "No rewrite of partitioner.ts, executor.ts, or queryLoopAdapter.ts"
 
     - id: "FR-P12-007"
-      description: "Eval — prompt budget stays under 8KB as tool count grows from 10 to 500"
+      description: "Eval — system prompt tool budget stays under 8 KB regardless of deferred tool count"
       priority: "high"
       acceptance_criteria:
-        - "Eval harness registers N tools (N in {10, 50, 100, 250, 500}) with synthetic descriptions"
-        - "Measures injectToolList() output byte length for each N"
-        - "All measurements < 8192 bytes"
-        - "Hot tier count remains constant across N (capped at 12)"
-        - "Cold tier resolution latency < 50ms p95 under load (100 concurrent resolves)"
+        - "Test registers N synthetic deferred tools where N ∈ {10, 50, 100, 500}"
+        - "buildPromptAdvertisement byte length is < 8192 bytes for every N"
+        - "ToolSearch tool's full schema is always present in the advertisement"
+        - "When N exceeds the budget, the advertisement truncates with a '+ X more tools available via ToolSearch' line"
 
   non_functional_requirements:
     - id: "NFR-P12-001"
       category: "performance"
-      description: "Tool resolution must not block the query loop"
-      measurement: "lazyToolProxy.resolve() returns within 10ms p95 for cached entries; 50ms p95 for cold loads"
+      description: "Registry operations are O(1) for lookup and O(N) for full enumeration"
+      measurement: "registry.get() < 1ms p99; registry.listDeferred() < 5ms p99 at N=500"
 
     - id: "NFR-P12-002"
       category: "memory"
-      description: "Registry footprint scales linearly and modestly with tool count"
-      measurement: "< 200 bytes per registered (deferred) tool until first resolve()"
+      description: "Registry footprint is the sum of registered ToolDef objects — no overhead beyond a Map and two filter caches"
+      measurement: "Heap delta < 100 bytes per registered tool over the bare ToolDef"
 
     - id: "NFR-P12-003"
-      category: "observability"
-      description: "All resolution and cache events flow through EventBus"
-      measurement: "ToolResolved, ToolResolutionFailed, ToolCacheHit, ToolCacheMiss events emitted with toolName + latency"
+      category: "compatibility"
+      description: "sdk-executor must accept the registry as an optional dep without breaking P6/P10/P11 wiring"
+      measurement: "All P6/P10/P11 sdk-executor tests pass with deferredToolRegistry omitted; passing one is purely additive"
 
     - id: "NFR-P12-004"
       category: "compatibility"
-      description: "Existing eager-loaded tools must continue to work without registration changes"
-      measurement: "Tools registered via existing toolDefinitions path bypass the deferred index but remain callable from executor"
+      description: "Existing P4 modules under src/services/tools/* (partitioner, executor, concurrencyClassifier, queryLoopAdapter, toolDefinitions, types, index) are not modified"
+      measurement: "0 line diff in those files; their tests still pass"
 ```
 
 ### 2. Constraints
@@ -115,19 +126,19 @@ specification:
 ```yaml
 constraints:
   technical:
-    - "All deferred infrastructure already exists under src/services/tools/ — wire it, do not rewrite"
-    - "Loaders must be idempotent — they may be invoked multiple times under race conditions before memoization"
-    - "Cache keys are content-addressed via sha256 of canonicalized args — no clock-based keys"
-    - "ToolSearch tool itself MUST live in the hot tier — circular bootstrap otherwise"
-    - "Partitioner classification is deterministic for a given (tool, usage stats) input"
-    - "Disk cache lives at data/tool-cache/{toolName}/{argsHash}.json — gitignored"
+    - "Tools are eagerly instantiated at registration — no lazy loader thunks (matches CC tools.ts:193-250)"
+    - "Deferral is a *schema serialization* concern, not a runtime one"
+    - "ToolSearch must always be in the always-load set or the model cannot discover deferred tools"
+    - "MCP server prefix is mcp__{server}__{tool}; the search must split on __ to identify server names"
+    - "Description cache is process-local; no cross-process sharing"
+    - "The new deferred-tools service lives in src/services/deferred-tools/ — separate from the colliding src/services/tools/ P4 modules to avoid name shadowing"
 
   architectural:
-    - "deferredToolRegistry is process-local singleton; no cross-process sharing"
-    - "lazyToolProxy is the sole resolution path — executor never bypasses it"
-    - "queryLoopAdapter is the sole integration point with src/query/queryLoop.ts (P11)"
-    - "concurrencyClassifier is consulted by executor before partitioning, never inside tool implementations"
-    - "diskResultCache is opt-in per ToolDef.cacheable — never cache by default"
+    - "DeferredToolRegistry is a process-local singleton constructed once at app bootstrap"
+    - "src/services/tools/* (P4) is left untouched; the new module is additive"
+    - "sdk-executor accepts the registry as an optional dep — when omitted, behavior is identical to today (preserves P6/P10/P11 wiring)"
+    - "When provided, sdk-executor uses the registry to compute its allowedTools array; the API schema filter and prompt advertisement are computed once per call"
+    - "ToolSearch invocations are routed by the SDK preset, not by orch-agents; we provide the meta-tool definition but the SDK call site is the consumer"
 ```
 
 ### 3. Use Cases
@@ -135,40 +146,35 @@ constraints:
 ```yaml
 use_cases:
   - id: "UC-P12-001"
-    title: "Model Discovers and Invokes a Cold Tool via ToolSearch"
-    actor: "Model (via query loop)"
+    title: "Bootstrap registers built-in tools and MCP tools"
+    actor: "Orch-Agents process startup"
     flow:
-      1. "Query loop builds system prompt with hot tools + ToolSearch + warm tool list (names only)"
-      2. "Model sees task needs an MCP browser tool not in the prompt"
-      3. "Model invokes ToolSearch with query 'browser screenshot'"
-      4. "queryLoopAdapter handles the call: keyword search over deferred index"
-      5. "Returns top match: mcp__claude-flow__browser_screenshot as tool_reference"
-      6. "Model issues a tool_use block referencing that name"
-      7. "Executor calls lazyToolProxy.resolve('mcp__...') — loader runs, schema cached"
-      8. "concurrencyClassifier marks it serial-only; executor runs it"
-      9. "Result cached in diskResultCache (if cacheable=true)"
+      1. "src/index.ts constructs a DeferredToolRegistry"
+      2. "Built-in core tools (Read, Edit, Write, Bash, Grep, Glob, Agent) are registered with alwaysLoad=true, shouldDefer=false"
+      3. "ToolSearch is registered with alwaysLoad=true, shouldDefer=false"
+      4. "Any orch-agents- or MCP-specific tools are registered with shouldDefer=true"
+      5. "Registry is passed to createSdkExecutor as deferredToolRegistry"
+      6. "sdk-executor builds its allowedTools list from registry.list().map(t => t.name)"
 
   - id: "UC-P12-002"
-    title: "Repeated Identical Tool Call Hits Disk Cache"
-    actor: "Executor"
+    title: "Model invokes ToolSearch with select: form"
+    actor: "Model"
     flow:
-      1. "Model calls Read({path: '/foo.ts'}) — first invocation, miss"
-      2. "diskResultCache.put writes data/tool-cache/Read/{hash}.json with TTL 60s"
-      3. "Model calls Read({path: '/foo.ts'}) again within TTL"
-      4. "diskResultCache.get returns cached blob"
-      5. "ToolCacheHit event emitted; no real read performed"
-      6. "After TTL elapses, sweep removes the entry"
+      1. "Model sees the deferred-tool advertisement in the system prompt"
+      2. "Model emits ToolSearch({ query: 'select:mcp__cf__browser_screenshot' })"
+      3. "ToolSearch parses the select: prefix, looks up the tool in the registry"
+      4. "Returns { matches: [{ name, description }], query, total_deferred_tools }"
+      5. "Model now has enough context to construct the next tool_use call"
 
   - id: "UC-P12-003"
-    title: "Concurrency-Safe Batch Execution"
-    actor: "Executor"
+    title: "Prompt budget stays bounded at 500 tools"
+    actor: "buildPromptAdvertisement"
     flow:
-      1. "Model issues 5 tool_use blocks: 3x Read, 1x Edit, 1x Read"
-      2. "executor.partition() consults concurrencyClassifier per block"
-      3. "Partitions: [Read,Read,Read] safe → [Edit] serial → [Read] safe"
-      4. "Concurrent batch runs first 3 Reads in parallel"
-      5. "Edit runs alone (mutating)"
-      6. "Final Read runs alone in its batch (no peer to merge with)"
+      1. "Registry has 500 deferred tools + 8 always-load tools"
+      2. "buildPromptAdvertisement walks always-load tools first (full schemas)"
+      3. "Then walks deferred tools, emitting one line per tool"
+      4. "When the running byte total nears 8 KB, truncates and emits '+ X more tools available via ToolSearch'"
+      5. "Returned string is < 8192 bytes, contains all always-load tools' full schemas"
 ```
 
 ### 4. Acceptance Criteria (Gherkin)
@@ -176,261 +182,248 @@ use_cases:
 ```gherkin
 Feature: Deferred Tool Loading
 
-  Scenario: Tool registered without resolving its schema
-    Given the deferred tool registry is empty
-    When a tool is registered with name "Foo" and a loader thunk
-    Then listDeferred() includes "Foo"
-    And the loader has not been called
+  Scenario: Tool registered with full schema at register time
+    Given an empty DeferredToolRegistry
+    When a tool "Foo" is registered with shouldDefer=true
+    Then registry.get("Foo") returns the full ToolDef including its schema
+    And registry.listDeferred() includes "Foo"
+    And registry.listAlwaysLoad() does not include "Foo"
 
-  Scenario: First invocation triggers loader exactly once
-    Given a deferred tool "Foo" is registered
-    When lazyToolProxy.resolve("Foo") is called twice concurrently
-    Then the loader runs exactly once
-    And both calls receive the same resolved ToolDef
+  Scenario: Duplicate registration throws
+    Given a tool "Foo" is already registered
+    When the same name is registered again
+    Then a DuplicateToolError is thrown
 
-  Scenario: Prompt budget stays bounded at 500 tools
-    Given 500 tools are registered (12 hot, 488 deferred)
-    When queryLoopAdapter.injectToolList(systemPrompt) runs
-    Then the resulting advertisement is under 8192 bytes
-    And contains all 12 hot tool descriptions in full
-
-  Scenario: ToolSearch select returns a tool reference
-    Given a deferred tool "mcp__x__y" is registered
+  Scenario: ToolSearch select returns the tool descriptor
+    Given a deferred tool "mcp__x__y" is registered with description "Does Y"
     When the model invokes ToolSearch with "select:mcp__x__y"
-    Then the result contains a tool_reference block for "mcp__x__y"
-    And lazyToolProxy.resolve was called for "mcp__x__y"
+    Then the result contains { name: "mcp__x__y", description: "Does Y" }
+    And total_deferred_tools reflects the registry's deferred count
 
-  Scenario: Cache hit avoids re-running the tool
-    Given a Read call is cached with TTL 60 seconds
-    When the same Read call is issued 10 seconds later
-    Then the result comes from diskResultCache
-    And no filesystem read occurs
-    And a ToolCacheHit event is emitted
+  Scenario: ToolSearch keyword search ranks by description match
+    Given deferred tools "browser_screenshot" and "browser_click" are registered
+    When the model invokes ToolSearch with "screenshot"
+    Then "browser_screenshot" appears before "browser_click" in matches
 
-  Scenario: Concurrency classifier batches reads in parallel
-    Given the model issues [Read, Read, Edit, Read]
-    When executor.partition() runs
-    Then the first batch is [Read, Read] concurrency-safe
-    And the second batch is [Edit] serial
-    And the third batch is [Read] concurrency-safe
+  Scenario: ToolSearch +required filter requires the term in the name
+    Given a tool "browser_screenshot" exists with description "capture image"
+    And a tool "image_compress" exists with description "compress images"
+    When the model invokes ToolSearch with "+browser image"
+    Then only "browser_screenshot" appears
+
+  Scenario: API schema filter applies defer_loading per tool
+    Given the registry has 1 always-load tool "Read" and 1 deferred tool "Foo"
+    When buildApiToolList(registry) runs
+    Then "Read" appears with its full input_schema inline
+    And "Foo" appears with input_schema=null and defer_loading=true
+
+  Scenario: Prompt budget at 500 deferred tools
+    Given 500 deferred tools are registered with realistic descriptions
+    When buildPromptAdvertisement(registry) runs
+    Then the result is under 8192 bytes
+    And the result contains all always-load tools' full schemas
+    And the result ends with "+ X more tools available via ToolSearch" if truncated
+
+  Scenario: Concurrency safety propagates to P4 partitioner
+    Given the registry has read-only tools and write tools registered with isConcurrencySafe
+    When registry.toP4Registry() is converted and passed to partitionToolCalls
+    Then read-only tool blocks are batched together
+    And write tools land in their own serial batches
 ```
 
 ---
 
 ## P — Pseudocode
 
-### deferredToolRegistry
+### registry
 
 ```
-MODULE: deferredToolRegistry
-STATE: entries = Map<string, { description, loader, resolved? }>
+MODULE: DeferredToolRegistry
+STATE: tools = Map<string, DeferredToolDef>
 
-  register({ name, description, loader }):
-    IF entries.has(name): THROW DuplicateToolError
-    entries.set(name, { description, loader, resolved: undefined })
+  register(def):
+    IF tools.has(def.name): THROW DuplicateToolError
+    tools.set(def.name, def)
 
-  listDeferred():
-    RETURN entries.values().filter(e => !e.resolved)
-                          .map(e => ({ name, description }))
+  get(name): RETURN tools.get(name)
+  list(): RETURN [...tools.values()]
+  listDeferred(): RETURN list().filter(t => t.shouldDefer)
+  listAlwaysLoad(): RETURN list().filter(t => t.alwaysLoad)
 
-  isDeferred(name): RETURN entries.has(name) AND NOT entries.get(name).resolved
+  toP4Registry():                    // FR-P12-006
+    map = new Map<string, P4ToolDefinition>()
+    FOR t IN list():
+      map.set(t.name, {
+        name: t.name,
+        isConcurrencySafe: t.isConcurrencySafe ?? (() => false),
+        execute: t.execute,
+      })
+    RETURN map
 ```
 
-### lazyToolProxy
+### tool-search
 
 ```
-MODULE: lazyToolProxy
-STATE: inFlight = Map<string, Promise<ToolDef>>
+MODULE: ToolSearch
+STATE: descriptionCache = Map<string, string>
 
-  resolve(name):
-    entry = registry.get(name)
-    IF NOT entry: THROW UnknownToolError
-    IF entry.resolved: RETURN entry.resolved
-    IF inFlight.has(name): RETURN inFlight.get(name)
+  describe(registry, name):
+    IF descriptionCache.has(name): RETURN descriptionCache.get(name)
+    def = registry.get(name)
+    IF NOT def: RETURN undefined
+    descriptionCache.set(name, def.description)
+    RETURN def.description
 
-    promise = (async () => {
-      def = await entry.loader()
-      entry.resolved = def
-      deferredIndex.set(name, def)
-      emit('ToolResolved', { name, latencyMs })
-      RETURN def
-    })()
-    inFlight.set(name, promise)
-    promise.finally(() => inFlight.delete(name))
-    RETURN promise
+  search(registry, { query, max_results }):
+    deferred = registry.listDeferred()
+    total = deferred.length
+
+    IF query.startsWith('select:'):
+      names = query.slice(7).split(',').map(trim).filter(nonempty)
+      matches = names
+        .map(n => registry.get(n))
+        .filter(present)
+        .map(t => ({ name: t.name, description: describe(registry, t.name) }))
+      RETURN { matches, query, total_deferred_tools: total }
+
+    // Keyword form: +required terms first, then bare ranked terms
+    parts = query.split(/\s+/).filter(nonempty)
+    required = parts.filter(p => p.startsWith('+')).map(p => p.slice(1).toLowerCase())
+    optional = parts.filter(p => NOT p.startsWith('+')).map(p => p.toLowerCase())
+
+    candidates = deferred
+    FOR req IN required:
+      candidates = candidates.filter(t => t.name.toLowerCase().includes(req))
+
+    // MCP prefix awareness
+    mcpQuery = optional.find(t => t.startsWith('mcp__'))
+    IF mcpQuery:
+      candidates = candidates.filter(t => t.name.startsWith(mcpQuery))
+
+    scored = candidates.map(t => ({
+      tool: t,
+      score: scoreOptional(t, optional)
+    }))
+    .filter(s => s.score > 0 OR optional.length === 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, max_results ?? 10)
+
+    matches = scored.map(s => ({
+      name: s.tool.name,
+      description: describe(registry, s.tool.name)
+    }))
+    RETURN { matches, query, total_deferred_tools: total }
+
+  scoreOptional(tool, optional):
+    haystack = (tool.name + ' ' + (tool.description ?? '')).toLowerCase()
+    score = 0
+    FOR term IN optional:
+      IF tool.name.toLowerCase().includes(term): score += 2
+      ELSE IF haystack.includes(term):           score += 1
+    RETURN score
 ```
 
-### partitioner (hot/warm/cold)
+### prompt-builder
 
 ```
-classify(tool, usageStats):
-  IF tool.name IN HOT_PINNED_SET: RETURN 'hot'             // ToolSearch, Read, Edit, ...
-  IF usageStats.calls7d >= HOT_THRESHOLD: RETURN 'hot'
-  IF tool.isReadOnly OR usageStats.calls7d >= WARM_THRESHOLD: RETURN 'warm'
-  RETURN 'cold'
+MODULE: PromptBuilder
+CONST PROMPT_BUDGET_BYTES = 8 * 1024
 
-buildAdvertisement(allTools, usageStats):
-  buckets = { hot: [], warm: [], cold: [] }
-  FOR t IN allTools: buckets[classify(t, usageStats)].push(t)
+  buildPromptAdvertisement(registry):
+    parts = []
+    parts.push('## Available Tools')
+    parts.push('')
 
-  text = renderHotFully(buckets.hot)
-  text += renderWarmNamesAndDescriptions(buckets.warm)
-  text += `(${buckets.cold.length} additional tools available via ToolSearch)`
-  ASSERT byteLength(text) < 8192
-  RETURN text
+    FOR t IN registry.listAlwaysLoad():
+      parts.push(`### ${t.name}`)
+      parts.push(t.description)
+      parts.push('```json')
+      parts.push(JSON.stringify(t.schema, null, 2))
+      parts.push('```')
+      parts.push('')
+
+    deferred = registry.listDeferred()
+    IF deferred.length > 0:
+      parts.push('## Deferred Tools (use ToolSearch to expand)')
+      truncatedAt = -1
+      FOR i, t IN deferred:
+        line = `- ${t.name}: ${t.description}`
+        candidate = parts.concat([line]).join('\n')
+        IF byteLength(candidate) > PROMPT_BUDGET_BYTES:
+          truncatedAt = i
+          BREAK
+        parts.push(line)
+
+      IF truncatedAt >= 0:
+        remaining = deferred.length - truncatedAt
+        parts.push(`+ ${remaining} more tools available via ToolSearch`)
+
+    RETURN parts.join('\n')
 ```
 
-### concurrencyClassifier
+### api-schema-filter
 
 ```
-isConcurrencySafe(toolDef, parsedInput):
-  TRY:
-    IF toolDef.isReadOnly: RETURN true
-    IF toolDef.name === 'Bash': RETURN bashIsReadOnly(parsedInput.command)
-    IF toolDef.isConcurrencySafe: RETURN toolDef.isConcurrencySafe(parsedInput)
-    RETURN false
-  CATCH:
-    RETURN false      // conservative
-```
+MODULE: ApiSchemaFilter
 
-### queryLoopAdapter (ToolSearch handler)
-
-```
-handleToolSearchCall({ query, max_results }):
-  IF query.startsWith('select:'):
-    names = parseCsv(query.slice(7))
-    found = []
-    FOR n IN names:
-      def = await lazyToolProxy.resolve(n)
-      found.push({ type: 'tool_reference', tool_name: def.name })
-    RETURN found
-
-  // keyword search — mirrors CC's searchToolsWithKeywords
-  scored = []
-  FOR entry IN deferredToolRegistry.listDeferred():
-    score = scoreTermsAgainstNameAndDescription(query, entry)
-    IF score > 0: scored.push({ name: entry.name, score })
-  RETURN scored.sortDesc('score').slice(0, max_results)
-                .map(s => ({ type: 'tool_reference', tool_name: s.name }))
-```
-
-### diskResultCache
-
-```
-get(toolName, argsHash):
-  path = `${dataDir}/tool-cache/${toolName}/${argsHash}.json`
-  IF NOT exists(path): RETURN undefined
-  entry = readJson(path)
-  IF entry.expiresAt < now: unlink(path); RETURN undefined
-  emit('ToolCacheHit', { toolName }); RETURN entry.result
-
-put(toolName, argsHash, result, ttlMs):
-  path = `${dataDir}/tool-cache/${toolName}/${argsHash}.json`
-  writeJson(path, { result, expiresAt: now + ttlMs })
+  buildApiToolList(registry):
+    RETURN registry.list().map(t => ({
+      name: t.name,
+      description: t.description,
+      input_schema: (t.alwaysLoad OR NOT t.shouldDefer) ? t.schema : null,
+      defer_loading: t.shouldDefer && NOT t.alwaysLoad,
+    }))
 ```
 
 ---
 
 ## A — Architecture
 
-### Partitioner & Resolution Flow
-
 ```mermaid
 flowchart TD
-    subgraph Registration
-        TD["toolDefinitions.ts"] -->|register({name, desc, loader})| REG["deferredToolRegistry"]
+    subgraph "Bootstrap (src/index.ts)"
+        BOOT["createDeferredToolRegistry"] --> REG["DeferredToolRegistry"]
+        REG --> SDK["createSdkExecutor({ deferredToolRegistry })"]
     end
 
-    subgraph "Prompt Build (per turn)"
-        QL["queryLoop (P11)"] --> QLA["queryLoopAdapter"]
-        QLA --> PART["partitioner.classify"]
-        PART -->|hot| HOT["Hot Tier (full schema)"]
-        PART -->|warm| WARM["Warm Tier (name + 1-line)"]
-        PART -->|cold| COLD["Cold Tier (count only)"]
-        HOT --> ADV["Advertisement < 8KB"]
-        WARM --> ADV
-        COLD --> ADV
-        ADV --> QL
+    subgraph "Per-Call (sdk-executor)"
+        SDK --> ASF["api-schema-filter"]
+        SDK --> PB["prompt-builder"]
+        ASF --> API["Claude SDK API call"]
+        PB --> PROMPT["System Prompt"]
+        PROMPT --> API
     end
 
     subgraph "Model Discovery"
-        MODEL["Model"] -->|ToolSearch query| QLA
-        QLA -->|select or keyword| TSI["toolSearchIndex"]
-        TSI -->|tool_reference| MODEL
+        MODEL["Model"] -->|ToolSearch query| TS["tool-search"]
+        TS --> REG
+        TS --> CACHE["descriptionCache (Map)"]
+        TS --> MODEL
     end
 
-    subgraph Execution
-        MODEL -->|tool_use| EXEC["executor"]
-        EXEC -->|resolve| LAZY["lazyToolProxy"]
-        LAZY -->|loader()| REG
-        LAZY --> IDX["deferredIndex (resolved cache)"]
-        EXEC --> CC["concurrencyClassifier"]
-        CC -->|partition| EXEC
-        EXEC --> CACHE["diskResultCache"]
-        CACHE -->|hit| EXEC
-        EXEC -->|run| TOOL["ToolDef.call()"]
+    subgraph "P4 Compat (existing)"
+        REG -->|toP4Registry| P4REG["Map<name, P4 ToolDefinition>"]
+        P4REG --> P4["partitioner / executor (unchanged)"]
     end
 ```
 
-### File Wiring (existing files, to be consumed)
+### File layout
 
 ```
-src/services/tools/
-  deferredToolRegistry.ts    -- (exists) register/list/isDeferred
-  deferredIndex.ts           -- (exists) resolved cache (Map<string, ToolDef>)
-  lazyToolProxy.ts           -- (exists) resolve() with in-flight dedup
-  deferredTypes.ts           -- (exists) DeferredEntry, ToolLoader, classification enums
-  partitioner.ts             -- (exists) classify(), buildAdvertisement()
-  concurrencyClassifier.ts   -- (exists) isConcurrencySafe()
-  executor.ts                -- (exists) partition + run + cache integration
-  queryLoopAdapter.ts        -- (exists) ToolSearch handler + injectToolList
-  toolDefinitions.ts         -- (exists) registration entry points
-  toolSearchIndex.ts         -- (exists) keyword scoring
-  diskResultCache.ts         -- (exists) get/put/sweep
+src/services/deferred-tools/                    -- NEW (this phase)
+  registry.ts                                   -- DeferredToolRegistry
+  tool-search.ts                                -- ToolSearch meta-tool
+  prompt-builder.ts                             -- buildPromptAdvertisement
+  api-schema-filter.ts                          -- buildApiToolList
+  index.ts                                      -- barrel
 
-src/query/queryLoop.ts (P11)
-  -- INTEGRATION POINT — calls queryLoopAdapter.injectToolList() during prompt build
-  -- and routes ToolSearch tool_use blocks to queryLoopAdapter.handleToolSearchCall()
-```
+src/services/tools/                             -- UNTOUCHED (P4 modules)
+  partitioner.ts | executor.ts | concurrencyClassifier.ts
+  queryLoopAdapter.ts | toolDefinitions.ts | types.ts | index.ts
 
-### Tool Discovery Sequence (Cold Path)
-
-```mermaid
-sequenceDiagram
-    participant M as Model
-    participant QL as queryLoop (P11)
-    participant QLA as queryLoopAdapter
-    participant REG as deferredToolRegistry
-    participant LAZY as lazyToolProxy
-    participant EXEC as executor
-    participant CACHE as diskResultCache
-    participant TOOL as Resolved Tool
-
-    QL->>QLA: injectToolList(systemPrompt)
-    QLA->>REG: listDeferred()
-    REG-->>QLA: [warm names, cold count]
-    QLA-->>QL: prompt < 8KB
-
-    QL->>M: send prompt
-    M->>QL: ToolSearch(query="browser screenshot")
-    QL->>QLA: handleToolSearchCall(query)
-    QLA->>REG: keyword scan
-    REG-->>QLA: top matches
-    QLA-->>M: tool_reference[] blocks
-
-    M->>QL: tool_use(mcp__cf__browser_screenshot, args)
-    QL->>EXEC: run(toolUse)
-    EXEC->>LAZY: resolve("mcp__cf__browser_screenshot")
-    LAZY->>REG: get loader
-    LAZY->>TOOL: loader()
-    TOOL-->>LAZY: ToolDef
-    LAZY-->>EXEC: ToolDef
-    EXEC->>CACHE: get(name, argsHash)
-    CACHE-->>EXEC: miss
-    EXEC->>TOOL: call(args)
-    TOOL-->>EXEC: result
-    EXEC->>CACHE: put(name, argsHash, result, ttl)
-    EXEC-->>QL: result
+src/execution/runtime/sdk-executor.ts           -- additive: optional deferredToolRegistry dep
+src/index.ts                                    -- bootstrap registers built-ins
+src/execution/orchestrator/issue-worker.ts      -- worker thread bootstrap
 ```
 
 ---
@@ -441,125 +434,126 @@ sequenceDiagram
 
 | FR | Test File | Key Assertions |
 |----|-----------|----------------|
-| FR-P12-001 | `tests/services/tools/deferredToolRegistry.test.ts` | register stores name+description+loader; loader not invoked at register time; duplicate name throws; listDeferred excludes resolved entries |
-| FR-P12-002 | `tests/services/tools/lazyToolProxy.test.ts` | resolve calls loader once; concurrent resolves share Promise; loader failure surfaces ToolResolutionError; resolved def cached in deferredIndex |
-| FR-P12-003 | `tests/services/tools/partitioner.test.ts` | classify returns hot/warm/cold per usage stats; HOT_PINNED_SET always hot; buildAdvertisement byte length under 8KB at N=500; ToolSearch always in hot tier |
-| FR-P12-004 | `tests/services/tools/queryLoopAdapter.test.ts` | injectToolList adds hot full + warm names + cold count; select:name returns tool_reference block; keyword query returns scored matches; mcp__ prefix matching works |
-| FR-P12-005 | `tests/services/tools/diskResultCache.test.ts` | put then get round-trips; expired entry returns undefined and unlinks; sha256 args hash stable across key order; ToolCacheHit event emitted on hit |
-| FR-P12-006 | `tests/services/tools/concurrencyClassifier.test.ts` | read-only tools concurrency-safe; Bash with `rm` serial; Bash with `cat` safe; classifier exception falls back to serial |
-| FR-P12-007 | `tests/services/tools/promptBudget.eval.test.ts` | register N in {10,50,100,250,500}; assert advertisement < 8192 bytes for each; hot tier count constant; cold resolve p95 < 50ms over 100 concurrent calls |
+| FR-P12-001 | `tests/services/deferred-tools/registry.test.ts` | register stores full def; duplicate throws; listDeferred / listAlwaysLoad filter correctly; toP4Registry yields a Map shaped like the existing P4 ToolDefinition |
+| FR-P12-002, FR-P12-007 | `tests/services/deferred-tools/prompt-builder.test.ts` | always-load tools rendered with full schema; deferred tools rendered as one-line summaries; 8 KB cap enforced; truncation tail emitted when needed; ToolSearch always present when registered |
+| FR-P12-003, FR-P12-005 | `tests/services/deferred-tools/tool-search.test.ts` | select: form returns descriptors; comma-separated multi-select; +required filter; bare keyword scoring; mcp__server__ prefix filter; max_results respected; description cache hit on second call |
+| FR-P12-004 | `tests/services/deferred-tools/api-schema-filter.test.ts` | always-load → input_schema inline; deferred → input_schema=null; defer_loading flag set per-tool |
+| FR-P12-006 | covered in registry.test.ts via toP4Registry roundtrip |
+| FR-P12-007 | `tests/eval/deferred-tool-prompt-budget.test.ts` | N ∈ {10, 50, 100, 500} all under 8 KB; deterministic ordering |
+| sdk-executor backward compat | `tests/execution/runtime/sdk-executor.test.ts` (extended) | omitting deferredToolRegistry yields identical behavior; passing one feeds allowedTools from registry |
 
-All tests use `node:test` + `node:assert/strict` with mock-first pattern. The eval test (FR-P12-007) uses synthetic loaders and a microbenchmark harness.
+All tests use `node:test` + `node:assert/strict`, mock-first.
 
-### Anti-Patterns to Enforce
+### Anti-Patterns
 
 ```yaml
 anti_patterns:
-  - name: "Eager Schema Resolution"
-    bad: "Calling loader() at register time to validate the schema"
-    good: "Loader runs only on first lazyToolProxy.resolve()"
-    enforcement: "registry.register() type signature accepts a thunk, not a ToolDef"
+  - name: "Lazy schema thunks"
+    bad: "Storing a () => Promise<ToolDef> loader at register time"
+    good: "Eagerly construct the ToolDef and store it whole — match CC tools.ts:193-250"
+    enforcement: "registry.register() type signature accepts a concrete ToolDef, not a thunk"
 
-  - name: "Bypassing the Proxy"
-    bad: "executor reaches into deferredIndex directly without going through lazyToolProxy"
-    good: "All resolution flows through lazyToolProxy.resolve()"
-    enforcement: "deferredIndex is internal — only lazyToolProxy imports it"
+  - name: "Result memoization"
+    bad: "sha256-keyed disk cache for tool results"
+    good: "Don't memoize results — CC doesn't, and tool results are not pure"
+    enforcement: "No cache module under src/services/deferred-tools/"
 
-  - name: "Unbounded Prompt Growth"
-    bad: "buildAdvertisement concatenates every tool's full description"
-    good: "Partitioner caps hot tier and emits cold count summary"
-    enforcement: "Eval test (FR-P12-007) gates merges if advertisement exceeds 8KB"
+  - name: "Hot/warm/cold tiers"
+    bad: "Three-tier classification with usage-based promotion"
+    good: "Two states: alwaysLoad vs deferred, set at register time"
+    enforcement: "DeferredToolDef has shouldDefer + alwaysLoad booleans only — no tier enum"
 
-  - name: "Optimistic Concurrency"
-    bad: "Classifier defaults unknown tools to concurrency-safe"
-    good: "Unknown or exception → serial-only"
-    enforcement: "concurrencyClassifier returns false on any throw"
+  - name: "Bash command parser for parallelism"
+    bad: "Parsing Bash arguments to decide concurrency safety"
+    good: "Tool declares isConcurrencySafe(input) — Bash returns false unconditionally"
+    enforcement: "P4's existing partitioner handles this — no new code"
 
-  - name: "Cache Without TTL"
-    bad: "diskResultCache.put with TTL=Infinity"
-    good: "Every cacheable tool declares an explicit ttlMs"
-    enforcement: "ToolDef.cacheable is { enabled: true, ttlMs: number } — no boolean shorthand"
-
-  - name: "Cold ToolSearch"
-    bad: "ToolSearch tool itself classified as warm — model can never discover anything"
-    good: "ToolSearch is pinned to the hot tier permanently"
-    enforcement: "HOT_PINNED_SET unit test asserts ToolSearch membership"
+  - name: "ToolSearch in the deferred set"
+    bad: "ToolSearch with shouldDefer=true — model can never discover anything"
+    good: "ToolSearch is always alwaysLoad=true and shouldDefer=false"
+    enforcement: "Bootstrap test asserts this"
 ```
 
 ### Migration Strategy
 
 ```yaml
 migration:
-  phase_1_registry_consumed:
-    files: ["toolDefinitions.ts"]
-    description: "Convert existing tool definitions to register via deferredToolRegistry where appropriate. Hot tools may stay eager initially."
-    validation: "Existing tool tests still pass; listDeferred() returns expected set."
+  phase_1_clean_stubs:
+    description: "Delete the orphan Phase 9G stubs that don't match the revised spec"
+    files:
+      - "src/services/tools/deferredToolRegistry.ts (delete — to be rewritten under deferred-tools/)"
+      - "src/services/tools/deferredTypes.ts (delete)"
+      - "src/services/tools/lazyToolProxy.ts (delete — CC has no lazy proxy)"
+      - "src/services/tools/diskResultCache.ts (delete — CC has no result memoization)"
+      - "src/services/tools/toolSearchIndex.ts (delete — replaced by tool-search.ts)"
+      - "src/services/tools/deferredIndex.ts (delete — barrel for the above)"
+      - "tests/services/tools/{deferredToolRegistry,lazyToolProxy,diskResultCache,toolSearchIndex}.test.ts"
+    validation: "grep confirms zero production callers of any deleted symbol"
 
-  phase_2_proxy_in_executor:
-    files: ["executor.ts"]
-    description: "Executor consults lazyToolProxy.resolve() before invoking any tool."
-    validation: "Executor unit tests pass; first-call latency measured."
+  phase_2_new_module:
+    description: "Build src/services/deferred-tools/ from scratch"
+    files: ["registry.ts", "tool-search.ts", "prompt-builder.ts", "api-schema-filter.ts", "index.ts"]
+    validation: "all FR-coverage tests pass"
 
-  phase_3_partitioner_in_adapter:
-    files: ["queryLoopAdapter.ts", "partitioner.ts"]
-    description: "Adapter calls partitioner to build the tool advertisement."
-    validation: "Prompt budget eval (FR-P12-007) passes at all N."
+  phase_3_wire_sdk_executor:
+    description: "sdk-executor accepts optional deferredToolRegistry; when set, allowedTools is computed from the registry"
+    files: ["src/execution/runtime/sdk-executor.ts"]
+    validation: "P6/P10/P11 sdk-executor tests still pass with no registry; new test asserts registry path"
 
-  phase_4_query_loop_integration:
-    files: ["src/query/queryLoop.ts"]
-    description: "P11's query loop calls injectToolList() and routes ToolSearch tool_use to handleToolSearchCall()."
-    validation: "End-to-end: register cold tool, model issues ToolSearch, model invokes tool, executor runs it."
-
-  phase_5_cache_and_concurrency:
-    files: ["diskResultCache.ts", "concurrencyClassifier.ts", "executor.ts"]
-    description: "Wire cache get/put around tool calls; partition batches by classifier output."
-    validation: "Cache hit ratio > 0 in integration test; concurrency batching matches CC partitioner behavior."
+  phase_4_bootstrap:
+    description: "src/index.ts and src/execution/orchestrator/issue-worker.ts construct a registry and pass it to createSdkExecutor"
+    validation: "build + lint clean; existing integration tests pass"
 ```
+
+> **Scope intentionally bounded.** The Claude Agent SDK uses
+> `tools: { type: 'preset', preset: 'claude_code' }`, which means CC's preset
+> owns the actual tool list and ToolSearch routing inside the SDK. Orch-Agents
+> cannot intercept ToolSearch calls without abandoning the preset and risking
+> P10/P11 wiring. This phase delivers the registry, advertisement, schema
+> filter, and meta-tool implementation as a standalone library that
+> sdk-executor consumes for `allowedTools`. A follow-up phase can replace the
+> SDK preset with a custom tool list driven by the registry once the preset
+> escape hatch is mature.
 
 ---
 
 ## C — Completion
 
-### Definition of Done
-
 ```yaml
 completion:
   code_deliverables:
-    - "Wired: src/services/tools/deferredToolRegistry.ts (consumed by toolDefinitions)"
-    - "Wired: src/services/tools/lazyToolProxy.ts (consumed by executor)"
-    - "Wired: src/services/tools/partitioner.ts (consumed by queryLoopAdapter)"
-    - "Wired: src/services/tools/concurrencyClassifier.ts (consumed by executor.partition)"
-    - "Wired: src/services/tools/queryLoopAdapter.ts (consumed by src/query/queryLoop.ts)"
-    - "Wired: src/services/tools/diskResultCache.ts (consumed by executor)"
-    - "Wired: src/services/tools/toolSearchIndex.ts (consumed by queryLoopAdapter keyword search)"
-    - "Modified: src/services/tools/toolDefinitions.ts — registers deferred entries"
-    - "Modified: src/services/tools/executor.ts — proxy resolution + cache + partition"
-    - "Modified: src/query/queryLoop.ts — adapter integration point"
+    - "Created: src/services/deferred-tools/registry.ts"
+    - "Created: src/services/deferred-tools/tool-search.ts"
+    - "Created: src/services/deferred-tools/prompt-builder.ts"
+    - "Created: src/services/deferred-tools/api-schema-filter.ts"
+    - "Created: src/services/deferred-tools/index.ts"
+    - "Modified: src/execution/runtime/sdk-executor.ts (additive optional dep)"
+    - "Modified: src/index.ts (bootstrap registry)"
+    - "Modified: src/execution/orchestrator/issue-worker.ts (worker bootstrap)"
+    - "Deleted: src/services/tools/{deferredToolRegistry,deferredTypes,lazyToolProxy,diskResultCache,toolSearchIndex,deferredIndex}.ts"
+    - "Deleted: tests/services/tools/{deferredToolRegistry,lazyToolProxy,diskResultCache,toolSearchIndex}.test.ts"
 
   test_deliverables:
-    - "tests/services/tools/deferredToolRegistry.test.ts"
-    - "tests/services/tools/lazyToolProxy.test.ts"
-    - "tests/services/tools/partitioner.test.ts"
-    - "tests/services/tools/queryLoopAdapter.test.ts"
-    - "tests/services/tools/diskResultCache.test.ts"
-    - "tests/services/tools/concurrencyClassifier.test.ts"
-    - "tests/services/tools/promptBudget.eval.test.ts"
+    - "tests/services/deferred-tools/registry.test.ts"
+    - "tests/services/deferred-tools/tool-search.test.ts"
+    - "tests/services/deferred-tools/prompt-builder.test.ts"
+    - "tests/services/deferred-tools/api-schema-filter.test.ts"
+    - "tests/eval/deferred-tool-prompt-budget.test.ts"
+    - "tests/execution/runtime/sdk-executor.test.ts (extended)"
 
   verification_checklist:
     - "npm run build succeeds"
-    - "npm test passes (all existing + new tests)"
-    - "npx tsc --noEmit passes"
-    - "npm run lint passes"
-    - "Eval FR-P12-007: prompt budget < 8KB at N=500 confirmed"
-    - "ToolSearch in HOT_PINNED_SET (asserted in test)"
-    - "No direct imports of deferredIndex outside lazyToolProxy"
-    - "data/tool-cache/ created and gitignored"
-    - "EventBus receives ToolResolved / ToolCacheHit / ToolCacheMiss"
+    - "npx tsc --noEmit clean"
+    - "npm test passes — count moved from 1587 → 1587+ delta"
+    - "P4 partitioner / executor / classifier tests still pass (untouched)"
+    - "sdk-executor tests pass with and without deferredToolRegistry"
+    - "FR-P12-007 prompt budget eval green at N=500"
+    - "Bootstrap test confirms ToolSearch is alwaysLoad=true"
+    - "No production callers of any deleted Phase 9G stub symbol"
 
   success_metrics:
-    - "Cold-tool first-resolve latency p95 < 50ms"
-    - "Cached-tool resolve latency p95 < 10ms"
-    - "Prompt advertisement < 8KB at 500 registered tools"
-    - "Concurrency-safe Read batches 5+ in parallel"
-    - "0 eager loader invocations at registration time (asserted in test)"
+    - "Prompt advertisement < 8 KB at 500 deferred tools"
+    - "ToolSearch select: returns in O(1) per name"
+    - "0 lines diff in P4 modules under src/services/tools/"
+    - "Zero behavioral change to sdk-executor when deferredToolRegistry omitted"
 ```

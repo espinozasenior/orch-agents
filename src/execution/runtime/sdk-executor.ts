@@ -121,11 +121,19 @@ export interface SdkExecutorDeps {
     OverloadRetryOptions,
     'maxRetries' | 'baseDelayMs' | 'maxDelayMs' | 'jitterRatio' | 'sleep' | 'random'
   >;
+  /** P12: Optional deferred-tool registry. When supplied, the executor's
+   *  allowedTools list is derived from the registry instead of the
+   *  hardcoded default. Omitting it preserves prior behavior exactly. */
+  deferredToolRegistry?: import('../../services/deferred-tools').DeferredToolRegistry;
 }
 
 export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskExecutor {
   const logger = deps.logger;
-  const allowedTools = deps.allowedTools ?? ['Edit', 'Write', 'Read', 'Bash', 'Grep', 'Glob'];
+  // P12: prefer deferredToolRegistry → explicit allowedTools → hardcoded default.
+  const allowedTools =
+    deps.deferredToolRegistry?.list().map((t) => t.name)
+    ?? deps.allowedTools
+    ?? ['Edit', 'Write', 'Read', 'Bash', 'Grep', 'Glob'];
   const permissionPolicy: SessionPermissionPolicy = {
     permissionMode: 'default',
     allowDangerouslySkipPermissions: false,
