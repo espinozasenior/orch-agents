@@ -11,10 +11,12 @@
 - ALWAYS read a file before editing it
 - NEVER commit secrets, credentials, or .env files
 - Single-word approvals ("yes", "do it", "push") trigger immediate execution — no repetition or commentary
+- NEVER use stubs
+- NEVER leave a new feature unwired
 
 ## Pre-Work Discipline
 
-- Dead code accelerates context compaction. Before ANY structural refactor on a file >300 LOC, first remove dead props, unused exports, unused imports, and debug logs
+- Dead code accelerates context compaction. Before ANY structural refactor on a file >500 LOC, first remove dead props, unused exports, unused imports, and debug logs
 - Study existing code thoroughly before building — match patterns exactly rather than following English descriptions
 - Work directly from error logs and console output rather than guessing. Request actual data when missing
 - Non-trivial features require plan mode with user interviews about implementation, UX, and tradeoffs before code
@@ -68,6 +70,7 @@ npx tsc --noEmit
 - "I already tested earlier" → Code changed since then. Test again
 - "It's a trivial change" → Trivial changes break production
 - If code changed after the last test run, re-run before claiming done
+- ALWAYS review the related task's spec fullfilment before mark task as done
 
 ## Edit Safety
 
@@ -139,6 +142,7 @@ npx tsc --noEmit
 ## Linear Agent Integration
 
 - OAuth `actor=app` tokens stored in SQLite — persist across restarts
+- ALWAYS use AgentSessionEvent approach, the legacy webhook is for github and issues status hooks only
 - AgentSessionEvent webhooks: emit thought activity within 10 seconds (SLA)
 - Move issue to first "started" state before orchestrator dispatch
 - Agent Activities (thought/action/elicitation/response/error) emitted alongside workpad comments
