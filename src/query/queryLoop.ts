@@ -6,6 +6,27 @@ import type { Terminal, Continue } from './transitions.js';
 import type { QueryLoopState, QueryMessage } from './state.js';
 import type { QueryDeps } from './deps.js';
 import { createInitialState } from './state.js';
+import type {
+  CompactMessage,
+  CompactionConfig,
+  AutoCompactTrackingState,
+  ForkedLLMCall,
+  QuerySource,
+} from '../services/compact/index.js';
+import {
+  createDefaultConfig,
+  createTrackingState,
+  snipCompactIfNeeded,
+  autoCompactIfNeeded,
+  generateCompactionMessages,
+  computeWarningState,
+  decideWarningEmission,
+  runPostCompactCleanup,
+  AUTOCOMPACT_BUFFER_TOKENS,
+} from '../services/compact/index.js';
+
+/** API error string emitted on 413 / prompt_too_long. */
+export const PROMPT_TOO_LONG_ERROR = 'prompt_too_long';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -102,6 +123,305 @@ async function noopToolExecution(
 }
 
 // ---------------------------------------------------------------------------
+// Compaction integration (P10)
+// ---------------------------------------------------------------------------
+
+export type CompactionEventType =
+  | 'ContextPressureWarning'
+  | 'ContextPressureError'
+  | 'CompactionTriggered'
+  | 'CompactionCompleted';
+
+export interface CompactionEventPayload {
+  readonly type: CompactionEventType;
+  readonly cause?: 'auto' | 'reactive';
+  readonly tokensBefore?: number;
+  readonly tokensAfter?: number;
+  readonly ratio?: number;
+  readonly latencyMs?: number;
+  readonly currentTokens?: number;
+  readonly threshold?: number;
+  readonly percentLeft?: number;
+  readonly recommended?: 'snip' | 'compact' | 'block';
+}
+
+export interface CompactionHooks {
+  /** Session id used for cleanup state + warning suppression. */
+  readonly sessionId: string;
+  /** 'main' or 'subagent' (FR-P10-005). */
+  readonly querySource?: QuerySource;
+  /** Compaction config — defaults to 200K context. */
+  readonly config?: CompactionConfig;
+  /** Mutable tracking state (carries circuit-breaker counter). */
+  readonly tracking?: AutoCompactTrackingState;
+  /** Forked LLM call (FR-P10-004). Falls back to deterministic structured summary. */
+  readonly forkedLLM?: ForkedLLMCall;
+  /** Tail rounds preserved verbatim (default 2). */
+  readonly tailRounds?: number;
+  /** Snip boundary — number of recent messages to keep when snipping. */
+  readonly snipBoundary?: number;
+  /** Disable proactive auto-compact entirely (reactive still runs). */
+  readonly disableAutoCompact?: boolean;
+  /** Disable BOTH auto and reactive (DISABLE_COMPACT). */
+  readonly disableAll?: boolean;
+  /** Event emitter for the harness — receives compaction + pressure events. */
+  readonly emit?: (event: CompactionEventPayload) => void;
+}
+
+/** Convert a queryLoop QueryMessage to a compact-pipeline CompactMessage. */
+function toCompactMessage(msg: QueryMessage): CompactMessage {
+  return {
+    uuid: msg.uuid,
+    type: msg.type,
+    content: [{ type: 'text', text: msg.content }],
+  };
+}
+
+/** Convert back — preserves text content. Tool blocks roundtrip via content. */
+function fromCompactMessage(msg: CompactMessage): QueryMessage {
+  const text = msg.content
+    .map((b) => {
+      if (b.type === 'text') return b.text;
+      if (b.type === 'tool_result') return b.content;
+      if (b.type === 'tool_use') return `[tool_use:${b.name}]`;
+      return '';
+    })
+    .join('\n');
+  return {
+    uuid: msg.uuid,
+    type: msg.type,
+    content: text,
+  };
+}
+
+interface CompactionContext {
+  readonly hooks: CompactionHooks;
+  readonly config: CompactionConfig;
+  readonly tracking: AutoCompactTrackingState;
+}
+
+function ensureCompactionContext(
+  hooks: CompactionHooks,
+): CompactionContext {
+  return {
+    hooks,
+    config: hooks.config ?? createDefaultConfig(),
+    tracking: hooks.tracking ?? createTrackingState(),
+  };
+}
+
+/** Run snip + auto-compact pre-model-call (FR-P10-001 + FR-P10-003). */
+async function runProactiveCompaction(
+  messages: QueryMessage[],
+  ctx: CompactionContext,
+): Promise<{ messages: QueryMessage[]; compacted: boolean }> {
+  if (ctx.hooks.disableAll || ctx.hooks.disableAutoCompact) {
+    return { messages, compacted: false };
+  }
+
+  const compactMsgs = messages.map(toCompactMessage);
+
+  // Warning hook (FR-P10-006).
+  const warningState = computeWarningState(
+    compactMsgs,
+    ctx.config.contextWindowTokens,
+  );
+  const emission = decideWarningEmission(ctx.hooks.sessionId, warningState);
+  if (emission.kind === 'warning' && ctx.hooks.emit) {
+    ctx.hooks.emit({
+      type: 'ContextPressureWarning',
+      currentTokens: warningState.currentTokens,
+      threshold: warningState.warningThreshold,
+      percentLeft: warningState.percentLeft,
+      recommended:
+        warningState.recommended === 'none'
+          ? 'snip'
+          : warningState.recommended,
+    });
+  } else if (emission.kind === 'error' && ctx.hooks.emit) {
+    ctx.hooks.emit({
+      type: 'ContextPressureError',
+      currentTokens: warningState.currentTokens,
+      threshold: warningState.errorThreshold,
+      percentLeft: warningState.percentLeft,
+    });
+  }
+
+  // Tier 2 — snip (cheap, no LLM).
+  const snipBoundary = ctx.hooks.snipBoundary ?? compactMsgs.length;
+  const snipResult = snipCompactIfNeeded(compactMsgs, snipBoundary);
+
+  // Tier 3 — auto-compact threshold check. We compute the trigger
+  // ourselves rather than relying on autoCompactIfNeeded's internal
+  // structured-summary fallback, because the queryLoop wiring drives
+  // its own (potentially LLM-backed) summary path below.
+  if (ctx.tracking.consecutiveFailures >= ctx.config.maxConsecutiveFailures) {
+    return { messages, compacted: false };
+  }
+  // Run autoCompactIfNeeded to honour env/test-only overrides and to
+  // bump the consecutiveFailures counter when its internal validator
+  // would have refused the compaction.
+  const autoResult = autoCompactIfNeeded(
+    snipResult.messages,
+    ctx.config,
+    ctx.tracking,
+    snipResult.tokensFreed,
+  );
+  if (autoResult.consecutiveFailures !== undefined) {
+    ctx.tracking.consecutiveFailures = autoResult.consecutiveFailures;
+  }
+
+  if (!warningState.isAboveAutoCompactThreshold) {
+    return { messages, compacted: false };
+  }
+
+  // Threshold met → generate the real summary (LLM if injected).
+  const tokensBefore =
+    autoResult.compactionResult?.preCompactTokenCount ??
+    warningState.currentTokens;
+  ctx.hooks.emit?.({
+    type: 'CompactionTriggered',
+    cause: 'auto',
+    tokensBefore,
+  });
+
+  const t0 = Date.now();
+  const generated = await generateCompactionMessages(snipResult.messages, {
+    tailRounds: ctx.hooks.tailRounds ?? 2,
+    forkedLLM: ctx.hooks.forkedLLM,
+  });
+  const latencyMs = Date.now() - t0;
+
+  // Approximate post-compact tokens via the same chars/4 estimator
+  // the autoCompact pipeline uses.
+  const tokensAfter = generated.messages.reduce(
+    (sum, m) =>
+      sum +
+      4 +
+      m.content.reduce((s, b) => {
+        if (b.type === 'text') return s + Math.ceil(b.text.length / 4);
+        if (b.type === 'tool_result') return s + Math.ceil(b.content.length / 4);
+        return s;
+      }, 0),
+    0,
+  );
+  const ratio = tokensBefore > 0 ? 1 - tokensAfter / tokensBefore : 0;
+
+  // Refuse to declare success if compaction didn't actually shrink the
+  // conversation — bump the circuit-breaker counter instead. Without
+  // this guard the loop would re-trigger compaction every iteration
+  // on a single oversized message.
+  if (tokensAfter >= tokensBefore) {
+    ctx.tracking.consecutiveFailures += 1;
+    return { messages, compacted: false };
+  }
+
+  ctx.tracking.compacted = true;
+  ctx.tracking.consecutiveFailures = 0;
+
+  // Post-compact cleanup (FR-P10-005).
+  const newAnchor = generated.messages[generated.messages.length - 1]?.uuid;
+  runPostCompactCleanup(
+    ctx.hooks.sessionId,
+    ctx.hooks.querySource ?? 'main',
+    newAnchor,
+  );
+
+  ctx.hooks.emit?.({
+    type: 'CompactionCompleted',
+    cause: 'auto',
+    tokensBefore,
+    tokensAfter,
+    ratio,
+    latencyMs,
+  });
+
+  return {
+    messages: generated.messages.map(fromCompactMessage),
+    compacted: true,
+  };
+}
+
+/** Run reactive compaction after a PROMPT_TOO_LONG (FR-P10-002). */
+async function runReactiveCompactionForLoop(
+  messages: QueryMessage[],
+  ctx: CompactionContext,
+): Promise<{ messages: QueryMessage[]; success: boolean }> {
+  if (ctx.hooks.disableAll) {
+    return { messages, success: false };
+  }
+
+  const compactMsgs = messages.map(toCompactMessage);
+  const tokensBefore = compactMsgs.reduce(
+    (s, m) =>
+      s +
+      4 +
+      m.content.reduce(
+        (a, b) => (b.type === 'text' ? a + Math.ceil(b.text.length / 4) : a),
+        0,
+      ),
+    0,
+  );
+
+  ctx.hooks.emit?.({
+    type: 'CompactionTriggered',
+    cause: 'reactive',
+    tokensBefore,
+  });
+
+  const t0 = Date.now();
+  let generated;
+  try {
+    generated = await generateCompactionMessages(compactMsgs, {
+      tailRounds: ctx.hooks.tailRounds ?? 2,
+      forkedLLM: ctx.hooks.forkedLLM,
+    });
+  } catch {
+    return { messages, success: false };
+  }
+  const latencyMs = Date.now() - t0;
+
+  const tokensAfter = generated.messages.reduce(
+    (sum, m) =>
+      sum +
+      4 +
+      m.content.reduce((s, b) => {
+        if (b.type === 'text') return s + Math.ceil(b.text.length / 4);
+        if (b.type === 'tool_result') return s + Math.ceil(b.content.length / 4);
+        return s;
+      }, 0),
+    0,
+  );
+  const ratio = tokensBefore > 0 ? 1 - tokensAfter / tokensBefore : 0;
+
+  ctx.tracking.compacted = true;
+
+  const newAnchor = generated.messages[generated.messages.length - 1]?.uuid;
+  runPostCompactCleanup(
+    ctx.hooks.sessionId,
+    ctx.hooks.querySource ?? 'main',
+    newAnchor,
+  );
+
+  ctx.hooks.emit?.({
+    type: 'CompactionCompleted',
+    cause: 'reactive',
+    tokensBefore,
+    tokensAfter,
+    ratio,
+    latencyMs,
+  });
+
+  return {
+    messages: generated.messages.map(fromCompactMessage),
+    success: true,
+  };
+}
+
+// Re-export AUTOCOMPACT_BUFFER_TOKENS so callers can size context windows.
+export { AUTOCOMPACT_BUFFER_TOKENS };
+
+// ---------------------------------------------------------------------------
 // Query parameters
 // ---------------------------------------------------------------------------
 
@@ -123,6 +443,10 @@ export interface QueryParams {
   executeTool?: (
     toolUseBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }>,
   ) => Promise<ToolExecutionResult>;
+  /** Integration point: P10 compaction wiring. When provided, the loop runs
+   *  proactive snip+autoCompact each turn and reactive compact on
+   *  prompt_too_long errors. When omitted, behaviour is unchanged. */
+  compaction?: CompactionHooks;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +473,12 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
     handleStopHooks = noopStopHooks,
     checkBudget = noopBudgetCheck,
     executeTool = noopToolExecution,
+    compaction,
   } = params;
+
+  const compactionCtx = compaction
+    ? ensureCompactionContext(compaction)
+    : undefined;
 
   let state: QueryLoopState = createInitialState(params.messages);
 
@@ -175,6 +504,19 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
         transition: { reason: 'compact_retry' },
       };
       continue;
+    }
+
+    // 3b. P10 — proactive snip + auto-compact (FR-P10-001/003/004/005/006)
+    if (compactionCtx) {
+      const proactive = await runProactiveCompaction(messages, compactionCtx);
+      if (proactive.compacted) {
+        state = {
+          ...state,
+          messages: proactive.messages,
+          transition: { reason: 'compact_retry' },
+        };
+        continue;
+      }
     }
 
     // 4. Check blocking limit
@@ -284,6 +626,36 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
     }
 
     // 7. No tool_use — check for recoverable errors
+
+    // 7a-pre. P10 — Reactive compaction on prompt_too_long (FR-P10-002).
+    if (
+      compactionCtx &&
+      lastApiError === PROMPT_TOO_LONG_ERROR &&
+      !state.hasAttemptedReactiveCompact
+    ) {
+      const reactive = await runReactiveCompactionForLoop(
+        messages,
+        compactionCtx,
+      );
+      if (reactive.success) {
+        state = {
+          ...state,
+          messages: reactive.messages,
+          hasAttemptedReactiveCompact: true,
+          turnCount: turnCount + 1,
+          transition: { reason: 'compact_retry' },
+        };
+        continue;
+      }
+      // Reactive failed — surface the error.
+      const errorMsg: QueryMessage = {
+        uuid: deps.uuid(),
+        type: 'system',
+        content: 'Prompt too long — reactive compaction failed.',
+      };
+      yield { type: 'error_message', message: errorMsg };
+      return { reason: 'prompt_too_long' };
+    }
 
     // 7a. Max output tokens recovery
     if (lastApiError === 'max_output_tokens') {

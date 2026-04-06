@@ -216,6 +216,28 @@ export type CompactionTriggeredEvent = DomainEvent<
   { tier: 'pipeline' | 'reactive'; tokensBefore: number; tokensAfter: number; execId: string }
 >;
 
+export type CompactionCompletedEvent = DomainEvent<
+  'CompactionCompleted',
+  {
+    cause: 'auto' | 'reactive';
+    tokensBefore: number;
+    tokensAfter: number;
+    ratio: number;
+    latencyMs: number;
+    execId: string;
+  }
+>;
+
+export type ContextPressureWarningEvent = DomainEvent<
+  'ContextPressureWarning',
+  { currentTokens: number; threshold: number; percentLeft: number; recommended: 'snip' | 'compact' | 'block'; execId: string }
+>;
+
+export type ContextPressureErrorEvent = DomainEvent<
+  'ContextPressureError',
+  { currentTokens: number; threshold: number; percentLeft: number; execId: string }
+>;
+
 export type BudgetContinuationEvent = DomainEvent<
   'BudgetContinuation',
   { pct: number; tokens: number; continuationCount: number; execId: string }
@@ -272,6 +294,9 @@ export type AnyDomainEvent =
   | AgentCancelledEvent
   | AgentPromptedEvent
   | CompactionTriggeredEvent
+  | CompactionCompletedEvent
+  | ContextPressureWarningEvent
+  | ContextPressureErrorEvent
   | BudgetContinuationEvent
   | TaskOutputDeltaEvent
   | TaskNotifiedEvent;
@@ -319,6 +344,9 @@ export interface DomainEventMap {
   AgentCancelled: AgentCancelledEvent;
   AgentPrompted: AgentPromptedEvent;
   CompactionTriggered: CompactionTriggeredEvent;
+  CompactionCompleted: CompactionCompletedEvent;
+  ContextPressureWarning: ContextPressureWarningEvent;
+  ContextPressureError: ContextPressureErrorEvent;
   BudgetContinuation: BudgetContinuationEvent;
   TaskOutputDelta: TaskOutputDeltaEvent;
   TaskNotified: TaskNotifiedEvent;
