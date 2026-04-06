@@ -9,7 +9,7 @@
  * London School TDD — mock the base executor.
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type {
   InteractiveTaskExecutor,
@@ -186,39 +186,10 @@ describe('HarnessSession', () => {
 // ---------------------------------------------------------------------------
 
 describe('CoordinatorSession', () => {
-  const originalEnv = process.env.CLAUDE_CODE_COORDINATOR_MODE;
-
-  afterEach(() => {
-    if (originalEnv === undefined) {
-      process.env.CLAUDE_CODE_COORDINATOR_MODE = '0';
-    } else {
-      process.env.CLAUDE_CODE_COORDINATOR_MODE = originalEnv;
-    }
-  });
-
-  describe('coordinator mode off', () => {
-    it('should pass through to base executor unchanged', async () => {
-      process.env.CLAUDE_CODE_COORDINATOR_MODE = '0';
-
-      const expected = makeResult({ output: 'passthrough' });
-      const base = makeStubExecutor(expected);
-      const executor = createCoordinatorSession({ baseExecutor: base });
-
-      const req = makeRequest();
-      const result = await executor.execute(req);
-
-      assert.equal(result.output, 'passthrough');
-      assert.equal(base.calls[0].prompt, req.prompt);
-    });
-  });
-
   describe('coordinator mode on', () => {
     it('should prepend coordinator system prompt to the agent prompt', async () => {
-      process.env.CLAUDE_CODE_COORDINATOR_MODE = '1';
-
       const base = makeStubExecutor();
       const executor = createCoordinatorSession({ baseExecutor: base });
-
       const req = makeRequest({ prompt: 'Do the task' });
       await executor.execute(req);
 
@@ -238,8 +209,6 @@ describe('CoordinatorSession', () => {
     });
 
     it('should include worker context with MCP clients', async () => {
-      process.env.CLAUDE_CODE_COORDINATOR_MODE = '1';
-
       const base = makeStubExecutor();
       const executor = createCoordinatorSession({
         baseExecutor: base,
@@ -261,19 +230,7 @@ describe('CoordinatorSession', () => {
 // ---------------------------------------------------------------------------
 
 describe('EnhancedExecutor', () => {
-  const originalEnv = process.env.CLAUDE_CODE_COORDINATOR_MODE;
-
-  afterEach(() => {
-    if (originalEnv === undefined) {
-      process.env.CLAUDE_CODE_COORDINATOR_MODE = '0';
-    } else {
-      process.env.CLAUDE_CODE_COORDINATOR_MODE = originalEnv;
-    }
-  });
-
   it('should compose harness and coordinator layers', async () => {
-    process.env.CLAUDE_CODE_COORDINATOR_MODE = '0';
-
     const expected = makeResult({ output: 'composed' });
     const base = makeStubExecutor(expected);
     const executor = createEnhancedExecutor({
@@ -285,9 +242,7 @@ describe('EnhancedExecutor', () => {
     assert.equal(result.output, 'composed');
   });
 
-  it('should apply coordinator enhancement when mode is on', async () => {
-    process.env.CLAUDE_CODE_COORDINATOR_MODE = '1';
-
+  it('should apply coordinator enhancement', async () => {
     const base = makeStubExecutor();
     const executor = createEnhancedExecutor({
       baseExecutor: base,

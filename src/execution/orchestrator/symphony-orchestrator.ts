@@ -19,7 +19,6 @@ import type { RepoConfig } from '../../integration/linear/workflow-parser';
 import { createTask, TaskType, TaskStatus, createTaskRegistry, createTaskOutputWriter } from '../task';
 import type { TaskRouter } from '../task';
 import { pollTasks } from '../task/taskPoller';
-import { isCoordinatorMode } from '../../coordinator/index';
 import { createSymphonyIntakeAdapter } from './symphony-intake-adapter';
 import type { CoordinatorTaskRequest } from '../../coordinator/types';
 
@@ -745,14 +744,13 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     const workflowConfig = getWorkflowConfig();
     const unblocked = candidates.filter((issue) => !isBlockedIssue(issue));
 
-    // P9: When coordinator mode is active and an enqueue function is provided,
-    // route through the intake adapter → coordinator session instead of
-    // direct worker dispatch.
-    const coordinatorModeActive = isCoordinatorMode();
-    const useCoordinator = coordinatorModeActive && deps.coordinatorEnqueue;
+    // P9: Coordinator mode is the only mode. When an enqueue function is
+    // provided, route through the intake adapter → coordinator session
+    // instead of direct worker dispatch.
+    const useCoordinator = Boolean(deps.coordinatorEnqueue);
 
-    if (coordinatorModeActive && !deps.coordinatorEnqueue) {
-      logger.warn('Coordinator mode is active but coordinatorEnqueue callback is missing; falling back to direct worker dispatch');
+    if (!deps.coordinatorEnqueue) {
+      logger.warn('coordinatorEnqueue callback is missing; falling back to direct worker dispatch');
     }
 
     for (const stateName of workflowConfig.tracker.activeStates) {
