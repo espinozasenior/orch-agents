@@ -190,7 +190,7 @@ describe('CoordinatorSession', () => {
 
   afterEach(() => {
     if (originalEnv === undefined) {
-      delete process.env.CLAUDE_CODE_COORDINATOR_MODE;
+      process.env.CLAUDE_CODE_COORDINATOR_MODE = '0';
     } else {
       process.env.CLAUDE_CODE_COORDINATOR_MODE = originalEnv;
     }
@@ -198,7 +198,7 @@ describe('CoordinatorSession', () => {
 
   describe('coordinator mode off', () => {
     it('should pass through to base executor unchanged', async () => {
-      delete process.env.CLAUDE_CODE_COORDINATOR_MODE;
+      process.env.CLAUDE_CODE_COORDINATOR_MODE = '0';
 
       const expected = makeResult({ output: 'passthrough' });
       const base = makeStubExecutor(expected);
@@ -265,14 +265,14 @@ describe('EnhancedExecutor', () => {
 
   afterEach(() => {
     if (originalEnv === undefined) {
-      delete process.env.CLAUDE_CODE_COORDINATOR_MODE;
+      process.env.CLAUDE_CODE_COORDINATOR_MODE = '0';
     } else {
       process.env.CLAUDE_CODE_COORDINATOR_MODE = originalEnv;
     }
   });
 
   it('should compose harness and coordinator layers', async () => {
-    delete process.env.CLAUDE_CODE_COORDINATOR_MODE;
+    process.env.CLAUDE_CODE_COORDINATOR_MODE = '0';
 
     const expected = makeResult({ output: 'composed' });
     const base = makeStubExecutor(expected);

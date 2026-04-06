@@ -441,8 +441,8 @@ describe('linearWebhookHandler (integration)', () => {
     };
   }
 
-  // 7D: AgentSessionEvent 'created' emits thought activity and publishes IntakeCompleted
-  it('should emit thought activity and publish IntakeCompleted for AgentSessionEvent created', async () => {
+  // 7D: AgentSessionEvent 'created' emits thought activity and publishes AgentPrompted
+  it('should emit thought activity and publish AgentPrompted for AgentSessionEvent created', async () => {
     const activityCalls: Array<{ sessionId: string; content: unknown }> = [];
     const mockClient = createMockLinearClient({
       createAgentActivity: async (sessionId, content) => {
@@ -452,8 +452,8 @@ describe('linearWebhookHandler (integration)', () => {
     });
     await createTestServerWithLinearClient(mockClient)();
 
-    let capturedEvent: IntakeCompletedEvent | null = null;
-    eventBus.subscribe('IntakeCompleted', (event) => {
+    let capturedEvent: AgentPromptedEvent | null = null;
+    eventBus.subscribe('AgentPrompted', (event) => {
       capturedEvent = event;
     });
 
@@ -473,25 +473,25 @@ describe('linearWebhookHandler (integration)', () => {
 
     assert.equal(response.statusCode, 202);
     const json = JSON.parse(response.body);
-    assert.equal(json.status, 'queued');
+    assert.equal(json.status, 'prompted');
 
     // Thought activity was emitted
     assert.equal(activityCalls.length, 1);
     assert.equal(activityCalls[0]!.sessionId, 'session-abc');
     assert.deepStrictEqual(activityCalls[0]!.content, { type: 'thought', body: 'Analyzing your request...' });
 
-    // IntakeCompleted was published
+    // AgentPrompted was published
     assert.ok(capturedEvent);
-    assert.equal(capturedEvent!.payload.intakeEvent.source, 'linear');
+    assert.equal(capturedEvent!.payload.agentSessionId, 'session-abc');
   });
 
-  // 7D: AgentSessionEvent 'created' includes agentSessionId in IntakeEvent sourceMetadata
-  it('should include agentSessionId in IntakeEvent sourceMetadata for AgentSessionEvent created', async () => {
+  // 7D: AgentSessionEvent 'created' publishes AgentPrompted with issueId
+  it('should publish AgentPrompted with issueId for AgentSessionEvent created', async () => {
     const mockClient = createMockLinearClient();
     await createTestServerWithLinearClient(mockClient)();
 
-    let capturedEvent: IntakeCompletedEvent | null = null;
-    eventBus.subscribe('IntakeCompleted', (event) => {
+    let capturedEvent: AgentPromptedEvent | null = null;
+    eventBus.subscribe('AgentPrompted', (event) => {
       capturedEvent = event;
     });
 
@@ -510,9 +510,8 @@ describe('linearWebhookHandler (integration)', () => {
     });
 
     assert.ok(capturedEvent);
-    const meta = capturedEvent!.payload.intakeEvent.sourceMetadata;
-    assert.equal(meta.agentSessionId, 'session-abc');
-    assert.ok(meta.promptContext !== undefined);
+    assert.equal(capturedEvent!.payload.agentSessionId, 'session-abc');
+    assert.equal(capturedEvent!.payload.issueId, 'issue-1');
   });
 
   // 7D: AgentSessionEvent 'prompted' publishes AgentPrompted event with body
@@ -654,8 +653,8 @@ describe('linearWebhookHandler (integration)', () => {
     assert.equal(capturedEvent!.payload.intakeEvent.intent, 'custom:linear-todo');
   });
 
-  // 7D: Thought activity failure does NOT block intake dispatch
-  it('should dispatch intake even when thought activity emission fails', async () => {
+  // 7D: Thought activity failure does NOT block AgentPrompted dispatch
+  it('should dispatch AgentPrompted even when thought activity emission fails', async () => {
     const mockClient = createMockLinearClient({
       createAgentActivity: async () => {
         throw new Error('Linear API timeout');
@@ -663,8 +662,8 @@ describe('linearWebhookHandler (integration)', () => {
     });
     await createTestServerWithLinearClient(mockClient)();
 
-    let capturedEvent: IntakeCompletedEvent | null = null;
-    eventBus.subscribe('IntakeCompleted', (event) => {
+    let capturedEvent: AgentPromptedEvent | null = null;
+    eventBus.subscribe('AgentPrompted', (event) => {
       capturedEvent = event;
     });
 
@@ -684,11 +683,11 @@ describe('linearWebhookHandler (integration)', () => {
 
     assert.equal(response.statusCode, 202);
     const json = JSON.parse(response.body);
-    assert.equal(json.status, 'queued');
+    assert.equal(json.status, 'prompted');
 
-    // IntakeCompleted was still published even though thought emission failed
+    // AgentPrompted was still published even though thought emission failed
     assert.ok(capturedEvent);
-    assert.equal(capturedEvent!.payload.intakeEvent.source, 'linear');
+    assert.equal(capturedEvent!.payload.agentSessionId, 'session-abc');
   });
 
   // 7D: AgentSessionEvent dedup via event buffer (FR-7D.07)

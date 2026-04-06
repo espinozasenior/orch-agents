@@ -6,7 +6,7 @@
  * London School TDD — mock child_process.spawn.
  */
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -25,6 +25,26 @@ import type {
   TaskPayload,
 } from '../../../src/execution/runtime/ndjson-protocol';
 import { encodeMessage } from '../../../src/execution/runtime/ndjson-protocol';
+
+// ---------------------------------------------------------------------------
+// Timer tracking — wrap setInterval so afterEach can clear leaked timers.
+// SessionRunner.spawn() creates a heartbeat-ping setInterval. On respawn(),
+// the previous timer reference is overwritten without being cleared, leaking
+// a refed handle that keeps the test process alive past suite completion.
+// We track every interval created during the test run and clear them all.
+// ---------------------------------------------------------------------------
+
+const originalSetInterval = global.setInterval;
+const trackedIntervals = new Set<ReturnType<typeof setInterval>>();
+(global as unknown as { setInterval: typeof setInterval }).setInterval = ((
+  handler: (...args: unknown[]) => void,
+  timeout?: number,
+  ...args: unknown[]
+) => {
+  const t = originalSetInterval(handler, timeout, ...args);
+  trackedIntervals.add(t);
+  return t;
+}) as unknown as typeof setInterval;
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -96,11 +116,48 @@ describe('SessionRunner', () => {
   let fakeChild: FakeChild;
   let runner: SessionRunner;
   let callbacks: SessionRunnerCallbacks;
+  const trackedRunners: SessionRunner[] = [];
 
   beforeEach(() => {
     fakeChild = createFakeChild();
     callbacks = makeCallbacks();
   });
+
+  afterEach(async () => {
+    // Stop heartbeat timers and force-exit any tracked runners.
+    // We bypass drain() because its waitForExit() blocks 5s when the fake
+    // child has already emitted exit (no second 'exit' event will fire).
+    for (const r of trackedRunners) {
+      try {
+        const internal = r as unknown as {
+          _heartbeat?: { stop(): void };
+          _heartbeatPingTimer: ReturnType<typeof setInterval> | null;
+          _child?: EventEmitter | null;
+        };
+        internal._heartbeat?.stop();
+        if (internal._heartbeatPingTimer) {
+          clearInterval(internal._heartbeatPingTimer);
+          internal._heartbeatPingTimer = null;
+        }
+        // Emit exit so any pending waitForExit promises resolve
+        internal._child?.emit('exit', 0, null);
+      } catch {
+        // Best-effort cleanup
+      }
+    }
+    trackedRunners.length = 0;
+    // Clear any setInterval leaked during the test (respawn overwrites
+    // _heartbeatPingTimer without clearing the previous one).
+    for (const t of trackedIntervals) {
+      clearInterval(t);
+    }
+    trackedIntervals.clear();
+  });
+
+  function track<T extends SessionRunner>(r: T): T {
+    trackedRunners.push(r);
+    return r;
+  }
 
   function createRunner(overrides: Partial<SessionRunnerCallbacks> = {}) {
     callbacks = makeCallbacks(overrides);
@@ -110,7 +167,9 @@ describe('SessionRunner', () => {
       callbacks,
       logger: makeNullLogger(),
       spawnFn: createMockSpawn(fakeChild) as any,
+      heartbeatIntervalMs: 1_000_000, // P7: don't fire during tests
     });
+    track(runner);
     return runner;
   }
 
@@ -128,7 +187,7 @@ describe('SessionRunner', () => {
 
     it('passes correct spawn flags (FR-9B.02)', async () => {
       let capturedArgs: readonly string[] = [];
-      const r = new SessionRunner({
+      const r = track(new SessionRunner({
         id: 'flag-test',
         workDir: '/tmp/flag-test',
         callbacks: makeCallbacks(),
@@ -137,7 +196,8 @@ describe('SessionRunner', () => {
           capturedArgs = args;
           return fakeChild as unknown as ChildProcess;
         }) as any,
-      });
+        heartbeatIntervalMs: 1_000_000,
+      }));
       await r.spawn();
       assert.ok(capturedArgs.includes('--input-format'));
       assert.ok(capturedArgs.includes('stream-json'));
@@ -337,7 +397,7 @@ describe('SessionRunner', () => {
 
     it('respawn creates new child process', async () => {
       let spawnCount = 0;
-      const r = new SessionRunner({
+      const r = track(new SessionRunner({
         id: 'respawn-test',
         workDir: '/tmp/respawn-test',
         callbacks: makeCallbacks(),
@@ -346,7 +406,8 @@ describe('SessionRunner', () => {
           spawnCount++;
           return createFakeChild(12345 + spawnCount) as unknown as ChildProcess;
         }) as any,
-      });
+        heartbeatIntervalMs: 1_000_000,
+      }));
 
       await r.spawn();
       assert.equal(spawnCount, 1);

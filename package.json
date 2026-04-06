@@ -7,9 +7,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
-    "test": "node --test tests/tech-lead-router.test.cjs && find tests -name '*.test.ts' -not -path 'tests/staging/*' -not -path 'tests/dark-debt/*' -not -name 'session-runner.test.ts' -not -name 'agent-runner.test.ts' -not -name 'harness-session.test.ts' -not -name 'workpad-reporter.test.ts' -not -name 'linear-webhook-handler.test.ts' -not -name 'linear-client.test.ts' -not -name 'workflow-parser.test.ts' -print0 | xargs -0 node --import tsx --test",
-    "test:ts": "find tests -name '*.test.ts' -not -path 'tests/staging/*' -not -name 'session-runner.test.ts' -not -name 'agent-runner.test.ts' -not -name 'harness-session.test.ts' -not -name 'workpad-reporter.test.ts' -not -name 'linear-webhook-handler.test.ts' -not -name 'linear-client.test.ts' -not -name 'workflow-parser.test.ts' -print0 | xargs -0 node --import tsx --test",
-    "test:dark-debt": "node --import tsx --test --test-timeout=15000 tests/execution/runtime/session-runner.test.ts tests/execution/runtime/agent-runner.test.ts tests/execution/runtime/harness-session.test.ts tests/integration/linear/workpad-reporter.test.ts tests/integration/linear/linear-webhook-handler.test.ts tests/integration/linear/linear-client.test.ts tests/integration/linear/workflow-parser.test.ts",
+    "test": "node --test tests/tech-lead-router.test.cjs && find tests -name '*.test.ts' -not -path 'tests/staging/*' -print0 | xargs -0 node --import tsx --test",
+    "test:ts": "find tests -name '*.test.ts' -not -path 'tests/staging/*' -print0 | xargs -0 node --import tsx --test",
     "test:cjs": "node --test tests/**/*.test.cjs",
     "test:all": "node --test tests/**/*.test.cjs && node --import tsx --test tests/**/*.test.ts",
     "test:integration": "node --import tsx --test tests/integration/*.test.ts",
