@@ -186,7 +186,12 @@ async function main(): Promise<void> {
     const maxFixAttempts = (isNaN(parsedAttempts) || parsedAttempts < 1 || parsedAttempts > 10) ? 3 : parsedAttempts;
 
     const worktreeManager = createWorktreeManager({ logger: execLogger, basePath: worktreeBasePath });
-    const baseExecutor = createSdkExecutor({ logger: execLogger });
+    const baseExecutor = createSdkExecutor({
+      logger: execLogger,
+      // P11: pass eventBus so WorkCancelled domain events abort in-flight
+      // SDK executions via the stop-hook → AbortController bridge.
+      eventBus,
+    });
 
     // Apply harness enhancements: P0 compaction + P3 budget + P1 query loop + P2 coordinator
     const { buildExecutor } = await import('./execution/runtime/executor-factory');
