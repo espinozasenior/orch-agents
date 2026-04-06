@@ -16,7 +16,7 @@ import type { EventBus } from '../../src/shared/event-bus';
 import type { DomainEventType } from '../../src/shared/event-types';
 import { createLogger } from '../../src/shared/logger';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
-import type { SimpleExecutor, ExecutionResult } from '../../src/execution/simple-executor';
+import type { LocalAgentTaskExecutor, ExecutionResult } from '../../src/tasks/local-agent';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
 }
 
 /** Stub SimpleExecutor that succeeds. */
-function makeStubExecutor(): SimpleExecutor {
+function makeStubExecutor(): LocalAgentTaskExecutor {
   return {
     async execute(plan): Promise<ExecutionResult> {
       return {
@@ -81,7 +81,7 @@ function makeStubExecutor(): SimpleExecutor {
 }
 
 /** SimpleExecutor that rejects (all agents fail). */
-function makeRejectingExecutor(): SimpleExecutor {
+function makeRejectingExecutor(): LocalAgentTaskExecutor {
   return {
     async execute(plan): Promise<ExecutionResult> {
       return {
@@ -162,7 +162,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 
@@ -184,7 +184,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 
@@ -204,7 +204,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 
@@ -238,7 +238,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeRejectingExecutor(),
+      localAgentTask: makeRejectingExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 
@@ -260,7 +260,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 
@@ -291,7 +291,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 

@@ -89,7 +89,37 @@ export function parseWorkflowMdString(content: string): WorkflowConfig {
   const { frontmatter, body } = extractFrontmatter(content);
   const document = parseWorkflowDocument(frontmatter);
   validatePromptTemplate(body);
-  return buildConfig(resolveEnvInValue(document) as WorkflowDocument, body);
+  const config = buildConfig(resolveEnvInValue(document) as WorkflowDocument, body);
+  // DEPRECATED (Option C step 2, PR A): templates parsed but unused by the
+  // main-thread IntakeCompleted handler. Worker thread (issue-worker-runner)
+  // still uses them — full removal scheduled for PR B.
+  warnIfTemplatesPresent(document);
+  return config;
+}
+
+let templatesDeprecationWarned = false;
+
+/**
+ * Reset the deprecation-warning latch. Test-only helper so suites that load
+ * multiple WORKFLOW.md fixtures can verify the warning fires exactly once
+ * per process otherwise.
+ */
+export function __resetTemplatesDeprecationWarning(): void {
+  templatesDeprecationWarned = false;
+}
+
+function warnIfTemplatesPresent(document: WorkflowDocument): void {
+  if (templatesDeprecationWarned) return;
+  if (!document.templates || typeof document.templates !== 'object') return;
+  if (Object.keys(document.templates).length === 0) return;
+  templatesDeprecationWarned = true;
+  // eslint-disable-next-line no-console
+  console.warn(
+    'WORKFLOW.md templates: section is deprecated — main-thread dispatch now '
+    + 'uses coordinator mode. Templates are still parsed for backward compat '
+    + 'and remain in use by the worker-thread path, but will be removed in a '
+    + 'future release (Option C step 2, PR A).',
+  );
 }
 
 function extractFrontmatter(content: string): { frontmatter: string; body: string } {

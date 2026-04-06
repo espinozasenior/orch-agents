@@ -16,7 +16,7 @@ import type { EventBus } from '../../src/shared/event-bus';
 import type { DomainEventType } from '../../src/shared/event-types';
 import { createLogger } from '../../src/shared/logger';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
-import type { SimpleExecutor, ExecutionResult } from '../../src/execution/simple-executor';
+import type { LocalAgentTaskExecutor, ExecutionResult } from '../../src/tasks/local-agent';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
@@ -59,8 +59,8 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
   };
 }
 
-/** Stub SimpleExecutor that always succeeds. */
-function makeStubExecutor(): SimpleExecutor {
+/** Stub LocalAgentTask that always succeeds. */
+function makeStubExecutor(): LocalAgentTaskExecutor {
   return {
     async execute(plan): Promise<ExecutionResult> {
       return {
@@ -141,7 +141,7 @@ describe('Pipeline E2E', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 
@@ -179,7 +179,7 @@ describe('Pipeline E2E', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 
@@ -207,7 +207,7 @@ describe('Pipeline E2E', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
 
@@ -235,7 +235,7 @@ describe('Pipeline E2E', () => {
 
     handle = startPipeline({
       eventBus, logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
     });
     handle.shutdown();
@@ -262,7 +262,7 @@ describe('Pipeline E2E', () => {
     handle = startPipeline({
       eventBus,
       logger,
-      simpleExecutor: makeStubExecutor(),
+      localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
       linearExecutionMode: 'symphony',
     });

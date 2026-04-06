@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   parseWorkflowMdString,
   WorkflowParseError,
+  __resetTemplatesDeprecationWarning,
 } from '../../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
@@ -717,3 +718,40 @@ Issue {{ issue.assignee }}
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Option C step 2 (PR A): templates deprecation warning
+// ---------------------------------------------------------------------------
+
+describe('WorkflowParser — templates deprecation warning', () => {
+  let warnings: string[];
+  let originalWarn: typeof console.warn;
+
+  beforeEach(() => {
+    __resetTemplatesDeprecationWarning();
+    warnings = [];
+    originalWarn = console.warn;
+    console.warn = (msg: unknown) => { warnings.push(String(msg)); };
+  });
+
+  afterEach(() => {
+    console.warn = originalWarn;
+    __resetTemplatesDeprecationWarning();
+  });
+
+  it('emits a deprecation warning when templates section is present', () => {
+    parseWorkflowMdString(VALID_WORKFLOW);
+
+    assert.equal(warnings.length, 1, 'Expected exactly one deprecation warning');
+    assert.match(warnings[0], /templates: section is deprecated/);
+  });
+
+  it('emits the deprecation warning at most once per process', () => {
+    parseWorkflowMdString(VALID_WORKFLOW);
+    parseWorkflowMdString(VALID_WORKFLOW);
+    parseWorkflowMdString(VALID_WORKFLOW);
+
+    assert.equal(warnings.length, 1, 'Warning should fire exactly once');
+  });
+});
+

@@ -16,11 +16,7 @@ import { createArtifactApplier } from './execution/workspace/artifact-applier';
 import { createReviewGate, createStubDiffReviewer, createCliTestRunner, createPatternSecurityScanner } from './review/review-gate';
 import { createClaudeDiffReviewer } from './review/claude-diff-reviewer';
 import { createGitHubClient } from './integration/github-client';
-import { createFixItLoop } from './execution/fix-it-loop';
-import type { FixExecutor, FixReviewer, FixCommitter, FixPromptBuilder } from './execution/fix-it-loop';
-import { buildFixPrompt } from './execution/prompt-builder';
 import { isAbsolute as pathIsAbsolute } from 'node:path';
-import { createSimpleExecutor, type SimpleExecutor } from './execution/simple-executor';
 import { createLocalAgentTaskExecutor, type LocalAgentTaskExecutor } from './tasks/local-agent';
 import { getDefaultRegistry } from './agent-registry/agent-registry';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
@@ -168,7 +164,6 @@ async function main(): Promise<void> {
   // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
   const useInteractiveAgents = process.env.ENABLE_INTERACTIVE_AGENTS === 'true';
 
-  let simpleExecutor: SimpleExecutor | undefined;
   let localAgentTask: LocalAgentTaskExecutor | undefined;
   let reviewGate: ReturnType<typeof createReviewGate> | undefined;
   let symphonyOrchestrator: SymphonyOrchestrator | undefined;
@@ -224,65 +219,11 @@ async function main(): Promise<void> {
       logger: execLogger,
     });
 
-    // Adapt existing components to FixItLoop dependency interfaces
-    const fixExecutor: FixExecutor = {
-      async executeFix(worktreePath, prompt, timeout) {
-        return interactiveExecutor.execute({
-          prompt, worktreePath, agentRole: 'fixer', agentType: 'coder',
-          tier: 3, phaseType: 'refinement', timeout, metadata: {},
-        });
-      },
-    };
-
-    const fixReviewer: FixReviewer = {
-      async review(request) {
-        return reviewGate!.review({
-          planId: request.planId, workItemId: request.workItemId,
-          commitSha: request.commitSha, branch: request.branch,
-          worktreePath: request.worktreePath, diff: request.diff,
-          artifacts: request.artifacts, context: {
-            commitSha: request.commitSha, attempt: request.attempt,
-          },
-        });
-      },
-    };
-
-    const fixCommitter: FixCommitter = {
-      async commit(worktreePath, message) {
-        const handle = {
-          planId: worktreePath.split('/').pop() ?? 'unknown',
-          path: worktreePath,
-          branch: 'fix',
-          baseBranch: 'main',
-          status: 'active' as const,
-        };
-        return worktreeManager.commit(handle, message);
-      },
-      async diff(worktreePath) {
-        const handle = {
-          planId: worktreePath.split('/').pop() ?? 'unknown',
-          path: worktreePath,
-          branch: 'fix',
-          baseBranch: 'main',
-          status: 'active' as const,
-        };
-        return worktreeManager.diff(handle);
-      },
-    };
-
-    const fixPromptBuilder: FixPromptBuilder = {
-      build(findings, feedback, attempt, attemptMax) {
-        return buildFixPrompt(
-          { id: 'fix', timestamp: new Date().toISOString(), source: 'system', sourceMetadata: {}, intent: 'review-pr', entities: {} },
-          { id: 'fix-plan', workItemId: 'fix', template: 'fix', agentTeam: [] },
-          { worktreePath: '', findings, feedback, attempt, maxAttempts: attemptMax },
-        );
-      },
-    };
-
-    const fixItLoop = createFixItLoop({
-      fixExecutor, fixReviewer, fixCommitter, fixPromptBuilder, logger: execLogger,
-    });
+    // Option C step 2 (PR A): FixItLoop wiring removed from the main-thread
+    // bootstrap. It was only ever consumed by SimpleExecutor, which is no
+    // longer constructed here. The fix-it-loop module file remains available
+    // for the worker thread and will be re-evaluated for orphan deletion in
+    // PR C. Keeping this comment as a deliberate breadcrumb.
 
     let githubClient: ReturnType<typeof createGitHubClient> | undefined;
     if (tokenProvider) {
@@ -293,23 +234,13 @@ async function main(): Promise<void> {
       githubClient = createGitHubClient({ logger: execLogger, token: effectiveGithubToken });
     }
 
-    // Wire SimpleExecutor (legacy template-driven path — IntakeCompleted)
-    simpleExecutor = createSimpleExecutor({
-      interactiveExecutor,
-      worktreeManager,
-      artifactApplier,
-      reviewGate,
-      fixItLoop,
-      agentRegistry: getDefaultRegistry(),
-      githubClient,
-      linearClient,
-      logger: execLogger,
-      eventBus,
-      maxFixAttempts,
-      agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
-    });
+    // Option C step 2 (PR A): SimpleExecutor is no longer wired into the
+    // main-thread engine. The IntakeCompleted handler now dispatches through
+    // LocalAgentTask in coordinator mode (same as AgentPrompted). The
+    // worker-thread path (src/execution/orchestrator/issue-worker.ts) still
+    // constructs its own SimpleExecutor — that migration is PR B.
 
-    // Wire LocalAgentTask (CC-aligned coordinator dispatch — AgentPrompted).
+    // Wire LocalAgentTask (CC-aligned coordinator dispatch — IntakeCompleted + AgentPrompted).
     // Mirrors src/tasks/LocalAgentTask/ in Claude Code's codebase.
     localAgentTask = createLocalAgentTaskExecutor({
       interactiveExecutor,
@@ -328,7 +259,7 @@ async function main(): Promise<void> {
       maxFixAttempts,
       hasGitHubToken: !!effectiveGithubToken,
       hasGitHubApp: !!tokenProvider,
-      simpleExecutor: true,
+      dispatcher: 'localAgentTask',
     });
 
     if (config.linearEnabled && linearClient) {
@@ -392,29 +323,20 @@ async function main(): Promise<void> {
     }
   }
 
-  if (!simpleExecutor) {
-    // Provide a no-op executor for stub mode (no real execution)
-    simpleExecutor = {
-      async execute(plan) {
-        logger.info('Stub executor: no real execution', { planId: plan.id });
-        return { status: 'completed', agentResults: [], totalDuration: 0 };
-      },
-    };
-    logger.info('Running in stub mode (ENABLE_INTERACTIVE_AGENTS not set)');
-  }
-
   if (!localAgentTask) {
     // Stub LocalAgentTask: same shape, no real execution.
+    // Used when ENABLE_INTERACTIVE_AGENTS is not set (stub mode).
     localAgentTask = {
       async execute(plan) {
         logger.info('Stub local-agent task: no real execution', { planId: plan.id });
         return { status: 'completed', agentResults: [], totalDuration: 0 };
       },
     };
+    logger.info('Running in stub mode (ENABLE_INTERACTIVE_AGENTS not set)');
   }
 
   const pipeline = startPipeline({
-    eventBus, logger, reviewGate, simpleExecutor, localAgentTask, workflowConfig,
+    eventBus, logger, reviewGate, localAgentTask, workflowConfig,
     linearExecutionMode,
     githubClient: tokenProvider
       ? createGitHubClient({ logger, tokenProvider })

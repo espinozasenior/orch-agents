@@ -1,22 +1,30 @@
 /**
  * Tests for the Execution Engine.
  *
- * The execution engine:
+ * As of Option C step 2 (PR A), the engine dispatches every IntakeCompleted
+ * event through LocalAgentTask in coordinator mode. The legacy template branch
+ * (template lookup, agent path resolution, multi-agent fan-out) has been
+ * removed from the main-thread engine.
+ *
+ * The engine:
  * 1. Subscribes to IntakeCompleted
- * 2. Resolves template from WorkflowConfig
- * 3. Runs agents via SimpleExecutor
+ * 2. Builds a coordinator-only WorkflowPlan
+ * 3. Runs it via LocalAgentTask
  * 4. Publishes WorkCompleted / WorkFailed
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import type { IntakeEvent } from '../src/types';
+import type { IntakeEvent, WorkflowPlan } from '../src/types';
 import { createEventBus, createDomainEvent } from '../src/shared/event-bus';
 import { createLogger } from '../src/shared/logger';
 import {
   startExecutionEngine,
 } from '../src/execution/orchestrator/execution-engine';
-import type { SimpleExecutor, ExecutionResult } from '../src/execution/simple-executor';
+import type {
+  LocalAgentTaskExecutor,
+  ExecutionResult,
+} from '../src/tasks/local-agent';
 import type { WorkflowConfig } from '../src/integration/linear/workflow-parser';
 import type { LinearClient } from '../src/integration/linear/linear-client';
 
@@ -100,9 +108,10 @@ function makeLinearClient(): LinearClient & { calls: Array<{ method: string; arg
   };
 }
 
-function makeSuccessExecutor(): SimpleExecutor {
-  return {
+function makeSuccessTask(): LocalAgentTaskExecutor & { lastPlan?: WorkflowPlan } {
+  const wrapper: LocalAgentTaskExecutor & { lastPlan?: WorkflowPlan } = {
     async execute(plan): Promise<ExecutionResult> {
+      wrapper.lastPlan = plan;
       return {
         status: 'completed',
         agentResults: plan.agentTeam.map((a) => ({
@@ -116,15 +125,16 @@ function makeSuccessExecutor(): SimpleExecutor {
       };
     },
   };
+  return wrapper;
 }
 
-function makeFailExecutor(): SimpleExecutor {
+function makeFailTask(): LocalAgentTaskExecutor {
   return {
     async execute(): Promise<ExecutionResult> {
       return {
         status: 'failed',
         agentResults: [
-          { agentRole: 'coder', agentType: 'coder', status: 'failed', findings: [], duration: 100 },
+          { agentRole: 'coordinator', agentType: 'coordinator', status: 'failed', findings: [], duration: 100 },
         ],
         totalDuration: 100,
       };
@@ -137,14 +147,15 @@ function makeFailExecutor(): SimpleExecutor {
 // ---------------------------------------------------------------------------
 
 describe('Execution Engine', () => {
-  describe('IntakeCompleted -> SimpleExecutor execution', () => {
+  describe('IntakeCompleted -> LocalAgentTask coordinator dispatch', () => {
     it('publishes WorkCompleted on successful execution', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
 
+      const localAgentTask = makeSuccessTask();
       const unsub = startExecutionEngine({
         eventBus, logger,
-        simpleExecutor: makeSuccessExecutor(),
+        localAgentTask,
         workflowConfig: makeWorkflowConfig(),
       });
 
@@ -162,85 +173,77 @@ describe('Execution Engine', () => {
       assert.equal(workCompleted.length, 1);
       assert.equal(workCompleted[0].workItemId, 'intake-001');
       assert.ok(workCompleted[0].planId);
-      // github-ops template has 1 agent: reviewer
+      // Coordinator-only: exactly one agent dispatched, regardless of template
       assert.equal(workCompleted[0].phaseCount, 1);
 
       unsub();
       eventBus.removeAllListeners();
     });
 
-    it('resolves correct agents from template', async () => {
+    it('always builds a coordinator-only plan, ignoring template metadata', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
 
-      let executedAgents: string[] = [];
-      const trackingExecutor: SimpleExecutor = {
-        async execute(plan): Promise<ExecutionResult> {
-          executedAgents = plan.agentTeam.map((a) => a.type);
-          return { status: 'completed', agentResults: [], totalDuration: 10 };
-        },
-      };
-
+      const localAgentTask = makeSuccessTask();
       const unsub = startExecutionEngine({
         eventBus, logger,
-        simpleExecutor: trackingExecutor,
+        localAgentTask,
         workflowConfig: makeWorkflowConfig(),
       });
 
       eventBus.publish(createDomainEvent('IntakeCompleted', {
         intakeEvent: makeIntakeEvent({
+          // tdd-workflow used to fan out to coder + tester; now ignored.
           sourceMetadata: { template: 'tdd-workflow' },
         }),
       }));
 
       await new Promise((r) => setTimeout(r, 100));
 
-      assert.deepEqual(executedAgents, ['.claude/agents/core/coder.md', '.claude/agents/core/tester.md']);
+      assert.ok(localAgentTask.lastPlan, 'expected localAgentTask.execute to be called');
+      assert.equal(localAgentTask.lastPlan!.methodology, 'coordinator');
+      assert.equal(localAgentTask.lastPlan!.agentTeam.length, 1);
+      assert.equal(localAgentTask.lastPlan!.agentTeam[0].role, 'coordinator');
+      assert.equal(localAgentTask.lastPlan!.agentTeam[0].type, 'coordinator');
+      // Template name still preserved on plan for observability.
+      assert.equal(localAgentTask.lastPlan!.template, 'tdd-workflow');
 
       unsub();
       eventBus.removeAllListeners();
     });
 
-    it('falls back to default template when template not found', async () => {
+    it('uses "coordinator" as plan template when intake provides no template metadata', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
 
-      let executedAgents: string[] = [];
-      const trackingExecutor: SimpleExecutor = {
-        async execute(plan): Promise<ExecutionResult> {
-          executedAgents = plan.agentTeam.map((a) => a.type);
-          return { status: 'completed', agentResults: [], totalDuration: 10 };
-        },
-      };
-
+      const localAgentTask = makeSuccessTask();
       const unsub = startExecutionEngine({
         eventBus, logger,
-        simpleExecutor: trackingExecutor,
+        localAgentTask,
         workflowConfig: makeWorkflowConfig(),
       });
 
       eventBus.publish(createDomainEvent('IntakeCompleted', {
-        intakeEvent: makeIntakeEvent({
-          sourceMetadata: { template: 'nonexistent-template' },
-        }),
+        intakeEvent: makeIntakeEvent({ sourceMetadata: {} }),
       }));
 
       await new Promise((r) => setTimeout(r, 100));
 
-      // Falls back to default 'quick-fix' -> ['.claude/agents/core/coder.md']
-      assert.deepEqual(executedAgents, ['.claude/agents/core/coder.md']);
+      assert.ok(localAgentTask.lastPlan);
+      assert.equal(localAgentTask.lastPlan!.template, 'coordinator');
+      assert.equal(localAgentTask.lastPlan!.methodology, 'coordinator');
 
       unsub();
       eventBus.removeAllListeners();
     });
 
-    it('publishes WorkFailed when all agents fail', async () => {
+    it('publishes WorkFailed when LocalAgentTask returns failed', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
 
       const unsub = startExecutionEngine({
         eventBus, logger,
-        simpleExecutor: makeFailExecutor(),
+        localAgentTask: makeFailTask(),
         workflowConfig: makeWorkflowConfig(),
       });
 
@@ -262,17 +265,17 @@ describe('Execution Engine', () => {
       eventBus.removeAllListeners();
     });
 
-    it('publishes WorkFailed when executor throws', async () => {
+    it('publishes WorkFailed when LocalAgentTask throws', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
 
-      const throwingExecutor: SimpleExecutor = {
+      const throwingTask: LocalAgentTaskExecutor = {
         async execute() { throw new Error('Connection reset'); },
       };
 
       const unsub = startExecutionEngine({
         eventBus, logger,
-        simpleExecutor: throwingExecutor,
+        localAgentTask: throwingTask,
         workflowConfig: makeWorkflowConfig(),
       });
 
@@ -300,7 +303,7 @@ describe('Execution Engine', () => {
 
       const unsub = startExecutionEngine({
         eventBus, logger,
-        simpleExecutor: makeSuccessExecutor(),
+        localAgentTask: makeSuccessTask(),
         workflowConfig: makeWorkflowConfig(),
       });
 
@@ -322,7 +325,7 @@ describe('Execution Engine', () => {
       eventBus.removeAllListeners();
     });
 
-    it('moves Linear work to In Progress and comments when execution starts', async () => {
+    it('moves Linear work to In Progress and posts workpad when execution starts', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
       const linearClient = makeLinearClient();
@@ -330,7 +333,7 @@ describe('Execution Engine', () => {
       const unsub = startExecutionEngine({
         eventBus,
         logger,
-        simpleExecutor: makeSuccessExecutor(),
+        localAgentTask: makeSuccessTask(),
         workflowConfig: makeWorkflowConfig(),
         linearClient,
       });
@@ -371,7 +374,7 @@ describe('Execution Engine', () => {
 
       let executeCalls = 0;
       let releaseExecution: (() => void) | undefined;
-      const blockingExecutor: SimpleExecutor = {
+      const blockingTask: LocalAgentTaskExecutor = {
         async execute(): Promise<ExecutionResult> {
           executeCalls += 1;
           await new Promise<void>((resolve) => {
@@ -384,7 +387,7 @@ describe('Execution Engine', () => {
       const unsub = startExecutionEngine({
         eventBus,
         logger,
-        simpleExecutor: blockingExecutor,
+        localAgentTask: blockingTask,
         workflowConfig: makeWorkflowConfig(),
       });
 
@@ -420,12 +423,12 @@ describe('Execution Engine', () => {
       eventBus.removeAllListeners();
     });
 
-    it('does not invoke the generic executor for Linear intake when Symphony mode is enabled', async () => {
+    it('does not invoke LocalAgentTask for Linear intake when Symphony mode is enabled', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
 
       let executeCalls = 0;
-      const trackingExecutor: SimpleExecutor = {
+      const trackingTask: LocalAgentTaskExecutor = {
         async execute(): Promise<ExecutionResult> {
           executeCalls += 1;
           return { status: 'completed', agentResults: [], totalDuration: 10 };
@@ -435,7 +438,7 @@ describe('Execution Engine', () => {
       const unsub = startExecutionEngine({
         eventBus,
         logger,
-        simpleExecutor: trackingExecutor,
+        localAgentTask: trackingTask,
         workflowConfig: makeWorkflowConfig(),
         linearExecutionMode: 'symphony',
       });

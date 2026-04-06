@@ -1,20 +1,23 @@
 /**
  * Execution Engine.
  *
- * Subscribes to IntakeCompleted events and orchestrates execution via SimpleExecutor.
- * Reads template and agent list directly from WorkflowConfig (WORKFLOW.md).
- * No planning layer, no SPARC phases, no topology selection.
+ * Subscribes to IntakeCompleted and AgentPrompted events and dispatches every
+ * main-thread execution through LocalAgentTask in coordinator mode.
+ *
+ * Option C step 2 (PR A): the legacy template-driven multi-agent path that
+ * routed IntakeCompleted through SimpleExecutor has been removed. Templates
+ * defined in WORKFLOW.md are still parsed for backward compat (and still used
+ * by the worker-thread path in src/execution/orchestrator/issue-worker.ts —
+ * scheduled for migration in PR B), but they no longer drive dispatch from
+ * the main-thread engine. Coordinator mode is the only mode here.
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import type { WorkflowPlan, PlannedAgent } from '../../types';
+import type { WorkflowPlan } from '../../types';
 import { createTask, TaskType } from '../task/index';
 import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
 import { createDomainEvent } from '../../shared/event-bus';
-import type { SimpleExecutor } from '../simple-executor';
 import type { LocalAgentTaskExecutor } from '../../tasks/local-agent';
 import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import { createWorkTracker } from './work-tracker';
@@ -31,12 +34,11 @@ import { buildWorkpadComment, postOrUpdateWorkpad } from '../../integration/line
 export interface ExecutionEngineDeps {
   eventBus: EventBus;
   logger: Logger;
-  simpleExecutor: SimpleExecutor;
   /**
-   * CC-aligned coordinator dispatch path. Wired to the AgentPrompted handler
-   * (Linear comment / agent-session prompt). The IntakeCompleted handler
-   * keeps using simpleExecutor for the legacy template-driven multi-agent
-   * path. See src/tasks/local-agent/LocalAgentTask.ts.
+   * CC-aligned coordinator dispatch path. Wired to BOTH the IntakeCompleted
+   * and AgentPrompted handlers as of Option C step 2 (PR A). All main-thread
+   * dispatches now route through LocalAgentTask in coordinator mode.
+   * See src/tasks/local-agent/LocalAgentTask.ts.
    */
   localAgentTask: LocalAgentTaskExecutor;
   workflowConfig: WorkflowConfig;
@@ -47,13 +49,12 @@ export interface ExecutionEngineDeps {
 }
 
 /**
- * Start the execution engine: subscribe to IntakeCompleted,
- * resolve template from WorkflowConfig, run agents via SimpleExecutor,
- * publish WorkCompleted/WorkFailed.
- * Returns an unsubscribe function for cleanup.
+ * Start the execution engine: subscribe to IntakeCompleted and AgentPrompted,
+ * dispatch every event through LocalAgentTask in coordinator mode, and publish
+ * WorkCompleted/WorkFailed. Returns an unsubscribe function for cleanup.
  */
 export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
-  const { eventBus, logger, simpleExecutor, localAgentTask, workflowConfig } = deps;
+  const { eventBus, logger, localAgentTask, workflowConfig } = deps;
   const tracker = createWorkTracker();
   const unsubscribers: Array<() => void> = [];
 
@@ -90,66 +91,28 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       return;
     }
 
-    // Resolve template name from intake metadata or default
-    const templateName = (intakeEvent.sourceMetadata?.template as string)
-      ?? workflowConfig.agents.defaultTemplate;
+    // Option C step 2 (PR A): coordinator mode is the only mode for the
+    // main-thread engine. Templates from WORKFLOW.md are still parsed for
+    // backward compat (and still used by the worker-thread path) but are
+    // no longer consulted here. The template metadata field is preserved
+    // on the plan purely for downstream observability.
+    const templateName = (intakeEvent.sourceMetadata?.template as string) ?? 'coordinator';
 
-    // Look up agent types from WORKFLOW.md templates
-    const agentTypes = workflowConfig.templates[templateName]
-      ?? workflowConfig.templates[workflowConfig.agents.defaultTemplate];
-
-    // 9F: Use typed task ID instead of raw UUID — type extractable from prefix
     const task = createTask(TaskType.local_agent);
     const planId = task.id;
-    let agentTeam: PlannedAgent[];
-    let useCoordinatorMode = false;
-
-    if (agentTypes && agentTypes.length > 0) {
-      // Template matched — validate agent paths exist
-      const validAgents = agentTypes.filter((agentPath) => {
-        if (!existsSync(resolve(process.cwd(), agentPath))) {
-          logger.warn('Agent path missing, skipping', { agentPath, templateName });
-          return false;
-        }
-        return true;
-      });
-
-      if (validAgents.length > 0) {
-        agentTeam = validAgents.map((agentPath) => ({
-          role: agentPath.replace(/^.*\//, '').replace(/\.md$/, ''),
-          type: agentPath,
-          tier: 2 as const,
-          required: true,
-        }));
-      } else {
-        // All agents missing — fall back to coordinator mode
-        useCoordinatorMode = true;
-        agentTeam = [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }];
-        logger.warn('No valid agents in template, falling back to coordinator mode', { templateName });
-      }
-    } else {
-      // No template match — invoke Claude Code in coordinator mode (P2).
-      // The coordinator decides how to approach the task: research, implement,
-      // verify — spawning its own workers as needed via the 4-phase workflow.
-      useCoordinatorMode = true;
-      agentTeam = [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }];
-      logger.info('No template matched, using Claude Code coordinator mode', { templateName });
-    }
-
     const plan: WorkflowPlan = {
       id: planId,
       workItemId: intakeEvent.id,
       template: templateName,
-      agentTeam,
+      agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }],
       maxAgents: workflowConfig.agents.maxConcurrent,
-      methodology: useCoordinatorMode ? 'coordinator' : undefined,
+      methodology: 'coordinator',
     };
 
-    logger.info('Executing work item', {
+    logger.info('Executing work item (coordinator mode)', {
       planId,
       workItemId: executionKey,
       template: templateName,
-      agents: agentTypes,
       correlationId,
     });
 
@@ -190,13 +153,13 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
         intakeEvent.entities.repo,
         intakeEvent.entities.prNumber,
         formatAgentComment(
-          `**${botName}** is working on this...\n\nTemplate: \`${templateName}\` | Agents: ${agentTypes.join(', ')}`,
+          `**${botName}** is working on this...\n\nMode: \`coordinator\``,
         ),
       ).catch((err: unknown) => logger.warn('AIG instant feedback failed', { error: String(err) }));
     }
 
     try {
-      const result = await simpleExecutor.execute(plan, intakeEvent);
+      const result = await localAgentTask.execute(plan, intakeEvent);
 
       tracker.complete(planId);
 
@@ -225,7 +188,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       const reason = err instanceof Error ? err.message : String(err);
       tracker.fail(planId, reason);
 
-      logger.error('SimpleExecutor error', { planId, error: reason });
+      logger.error('LocalAgentTask error (IntakeCompleted)', { planId, error: reason });
 
       eventBus.publish(
         createDomainEvent('WorkFailed', {
@@ -336,9 +299,10 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     tracker.start(planId, executionKey);
 
     try {
-      // CC-aligned dispatch: AgentPrompted always runs in coordinator mode.
-      // Routes through LocalAgentTask (src/tasks/local-agent/) instead of
-      // the legacy SimpleExecutor path used by IntakeCompleted.
+      // CC-aligned dispatch: AgentPrompted runs in coordinator mode via
+      // LocalAgentTask. As of Option C step 2 (PR A), IntakeCompleted also
+      // routes through LocalAgentTask — the engine no longer dispatches via
+      // the legacy SimpleExecutor path.
       const result = await localAgentTask.execute(plan, intakeEvent);
       tracker.complete(planId);
 
