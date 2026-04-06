@@ -12,7 +12,7 @@
 - NEVER commit secrets, credentials, or .env files
 - Single-word approvals ("yes", "do it", "push") trigger immediate execution — no repetition or commentary
 - NEVER use stubs
-- NEVER leave a new feature unwired
+- NEVER leave a new feature unwired nor called nor orphan
 
 ## Pre-Work Discipline
 
