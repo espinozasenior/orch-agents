@@ -18,7 +18,6 @@ import { startTriageEngine } from './triage/triage-engine';
 import { startExecutionEngine } from './execution/orchestrator/execution-engine';
 import { startReviewPipeline } from './review/review-pipeline';
 import type { ReviewGate } from './review/review-gate';
-import type { SimpleExecutor } from './execution/simple-executor';
 import type { LocalAgentTaskExecutor } from './tasks/local-agent';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import type { GitHubClient } from './integration/github-client';
@@ -32,8 +31,11 @@ export interface PipelineDeps {
   eventBus: EventBus;
   logger: Logger;
   reviewGate?: ReviewGate;
-  simpleExecutor: SimpleExecutor;
-  /** CC-aligned coordinator dispatch for the AgentPrompted handler. */
+  /**
+   * CC-aligned coordinator dispatch — used by both IntakeCompleted and
+   * AgentPrompted handlers in the main-thread execution engine
+   * (Option C step 2, PR A).
+   */
   localAgentTask: LocalAgentTaskExecutor;
   workflowConfig: WorkflowConfig;
   githubClient?: GitHubClient;
@@ -70,7 +72,6 @@ export function startPipeline(deps: PipelineDeps): PipelineHandle {
   const unsubExecution = startExecutionEngine({
     eventBus,
     logger,
-    simpleExecutor: deps.simpleExecutor,
     localAgentTask: deps.localAgentTask,
     workflowConfig: deps.workflowConfig,
     githubClient: deps.githubClient,
