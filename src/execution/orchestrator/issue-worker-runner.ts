@@ -1,4 +1,4 @@
-import type { IntakeEvent, PlannedAgent, WorkflowPlan, WorktreeHandle } from '../../types';
+import type { IntakeEvent, WorkflowPlan, WorktreeHandle } from '../../types';
 import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
 import type { AgentPlanStep } from '../../integration/linear/types';
@@ -9,12 +9,14 @@ import type { TaskRegistry } from '../task';
 // Phase 7F: Plan step definitions
 // ---------------------------------------------------------------------------
 
+// Coordinator-mode plan steps reflect the CC-canonical 4-phase workflow
+// (Research → Synthesis → Implementation → Verification). The lifecycle
+// fires step transitions as the issue progresses through active states.
 export const PLAN_STEPS = [
-  'Analyze issue requirements',
-  'Implement changes',
-  'Run tests and validate',
-  'Commit and push changes',
-  'Create pull request',
+  'Research and analyze issue',
+  'Synthesize approach',
+  'Implement and verify changes',
+  'Commit, push, and open PR',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -81,16 +83,21 @@ export interface IssueWorkerLifecycleResult {
 export async function runIssueWorkerLifecycle(
   deps: IssueWorkerLifecycleDeps,
 ): Promise<IssueWorkerLifecycleResult> {
-  const templateName = selectTemplateForIssue(deps.issue, deps.workflowConfig);
-  const template = deps.workflowConfig.templates[templateName]
-    ?? deps.workflowConfig.templates[deps.workflowConfig.agents.defaultTemplate]
-    ?? [];
-
-  if (template.length === 0) {
-    throw new Error(`No agents configured for template "${templateName}"`);
-  }
-
-  const plan = buildWorkflowPlan(deps.issue, deps.workflowConfig, templateName, template);
+  // Option C step 2b (PR B): coordinator-only dispatch via LocalAgentTask.
+  // Templates from WORKFLOW.md are no longer consulted — every issue runs
+  // through the coordinator's decide-at-runtime model. The template metadata
+  // field on the plan is preserved as 'coordinator' for downstream
+  // observability and parity with the main-thread engine (PR A).
+  const templateName = 'coordinator';
+  const plan: WorkflowPlan = {
+    id: sanitizePlanId(deps.issue.id),
+    workItemId: deps.issue.identifier,
+    template: templateName,
+    promptTemplate: deps.workflowConfig.promptTemplate,
+    maxAgents: deps.workflowConfig.agent.maxConcurrentAgents,
+    agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }],
+    methodology: 'coordinator',
+  };
 
   // Phase 7H: Best-effort setup — set delegate and move to started state
   await setupIssueForExecution(deps.linearClient, deps.issue, deps.agentAppUserId, deps.logger);
@@ -202,17 +209,14 @@ export async function runIssueWorkerLifecycle(
         };
       }
 
-      // Phase 7F: Mark steps 1-2 completed, step 3 inProgress
+      // Coordinator: implement+verify done → commit/push/PR inProgress
       await updateAgentPlan(2, 'inProgress');
 
       currentIssue = await deps.fetchIssue(currentIssue.id);
 
-      // Phase 7F: Mark step 2 done, step 3 inProgress (Commit+push)
       await updateAgentPlan(3, 'inProgress');
 
       if (deps.workflowConfig.tracker.terminalStates.includes(currentIssue.state.name)) {
-        // Phase 7F: Step 4 (PR) inProgress then all completed
-        await updateAgentPlan(4, 'inProgress');
 
         workpadCommentId = await deps.updateWorkpad({
           issue: currentIssue,
@@ -223,8 +227,8 @@ export async function runIssueWorkerLifecycle(
           continuationCount,
         });
 
-        // Phase 7F: All steps completed
-        await updateAgentPlan(4, 'completed');
+        // All coordinator steps completed
+        await updateAgentPlan(3, 'completed');
 
         // Phase 7F (FR-7F.04): Link PR URL to session
         await linkPrUrl(deps.linearClient, deps.agentSessionId, lastPrUrl, deps.logger);
@@ -461,27 +465,6 @@ export async function emitSelectElicitation(
   }
 }
 
-export function buildWorkflowPlan(
-  issue: LinearIssueResponse,
-  workflowConfig: WorkflowConfig,
-  templateName: string,
-  template: string[],
-): WorkflowPlan {
-  return {
-    id: sanitizePlanId(issue.id),
-    workItemId: issue.identifier,
-    template: templateName,
-    promptTemplate: workflowConfig.promptTemplate,
-    maxAgents: workflowConfig.agent.maxConcurrentAgents,
-    agentTeam: template.map((agentPath): PlannedAgent => ({
-      role: agentPath.replace(/^.*\//, '').replace(/\.md$/, ''),
-      type: agentPath,
-      tier: 2,
-      required: true,
-    })),
-  };
-}
-
 export function buildIntakeEvent(params: {
   issue: LinearIssueResponse;
   templateName: string;
@@ -514,16 +497,6 @@ export function buildIntakeEvent(params: {
     },
     rawText: buildIssueDescription(issue),
   };
-}
-
-export function selectTemplateForIssue(issue: LinearIssueResponse, workflowConfig: WorkflowConfig): string {
-  for (const label of issue.labels.nodes) {
-    const mapped = workflowConfig.agents.routing[label.name.toLowerCase()];
-    if (mapped) {
-      return mapped;
-    }
-  }
-  return workflowConfig.agents.defaultTemplate;
 }
 
 export function buildIssueDescription(issue: LinearIssueResponse): string {

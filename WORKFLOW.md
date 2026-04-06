@@ -1,27 +1,8 @@
 ---
-templates:
-  tdd-workflow:
-    - .claude/agents/core/coder.md
-    - .claude/agents/core/tester.md
-  feature-build:
-    - .claude/agents/sparc/architecture.md
-    - .claude/agents/core/coder.md
-    - .claude/agents/core/reviewer.md
-  github-ops:
-    - .claude/agents/core/reviewer.md
-  quick-fix:
-    - .claude/agents/core/coder.md
-  security-audit:
-    - .claude/agents/v3/security-architect.md
-  cicd-pipeline:
-    - .claude/agents/core/coder.md
-  release-pipeline:
-    - .claude/agents/core/coder.md
-  sparc-full:
-    - .claude/agents/core/architect.md
-    - .claude/agents/core/coder.md
-    - .claude/agents/core/reviewer.md
-    - .claude/agents/core/tester.md
+# templates: section removed (Option C step 2b).
+# Coordinator mode now handles all dispatch dynamically. The coordinator
+# decides what work to do based on the issue context and the CC-canonical
+# 4-phase workflow (Research → Synthesis → Implementation → Verification).
 
 github:
   events:
@@ -52,13 +33,8 @@ tracker:
 
 agents:
   max_concurrent: 8
-  routing:
-    bug: tdd-workflow
-    feature: feature-build
-    security: security-audit
-    refactor: sparc-full
-    review: github-ops
-    default: quick-fix
+  # routing: section removed (Option C step 2b). Coordinator mode is now
+  # the only dispatch path — label-based template routing is no longer used.
 
 polling:
   interval_ms: 30000

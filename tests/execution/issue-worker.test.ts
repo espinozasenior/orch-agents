@@ -483,7 +483,7 @@ describe('issue-worker plan sync (Phase 7F)', () => {
     assert.ok(planUpdates.length > 0, 'Should have plan updates');
     const firstUpdate = planUpdates[0];
     assert.equal(firstUpdate.plan[0].status, 'inProgress');
-    assert.equal(firstUpdate.plan[0].content, 'Analyze issue requirements');
+    assert.equal(firstUpdate.plan[0].content, 'Research and analyze issue');
     assert.equal(firstUpdate.plan[1].status, 'pending');
   });
 
