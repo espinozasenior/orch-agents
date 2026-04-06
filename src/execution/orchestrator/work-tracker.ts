@@ -5,8 +5,8 @@
  * through SPARC phase execution. Tracks phase results, timing, and outcome.
  */
 
-import type { PhaseResult } from '../../types';
 import type { AgentTracker, AgentExecState } from '../runtime/agent-tracker';
+import type { Task } from '../task/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,20 +19,18 @@ export interface WorkItemState {
   startedAt: string;
   completedAt: string | null;
   totalDuration: number;
-  phaseResults: PhaseResult[];
   failureReason: string | null;
 }
 
 export interface WorkTracker {
-  start(planId: string, workItemId: string): void;
-  recordPhaseResult(planId: string, result: PhaseResult): void;
+  start(planId: string, workItemId: string, task?: Task): void;
   complete(planId: string): void;
   fail(planId: string, reason: string): void;
-  getState(planId: string): WorkItemState | undefined;
   listActive(): WorkItemState[];
-  cleanup(maxAgeMs: number): void;
   /** Delegate to AgentTracker for per-agent drill-down (when available). */
   getAgentsByPlan(planId: string): AgentExecState[];
+  /** Return the Task associated with a plan, if one was provided at start(). */
+  getTask(planId: string): Task | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -45,10 +43,11 @@ export interface WorkTrackerOpts {
 
 export function createWorkTracker(opts: WorkTrackerOpts = {}): WorkTracker {
   const items = new Map<string, WorkItemState>();
+  const tasksByPlan = new Map<string, Task>();
   const { agentTracker } = opts;
 
   return {
-    start(planId: string, workItemId: string): void {
+    start(planId: string, workItemId: string, task?: Task): void {
       if (items.has(planId)) {
         throw new Error(`Plan ${planId} is already tracked`);
       }
@@ -59,17 +58,11 @@ export function createWorkTracker(opts: WorkTrackerOpts = {}): WorkTracker {
         startedAt: new Date().toISOString(),
         completedAt: null,
         totalDuration: 0,
-        phaseResults: [],
         failureReason: null,
       });
-    },
-
-    recordPhaseResult(planId: string, result: PhaseResult): void {
-      const state = items.get(planId);
-      if (!state) {
-        throw new Error(`Cannot record phase result: plan ${planId} not tracked`);
+      if (task) {
+        tasksByPlan.set(planId, task);
       }
-      state.phaseResults.push(result);
     },
 
     complete(planId: string): void {
@@ -93,29 +86,17 @@ export function createWorkTracker(opts: WorkTrackerOpts = {}): WorkTracker {
       state.failureReason = reason;
     },
 
-    getState(planId: string): WorkItemState | undefined {
-      return items.get(planId);
-    },
-
     listActive(): WorkItemState[] {
       return [...items.values()].filter((s) => s.status === 'running');
-    },
-
-    cleanup(maxAgeMs: number): void {
-      const now = Date.now();
-      for (const [planId, state] of items) {
-        if (state.status !== 'running' && state.completedAt) {
-          const completedAt = new Date(state.completedAt).getTime();
-          if (now - completedAt >= maxAgeMs) {
-            items.delete(planId);
-          }
-        }
-      }
     },
 
     getAgentsByPlan(planId: string): AgentExecState[] {
       if (!agentTracker) return [];
       return agentTracker.getAgentsByPlan(planId);
+    },
+
+    getTask(planId: string): Task | undefined {
+      return tasksByPlan.get(planId);
     },
   };
 }

@@ -18,14 +18,28 @@ import type { ReviewGate } from '../review/review-gate';
 import type { FixItLoop } from './fix-it-loop';
 import type { AgentRegistry } from '../agent-registry/agent-registry';
 import type { GitHubClient } from '../integration/github-client';
+import { getCoordinatorSystemPrompt, getCoordinatorUserContext } from '../coordinator/coordinatorPrompt';
 import type { LinearClient } from '../integration/linear/linear-client';
 import type { Logger } from '../shared/logger';
 import type { EventBus } from '../shared/event-bus';
 import { createDomainEvent } from '../shared/event-bus';
-import { formatAgentComment } from '../shared/agent-identity';
+import { formatAgentComment, getBotMarker } from '../shared/agent-identity';
 import { sanitize } from '../shared/input-sanitizer';
 import { trackAgentCommit } from '../shared/agent-commit-tracker';
 import { renderWorkflowPromptTemplate } from '../integration/linear/workflow-prompt';
+import {
+  isForkSubagentEnabled,
+  isInForkChild,
+  buildForkConversationMessages,
+  FORK_AGENT,
+  createCompositeAgentRegistry,
+  getDefaultProgrammaticAgents,
+} from '../agents/fork/index';
+import type { ForkMessage } from '../agents/fork/index';
+import { recordForkHistory, serializeForkContext } from './fork-context';
+import { postAgentResponse, emitThought } from '../integration/linear/activity-router';
+import { createTask, TaskType, TaskStatus, transition } from './task';
+import type { TaskRegistry } from './task';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -39,11 +53,26 @@ export interface SimpleExecutorDeps {
   fixItLoop?: FixItLoop;
   agentRegistry: AgentRegistry;
   githubClient?: GitHubClient;
-  linearClient?: Pick<LinearClient, 'createComment'>;
+  linearClient?: Pick<LinearClient, 'createComment' | 'createAgentActivity'>;
   logger: Logger;
   eventBus?: EventBus;
   maxFixAttempts?: number;
   agentTimeoutMs?: number;
+  /**
+   * Whether we are in coordinator mode. Fork is disabled in coordinator
+   * mode (coordinator has its own delegation model).
+   * Defaults to false.
+   */
+  isCoordinator?: boolean;
+  /**
+   * Whether the session is non-interactive. Fork is disabled for
+   * non-interactive sessions (background tasks cannot deliver
+   * task-notifications).
+   * Defaults to false.
+   */
+  isNonInteractive?: boolean;
+  /** P6: Optional TaskRegistry for task backbone wiring. */
+  taskRegistry?: TaskRegistry;
 }
 
 export interface SimpleExecutor {
@@ -71,6 +100,8 @@ export interface AgentResult {
   lastActivityAt?: string;
   continuationState?: import('./runtime/task-executor').TaskExecutionResult['continuationState'];
   tokenUsage?: import('./runtime/task-executor').TaskExecutionResult['tokenUsage'];
+  /** P6: Task ID from the task backbone, when TaskRegistry is wired. */
+  taskId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +109,14 @@ export interface AgentResult {
 // ---------------------------------------------------------------------------
 
 export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
+  // P8: Composite registry — merge disk-loaded agents with programmatic agents
+  // (e.g., FORK_AGENT). Programmatic agents override disk agents with same key.
+  const programmaticAgents = getDefaultProgrammaticAgents();
+  const compositeAgentRegistry = createCompositeAgentRegistry(
+    new Map(deps.agentRegistry.getAll().map((a) => [a.name, { agentType: a.name, whenToUse: a.description || '', source: 'disk' }])),
+    programmaticAgents,
+  );
+
   function emitPhaseCompleted(planId: string, status: 'completed' | 'failed', agentStart: number): void {
     if (!deps.eventBus) return;
     deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
@@ -101,9 +140,25 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
       // Chain sequential agents: each starts from the previous agent's commit
       let lastCommitRef = intakeEvent.entities.branch ?? 'main';
 
+      // Fork context: accumulated conversation history for cache-sharing
+      // forks. Each agent's prompt/response pair is recorded as ForkMessage
+      // entries so subsequent agents can inherit parent context via
+      // buildForkMessages (P5 — fork subagent with prompt cache sharing).
+      const forkHistory: ForkMessage[] = [];
+      const isCoordinator = deps.isCoordinator ?? (plan.methodology === 'coordinator');
+      const isNonInteractive = deps.isNonInteractive ?? false;
+
+      // FR-P8-006: When fork is enabled, all dispatches are forced async
+      // through the task backbone (P6). Log once at the start.
+      const forkEnabled = isForkSubagentEnabled(isCoordinator, isNonInteractive);
+      if (forkEnabled && deps.taskRegistry) {
+        deps.logger.info('Fork-enabled: all dispatches forced async', { forkEnabled });
+      }
+
       for (const agent of agents) {
         const agentStart = Date.now();
         let handle: Awaited<ReturnType<WorktreeManager['create']>> | undefined;
+        let taskId: string | undefined;
 
         // AIG: Emit PhaseStarted event before each agent runs
         if (deps.eventBus) {
@@ -115,6 +170,14 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
         }
 
         try {
+          // P6: Create task before dispatch (when registry is wired)
+          let task: import('./task/types').Task | undefined;
+          if (deps.taskRegistry) {
+            task = createTask(TaskType.local_agent);
+            taskId = task.id;
+            deps.taskRegistry.register(task);
+          }
+
           // 1. Get agent definition (full markdown body as instructions)
           const agentDef = deps.agentRegistry.getByPath(agent.type);
           const instructions = agentDef?.body || agentDef?.description || '';
@@ -125,22 +188,112 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
           );
 
           // 3. Build prompt: agent instructions + issue context
-          const workflowPrompt = renderWorkflowPromptTemplate(
-            plan.promptTemplate ?? '',
-            intakeEvent,
-            agent,
-            plan,
-          );
-          const prompt = buildAgentPrompt(
-            workflowPrompt,
-            instructions,
-            intakeEvent,
-            agent,
-            plan,
-            priorOutputs,
+          let prompt: string;
+
+          if (plan.methodology === 'coordinator') {
+            // Coordinator mode (P2): Claude Code orchestrator with 4-phase workflow.
+            // The coordinator system prompt replaces agent-specific instructions.
+            // Claude Code decides how to approach the task autonomously.
+            const coordinatorPrompt = getCoordinatorSystemPrompt();
+            const { workerToolsContext: workerContext } = getCoordinatorUserContext([]);
+            const issueRef = intakeEvent.entities.requirementId ?? '';
+            const issueDesc = intakeEvent.rawText ?? '';
+
+            // Build context-rich prompt for the coordinator
+            const contextParts: string[] = [coordinatorPrompt, workerContext, '---'];
+
+            if (issueRef) {
+              contextParts.push(`## Issue: ${issueRef}`);
+            }
+
+            // If this is a comment/follow-up, label it clearly so the coordinator
+            // knows this is a question about the issue, not a new task
+            if (intakeEvent.intent === ('custom:linear-prompted' as string) && issueDesc) {
+              contextParts.push(
+                '## User Comment (follow-up on the issue above)',
+                issueDesc,
+                '',
+                'Answer the user\'s question in context of this Linear issue. ' +
+                'Read the issue description and any relevant code before responding. ' +
+                'If the user asks about a feature, check the codebase to see if it\'s implemented.',
+              );
+            } else {
+              contextParts.push('## Task', issueDesc || 'Complete the assigned task.');
+            }
+
+            prompt = contextParts.join('\n\n');
+          } else {
+            const workflowPrompt = renderWorkflowPromptTemplate(
+              plan.promptTemplate ?? '',
+              intakeEvent,
+              agent,
+              plan,
+            );
+            prompt = buildAgentPrompt(
+              workflowPrompt,
+              instructions,
+              intakeEvent,
+              agent,
+              plan,
+              priorOutputs,
+            );
+          }
+
+          // 4. Fork eligibility — 3-gate pattern (P8: fork runtime wiring)
+          //    Gate 1: Feature enabled? (not coordinator, not non-interactive)
+          //    Gate 2: Not already in a fork child? (depth = 1 limit)
+          //    Gate 3: Prior history exists? (first agent starts fresh)
+          let forkContextPrefix: string | undefined;
+          // forkEnabled is computed once before the loop (FR-P8-006)
+          let isForkPath = false;
+
+          if (!forkEnabled) {
+            deps.logger.debug('Fork blocked: feature disabled', {
+              isCoordinator, isNonInteractive,
+            });
+          } else if (isInForkChild(forkHistory)) {
+            deps.logger.debug('Fork blocked: already in fork child (depth limit)');
+          } else if (forkHistory.length === 0) {
+            deps.logger.debug('Fork skipped: no prior history to inherit');
+          } else {
+            // All gates passed — determine fork path based on subagentType.
+            // When subagentType is omitted, resolve via composite registry
+            // which includes FORK_AGENT as a built-in programmatic agent.
+            isForkPath = !agent.subagentType
+              && compositeAgentRegistry.has(FORK_AGENT.agentType);
+
+            // Build fork context: full context inheritance via
+            // buildForkConversationMessages (replaces simpler buildForkMessages)
+            const forkedMessages = buildForkConversationMessages(forkHistory, prompt);
+            forkContextPrefix = serializeForkContext(forkedMessages);
+
+            deps.logger.info('Fork context applied', {
+              planId: plan.id,
+              agent: agent.type,
+              forkHistoryLength: forkHistory.length,
+              prefixBytes: forkContextPrefix.length,
+              isForkPath,
+            });
+          }
+
+          // 5a. Emit thought activity before execution (FR-10A.02)
+          const agentSessionIdForThought = typeof intakeEvent.sourceMetadata.agentSessionId === 'string'
+            ? intakeEvent.sourceMetadata.agentSessionId as string
+            : undefined;
+          await emitThought(
+            agentSessionIdForThought,
+            'Working on your request...',
+            deps.linearClient,
+            deps.logger,
           );
 
-          // 4. Run Claude Code session in worktree
+          // P6: Transition task to running before execution
+          if (deps.taskRegistry && task && taskId) {
+            task = transition(task, TaskStatus.running);
+            deps.taskRegistry.update(taskId, task);
+          }
+
+          // 5. Run Claude Code session in worktree
           const execResult = await deps.interactiveExecutor.execute({
             prompt,
             worktreePath: handle.path,
@@ -149,10 +302,30 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             tier: agent.tier,
             phaseType: 'refinement',
             timeout: deps.agentTimeoutMs ?? 900_000,
-            metadata: { planId: plan.id, workItemId: plan.workItemId },
+            metadata: {
+              planId: plan.id,
+              workItemId: plan.workItemId,
+              taskId,
+              // FR-P8-006: Signal forced-async dispatch when fork is enabled
+              ...(forkEnabled && deps.taskRegistry && { forceAsync: true }),
+              // P8: Fork agent properties — when isForkPath, FORK_AGENT
+              // definition applies (model: 'inherit' = parent model reuse,
+              // maxTurns: 200). Downstream executors use these for dispatch.
+              ...(isForkPath && {
+                forkAgent: true,
+                forkModel: FORK_AGENT.model,
+                forkMaxTurns: FORK_AGENT.maxTurns,
+              }),
+            },
+            forkContextPrefix,
           });
 
           if (execResult.status === 'failed') {
+            // P6: Transition task to failed
+            if (deps.taskRegistry && task && taskId) {
+              const failed = transition(task, TaskStatus.failed);
+              deps.taskRegistry.update(taskId, failed);
+            }
             agentResults.push({
               agentRole: agent.role,
               agentType: agent.type,
@@ -163,18 +336,24 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               lastActivityAt: execResult.lastActivityAt,
               continuationState: execResult.continuationState,
               tokenUsage: execResult.tokenUsage,
+              taskId,
             });
             emitPhaseCompleted(plan.id, 'failed', agentStart);
             await deps.worktreeManager.dispose(handle);
             continue;
           }
 
-          // 5. Validate & commit
+          // 6. Validate & commit
           const applyResult = await deps.artifactApplier.apply(plan.id, handle, {
             commitMessage: `${agent.role}: ${agent.type} work on ${plan.workItemId}`,
           });
 
           if (applyResult.status === 'rejected') {
+            // P6: Transition task to failed
+            if (deps.taskRegistry && task && taskId) {
+              const failed = transition(task, TaskStatus.failed);
+              deps.taskRegistry.update(taskId, failed);
+            }
             agentResults.push({
               agentRole: agent.role,
               agentType: agent.type,
@@ -185,13 +364,14 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               lastActivityAt: execResult.lastActivityAt,
               continuationState: execResult.continuationState,
               tokenUsage: execResult.tokenUsage,
+              taskId,
             });
             emitPhaseCompleted(plan.id, 'failed', agentStart);
             await deps.worktreeManager.dispose(handle);
             continue;
           }
 
-          // 6. Review gate (optional)
+          // 7. Review gate (optional)
           let findings: Finding[] = [];
           if (deps.fixItLoop && deps.reviewGate && applyResult.commitSha) {
             const fixResult = await deps.fixItLoop.run({
@@ -207,12 +387,12 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             findings = fixResult.finalVerdict.findings;
           }
 
-          // 6b. Track agent commit SHA for feedback loop prevention
+          // 7b. Track agent commit SHA for feedback loop prevention
           if (applyResult.commitSha) {
             trackAgentCommit(applyResult.commitSha);
           }
 
-          // 7. Push commits to remote
+          // 8. Push commits to remote
           if (deps.githubClient && applyResult.commitSha) {
             const targetBranch = intakeEvent.entities.branch ?? handle.branch;
             try {
@@ -237,7 +417,11 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             priorOutputs.push(handoffOutput);
           }
 
-          // 8. Post PR/issue comment with work summary
+          // Record this agent's prompt/response in fork history so
+          // subsequent agents can inherit context (P5 fork cache sharing).
+          recordForkHistory(forkHistory, prompt, execResult.output ?? '');
+
+          // 9. Post PR/issue comment with work summary
           if (deps.githubClient && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
             const changedFiles = applyResult.changedFiles ?? [];
             const duration = Math.round((Date.now() - agentStart) / 1000);
@@ -275,6 +459,10 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
           }
 
           if (deps.linearClient && typeof intakeEvent.sourceMetadata.linearIssueId === 'string') {
+            const linearIssueId = intakeEvent.sourceMetadata.linearIssueId as string;
+            const agentSessionId = typeof intakeEvent.sourceMetadata.agentSessionId === 'string'
+              ? intakeEvent.sourceMetadata.agentSessionId as string
+              : undefined;
             const linearSummary = formatLinearAgentSummary({
               agentType: agent.type,
               durationMs: Date.now() - agentStart,
@@ -282,12 +470,19 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
               changedFiles: applyResult.changedFiles ?? [],
               output: execResult.output ?? '',
               findings,
+              includeMarker: !agentSessionId,
             });
-            await deps.linearClient.createComment(
-              intakeEvent.sourceMetadata.linearIssueId,
+            // Route response: createAgentActivity for sessions, createComment fallback
+            await postAgentResponse(
+              intakeEvent.source,
+              agentSessionId,
               linearSummary,
-            ).catch((err: unknown) => deps.logger.warn('Failed to post Linear comment', {
-              issueId: intakeEvent.sourceMetadata.linearIssueId,
+              deps.linearClient,
+              deps.githubClient,
+              { issueId: linearIssueId, repo: intakeEvent.entities.repo, prNumber: intakeEvent.entities.prNumber },
+            ).catch((err: unknown) => deps.logger.warn('Failed to post Linear response', {
+              issueId: linearIssueId,
+              agentSessionId,
               error: err instanceof Error ? err.message : String(err),
             }));
           }
@@ -295,6 +490,12 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
           // Chain: next agent starts from this agent's commit
           if (applyResult.commitSha) {
             lastCommitRef = applyResult.commitSha;
+          }
+
+          // P6: Transition task to completed
+          if (deps.taskRegistry && task && taskId) {
+            const completed = transition(task, TaskStatus.completed);
+            deps.taskRegistry.update(taskId, completed);
           }
 
           agentResults.push({
@@ -308,11 +509,12 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             lastActivityAt: execResult.lastActivityAt,
             continuationState: execResult.continuationState,
             tokenUsage: execResult.tokenUsage,
+            taskId,
           });
 
           emitPhaseCompleted(plan.id, 'completed', agentStart);
 
-          // 9. Cleanup worktree
+          // 10. Cleanup worktree
           await deps.worktreeManager.dispose(handle);
 
         } catch (err) {
@@ -322,6 +524,16 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
           });
           if (handle) {
             await deps.worktreeManager.dispose(handle).catch(() => {});
+          }
+          // P6: Transition task to failed on exception
+          if (deps.taskRegistry && taskId) {
+            try {
+              const currentTask = deps.taskRegistry.get(taskId);
+              if (currentTask && currentTask.status !== TaskStatus.failed && currentTask.status !== TaskStatus.completed) {
+                const failed = transition(currentTask, TaskStatus.failed);
+                deps.taskRegistry.update(taskId, failed);
+              }
+            } catch { /* best effort */ }
           }
           agentResults.push({
             agentRole: agent.role,
@@ -333,6 +545,7 @@ export function createSimpleExecutor(deps: SimpleExecutorDeps): SimpleExecutor {
             lastActivityAt: undefined,
             continuationState: undefined,
             tokenUsage: undefined,
+            taskId,
           });
           emitPhaseCompleted(plan.id, 'failed', agentStart);
         }
@@ -439,6 +652,7 @@ function formatLinearAgentSummary(params: {
   changedFiles: string[];
   output: string;
   findings: Finding[];
+  includeMarker?: boolean;
 }): string {
   const durationSeconds = Math.max(1, Math.round(params.durationMs / 1000));
   const changedFiles = params.changedFiles.length > 0
@@ -451,13 +665,17 @@ function formatLinearAgentSummary(params: {
     ? `\n\nOutput:\n${truncatePreview(params.output, 2000)}`
     : '';
 
-  return [
+  const parts = [
     `**${params.agentType}** completed in ${durationSeconds}s`,
     params.commitSha ? `Commit: \`${params.commitSha.slice(0, 7)}\`` : '',
     changedFiles,
     output,
     findings,
-  ].filter(Boolean).join('\n');
+  ];
+  if (params.includeMarker !== false) {
+    parts.push(getBotMarker());
+  }
+  return parts.filter(Boolean).join('\n');
 }
 
 function truncatePreview(text: string, maxLength: number): string {
@@ -469,3 +687,4 @@ function truncatePreview(text: string, maxLength: number): string {
   const preview = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
   return `${preview}\n\n_(truncated)_`;
 }
+

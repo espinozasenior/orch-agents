@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { WorkflowPlan, PlannedAgent } from '../../types';
+import { createTask, TaskType } from '../task/index';
 import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
 import { createDomainEvent } from '../../shared/event-bus';
@@ -87,33 +88,45 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
     // Look up agent types from WORKFLOW.md templates
     const agentTypes = workflowConfig.templates[templateName]
-      ?? workflowConfig.templates[workflowConfig.agents.defaultTemplate]
-      ?? ['coder'];
+      ?? workflowConfig.templates[workflowConfig.agents.defaultTemplate];
 
-    // Validate all agent paths exist before building the plan
-    for (const agentPath of agentTypes) {
-      if (!existsSync(resolve(process.cwd(), agentPath))) {
-        const reason = `Template '${templateName}' references missing agent: ${agentPath}`;
-        logger.error(reason);
-        eventBus.publish(
-          createDomainEvent('WorkFailed', {
-            workItemId: executionKey,
-            failureReason: reason,
-            retryCount: 0,
-          }, correlationId),
-        );
-        return;
+    // 9F: Use typed task ID instead of raw UUID — type extractable from prefix
+    const task = createTask(TaskType.local_agent);
+    const planId = task.id;
+    let agentTeam: PlannedAgent[];
+    let useCoordinatorMode = false;
+
+    if (agentTypes && agentTypes.length > 0) {
+      // Template matched — validate agent paths exist
+      const validAgents = agentTypes.filter((agentPath) => {
+        if (!existsSync(resolve(process.cwd(), agentPath))) {
+          logger.warn('Agent path missing, skipping', { agentPath, templateName });
+          return false;
+        }
+        return true;
+      });
+
+      if (validAgents.length > 0) {
+        agentTeam = validAgents.map((agentPath) => ({
+          role: agentPath.replace(/^.*\//, '').replace(/\.md$/, ''),
+          type: agentPath,
+          tier: 2 as const,
+          required: true,
+        }));
+      } else {
+        // All agents missing — fall back to coordinator mode
+        useCoordinatorMode = true;
+        agentTeam = [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }];
+        logger.warn('No valid agents in template, falling back to coordinator mode', { templateName });
       }
+    } else {
+      // No template match — invoke Claude Code in coordinator mode (P2).
+      // The coordinator decides how to approach the task: research, implement,
+      // verify — spawning its own workers as needed via the 4-phase workflow.
+      useCoordinatorMode = true;
+      agentTeam = [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }];
+      logger.info('No template matched, using Claude Code coordinator mode', { templateName });
     }
-
-    // Build a simple plan from the template
-    const planId = randomUUID();
-    const agentTeam: PlannedAgent[] = agentTypes.map((agentPath) => ({
-      role: agentPath.replace(/^.*\//, '').replace(/\.md$/, ''),
-      type: agentPath,
-      tier: 2 as const,
-      required: true,
-    }));
 
     const plan: WorkflowPlan = {
       id: planId,
@@ -121,6 +134,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       template: templateName,
       agentTeam,
       maxAgents: workflowConfig.agents.maxConcurrent,
+      methodology: useCoordinatorMode ? 'coordinator' : undefined,
     };
 
     logger.info('Executing work item', {
@@ -215,6 +229,135 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     }
   }));
 
+  // AgentPrompted: comments and agent sessions forward to coordinator mode.
+  // Claude Code decides what to do based on the prompt content.
+  unsubscribers.push(eventBus.subscribe('AgentPrompted', async (event) => {
+    const { issueId, body, agentSessionId } = event.payload;
+    const correlationId = event.correlationId;
+    const executionKey = `linear:${issueId}`;
+
+    // Skip if already running a plan for this issue
+    const activeItems = tracker.listActive();
+    if (activeItems.some(item => item.workItemId === executionKey)) {
+      logger.debug('AgentPrompted skipped — work already running for issue', {
+        issueId, executionKey,
+      });
+      return;
+    }
+
+    if (!body || body.trim().length === 0) {
+      logger.debug('AgentPrompted skipped — empty body', { issueId });
+      return;
+    }
+
+    // 9F: Typed task ID — in_process_teammate for comment/prompt interactions
+    const promptTask = createTask(TaskType.in_process_teammate);
+    const planId = promptTask.id;
+    const plan: WorkflowPlan = {
+      id: planId,
+      workItemId: issueId,
+      template: 'coordinator',
+      agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }],
+      maxAgents: workflowConfig.agents.maxConcurrent,
+      methodology: 'coordinator',
+    };
+
+    // Fetch issue context from Linear so the coordinator knows what the
+    // comment is about (issue title + description + the comment itself)
+    let issueContext = '';
+    if (deps.linearClient) {
+      try {
+        const issue = await deps.linearClient.fetchIssue(issueId);
+        const title = issue.title ?? '';
+        const desc = issue.description ?? '';
+        const identifier = issue.identifier ?? '';
+        issueContext = [
+          identifier ? `## Issue: ${identifier} — ${title}` : `## Issue: ${title}`,
+          desc ? `\n${desc}` : '',
+          '\n---\n',
+        ].filter(Boolean).join('');
+      } catch (err) {
+        logger.debug('Failed to fetch issue context for AgentPrompted', {
+          issueId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Fetch conversation history from session activities (FR-10A.03)
+    let conversationHistory = '';
+    if (deps.linearClient && agentSessionId) {
+      try {
+        const history = await fetchConversationHistory(agentSessionId, deps.linearClient);
+        if (history.length > 0) {
+          conversationHistory = '## Previous Conversation\n\n' +
+            history.map((m) =>
+              m.role === 'user' ? `**User:** ${m.content}` : `**Assistant:** ${m.content}`,
+            ).join('\n\n') + '\n\n---\n';
+        }
+      } catch (err) {
+        logger.debug('Failed to fetch conversation history', {
+          agentSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Synthesize an IntakeEvent with full context: issue + history + comment
+    const rawTextParts = [
+      issueContext,
+      conversationHistory,
+      issueContext || conversationHistory ? `## User Comment\n${body}` : body,
+    ].filter(Boolean);
+
+    const intakeEvent = {
+      id: randomUUID(),
+      timestamp: new Date().toISOString(),
+      source: 'linear' as const,
+      sourceMetadata: { agentSessionId, linearIssueId: issueId },
+      intent: 'custom:linear-prompted' as const,
+      entities: { requirementId: issueId, labels: [] as string[] },
+      rawText: rawTextParts.join('\n'),
+    };
+
+    logger.info('AgentPrompted → coordinator execution', {
+      planId, issueId, correlationId,
+      bodyPreview: body.slice(0, 100),
+    });
+
+    tracker.start(planId, executionKey);
+
+    try {
+      const result = await simpleExecutor.execute(plan, intakeEvent);
+      tracker.complete(planId);
+
+      if (result.status === 'failed') {
+        tracker.fail(planId, 'Coordinator session failed');
+        eventBus.publish(createDomainEvent('WorkFailed', {
+          workItemId: executionKey,
+          failureReason: 'Coordinator session failed',
+          retryCount: 0,
+        }, correlationId));
+      } else {
+        eventBus.publish(createDomainEvent('WorkCompleted', {
+          workItemId: executionKey,
+          planId,
+          phaseCount: 1,
+          totalDuration: result.totalDuration,
+        }, correlationId));
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      tracker.fail(planId, reason);
+      logger.error('AgentPrompted coordinator error', { planId, error: reason });
+      eventBus.publish(createDomainEvent('WorkFailed', {
+        workItemId: executionKey,
+        failureReason: reason,
+        retryCount: 0,
+      }, correlationId));
+    }
+  }));
+
   // Return a combined unsubscribe function
   return () => {
     for (const unsub of unsubscribers) {
@@ -263,4 +406,48 @@ async function moveLinearIssueToInProgress(
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Conversation history from session activities (FR-10A.03)
+// ---------------------------------------------------------------------------
+
+interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+const MAX_CONVERSATION_EXCHANGES = 20;
+
+async function fetchConversationHistory(
+  agentSessionId: string,
+  linearClient: LinearClient,
+): Promise<ConversationMessage[]> {
+  const messages: ConversationMessage[] = [];
+  let cursor: string | undefined;
+  let pages = 0;
+  const maxPages = 5; // Safety limit to avoid infinite pagination
+
+  do {
+    const result = await linearClient.fetchSessionActivities(agentSessionId, {
+      after: cursor,
+    });
+
+    for (const activity of result.activities) {
+      if (activity.type === 'Prompt' && activity.body) {
+        messages.push({ role: 'user', content: activity.body });
+      } else if (activity.type === 'Response' && activity.body) {
+        messages.push({ role: 'assistant', content: activity.body });
+      }
+    }
+
+    cursor = result.hasNextPage ? result.endCursor : undefined;
+    pages++;
+  } while (cursor && pages < maxPages);
+
+  // Cap at last N exchanges to avoid prompt overflow
+  if (messages.length > MAX_CONVERSATION_EXCHANGES * 2) {
+    return messages.slice(-(MAX_CONVERSATION_EXCHANGES * 2));
+  }
+  return messages;
 }

@@ -16,6 +16,12 @@ import type { LinearClient, LinearIssueResponse } from '../../integration/linear
 import type { TokenUsage } from '../../types';
 import { resolveRepoForIssue } from './repo-resolver';
 import type { RepoConfig } from '../../integration/linear/workflow-parser';
+import { createTask, TaskType, TaskStatus, createTaskRegistry, createTaskOutputWriter } from '../task';
+import type { TaskRouter } from '../task';
+import { pollTasks } from '../task/taskPoller';
+import { isCoordinatorMode } from '../../coordinator/index';
+import { createSymphonyIntakeAdapter } from './symphony-intake-adapter';
+import type { CoordinatorTaskRequest } from '../../coordinator/types';
 
 export interface SymphonyOrchestratorDeps {
   workflowConfig: WorkflowConfig;
@@ -29,6 +35,22 @@ export interface SymphonyOrchestratorDeps {
   workerFactory?: (workerPath: string, workerData: Record<string, unknown>) => WorkerLike;
   /** Optional event bus for subscribing to WorkCancelled events (Phase 7G). */
   eventBus?: EventBus;
+  /** Returns current OAuth credentials for worker thread seeding. */
+  getOAuthCredentials?: () => {
+    clientId: string;
+    clientSecret: string;
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+  } | undefined;
+  /** 9B: Optional SwarmDaemon for capacity-managed session dispatch. */
+  swarmDaemon?: import('../runtime/swarm-daemon').SwarmDaemon;
+  /** P9: Optional coordinator session for coordinator-mode dispatch. */
+  coordinatorEnqueue?: (req: CoordinatorTaskRequest) => void;
+  /** P6: Optional TaskRouter for type-based dispatch instead of raw Workers. */
+  taskRouter?: TaskRouter;
+  /** P6: Data directory for task output files (defaults to /tmp/orch-agents). */
+  taskDataDir?: string;
 }
 
 export interface WorkerLike {
@@ -56,6 +78,8 @@ interface RunningEntry {
   workerHost: string;
   turnCount: number;
   workerResultStatus?: 'completed' | 'failed' | 'paused';
+  /** P6: Task backbone ID for this running entry. */
+  taskId?: string;
 }
 
 interface RetryEntry {
@@ -139,6 +163,10 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     completed: new Set(),
   };
 
+  // P6: Shared task backbone instances (created once at factory level)
+  const taskRegistry = createTaskRegistry();
+  const taskOutputWriter = createTaskOutputWriter({ dataDir: deps.taskDataDir ?? worktreeBasePath });
+
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let nextPollAt: number | undefined;
   let stopped = false;
@@ -148,6 +176,14 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
   const startupState: OrchestratorSnapshot['startup'] = {
     cleanedWorkspaces: [],
   };
+
+  // P9: Create intake adapter for coordinator-mode dispatch
+  const intakeAdapter = createSymphonyIntakeAdapter({
+    linearClient: deps.linearClient,
+    workflowConfig: deps.workflowConfig,
+    workflowConfigProvider: deps.workflowConfigProvider,
+    logger: deps.logger,
+  });
 
   // Phase 7G: Subscribe to WorkCancelled events and forward stop to workers
   let unsubscribeWorkCancelled: (() => void) | undefined;
@@ -220,6 +256,11 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     }
 
     await dispatchEligibleCandidates(candidates);
+
+    // P6 (FR-P6-007): Poll task backbone for output deltas and terminal notifications
+    if (deps.eventBus) {
+      pollTasks(taskRegistry, taskOutputWriter, deps.eventBus);
+    }
 
     scheduleNextTick();
   }
@@ -317,6 +358,11 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
   }
 
   function availableSlots(): number {
+    // 9B: Delegate to SwarmDaemon when available for cross-system capacity awareness
+    if (deps.swarmDaemon) {
+      const h = deps.swarmDaemon.health();
+      return Math.max(0, h.capacity - h.activeSessions);
+    }
     return Math.max(0, getWorkflowConfig().agent.maxConcurrentAgents - state.running.size);
   }
 
@@ -354,26 +400,38 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     const resolvedRepoData = resolvedRepo
       ? { name: resolvedRepo.name, url: resolvedRepo.url, defaultBranch: resolvedRepo.defaultBranch }
       : undefined;
+    const oauthCredentials = deps.getOAuthCredentials?.();
+    const workerPayload = {
+      issue,
+      attempt,
+      workflowConfig,
+      worktreeBasePath,
+      defaultRepo: deps.defaultRepo,
+      defaultBranch: deps.defaultBranch,
+      resolvedRepo: resolvedRepoData,
+      oauthCredentials,
+      agentSessionId: previousRuntime?.sessionId,
+    };
+    // P6: Create Task for backbone tracking
+    const task = createTask(TaskType.local_agent);
+    taskRegistry.register(task);
+
+    // P6 (FR-P6-003): Use TaskRouter when provided, falling back to raw Worker
+    if (deps.taskRouter) {
+      deps.taskRouter.dispatch(task).then((result) => {
+        const terminalStatus = result.status === 'completed' ? TaskStatus.completed : TaskStatus.failed;
+        Object.assign(task, { status: terminalStatus, updatedAt: Date.now(), completedAt: Date.now() });
+        taskRegistry.update(task.id, task);
+      }).catch(() => {
+        Object.assign(task, { status: TaskStatus.failed, updatedAt: Date.now(), completedAt: Date.now() });
+        taskRegistry.update(task.id, task);
+      });
+    }
+
     const worker = deps.workerFactory
-      ? deps.workerFactory(workerPath, {
-        issue,
-        attempt,
-        workflowConfig,
-        worktreeBasePath,
-        defaultRepo: deps.defaultRepo,
-        defaultBranch: deps.defaultBranch,
-        resolvedRepo: resolvedRepoData,
-      })
+      ? deps.workerFactory(workerPath, workerPayload)
       : new Worker(workerPath, {
-        workerData: {
-          issue,
-          attempt,
-          workflowConfig,
-          worktreeBasePath,
-          defaultRepo: deps.defaultRepo,
-          defaultBranch: deps.defaultBranch,
-          resolvedRepo: resolvedRepoData,
-        },
+        workerData: workerPayload,
       });
 
     state.claimed.add(issue.id);
@@ -391,6 +449,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       workspacePath: previousRuntime?.workspacePath ?? pathResolve(worktreeBasePath, sanitizePlanId(issue.id)),
       workerHost: previousRuntime?.workerHost ?? 'local',
       turnCount: previousRuntime?.turnCount ?? 0,
+      taskId: task.id,
     });
 
     worker.on('message', (message: unknown) => {
@@ -686,6 +745,16 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     const workflowConfig = getWorkflowConfig();
     const unblocked = candidates.filter((issue) => !isBlockedIssue(issue));
 
+    // P9: When coordinator mode is active and an enqueue function is provided,
+    // route through the intake adapter → coordinator session instead of
+    // direct worker dispatch.
+    const coordinatorModeActive = isCoordinatorMode();
+    const useCoordinator = coordinatorModeActive && deps.coordinatorEnqueue;
+
+    if (coordinatorModeActive && !deps.coordinatorEnqueue) {
+      logger.warn('Coordinator mode is active but coordinatorEnqueue callback is missing; falling back to direct worker dispatch');
+    }
+
     for (const stateName of workflowConfig.tracker.activeStates) {
       const stateCandidates = sortForDispatch(
         unblocked.filter((issue) => issue.state.name === stateName),
@@ -695,6 +764,22 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
           return;
         }
         if (isEligible(issue)) {
+          if (useCoordinator) {
+            // P9 coordinator path: convert to task request and enqueue
+            const taskRequest = await intakeAdapter.processWebhookIssue(issue);
+            if (taskRequest) {
+              state.claimed.add(issue.id);
+              deps.coordinatorEnqueue!(taskRequest);
+              logger.info('Issue routed through coordinator intake', {
+                issueId: issue.id,
+                issueIdentifier: issue.identifier,
+                taskRequestId: taskRequest.id,
+              });
+            }
+            continue;
+          }
+
+          // Fallback: direct dispatch (pre-P9 behavior)
           let resolvedRepo: RepoConfig | undefined;
           if (workflowConfig.workspace?.repos && workflowConfig.workspace.repos.length > 0) {
             try {
