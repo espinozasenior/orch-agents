@@ -83,7 +83,7 @@ describe('AgentRunner', () => {
     });
 
     it('handles env_update by setting process.env', async () => {
-      const envKey = `TEST_9A_ENV_${Date.now()}`;
+      const envKey = `ORCH_TEST_9A_ENV_${Date.now()}`;
       const deps = makeDeps();
       const runner = new AgentRunner({ transport, deps });
       const runPromise = runner.run();

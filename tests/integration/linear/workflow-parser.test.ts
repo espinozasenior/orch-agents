@@ -95,9 +95,9 @@ describe('WorkflowParser', () => {
     assert.equal(config.tracker.team, 'my-team');
     assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
     assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
-    // No active_states/terminal_states in YAML → defaults to empty
-    assert.deepEqual(config.tracker.activeStates, []);
-    assert.deepEqual(config.tracker.terminalStates, []);
+    // No active_states/terminal_states in YAML → defaults from source
+    assert.deepEqual(config.tracker.activeStates, ['Todo', 'In Progress']);
+    assert.deepEqual(config.tracker.terminalStates, ['Done', 'Cancelled']);
   });
 
   it('should parse agents section correctly', () => {
@@ -301,13 +301,17 @@ agents:
     // Type defaults are always populated
     assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
     assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
-    // No name-based states → empty (deprecated)
-    assert.deepEqual(config.tracker.activeStates, []);
-    assert.deepEqual(config.tracker.terminalStates, []);
+    // Name-based state defaults from source
+    assert.deepEqual(config.tracker.activeStates, ['Todo', 'In Progress']);
+    assert.deepEqual(config.tracker.terminalStates, ['Done', 'Cancelled']);
   });
 
   it('should still parse legacy active_states/terminal_states for backward compat', () => {
     const legacy = `---
+templates:
+  quick-fix:
+    - .claude/agents/core/coder.md
+
 tracker:
   kind: linear
   team: my-team

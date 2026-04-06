@@ -34,7 +34,36 @@ export {
   extractPendingWork,
   extractDecisions,
   buildStructuredSummary,
+  generateCompactionMessages,
+  getCompactPrompt,
+  getCompactUserSummaryMessage,
+  type ForkedLLMCall,
+  type SummaryGenerationOptions,
+  type GeneratedSummary,
 } from './summaryGenerator';
+export {
+  computeWarningState,
+  decideWarningEmission,
+  suppressCompactWarning,
+  clearCompactWarningSuppression,
+  isCompactWarningSuppressed,
+  type ExtendedWarningState,
+  type WarningEmission,
+} from './compactWarningHook';
+export {
+  runPostCompactCleanup,
+  markPostCompaction,
+  consumePostCompactionFlag,
+  recordMicrocompactSnip,
+  isAlreadySnipped,
+  trackFileStateKey,
+  trackMemoryFileKey,
+  getSessionCompactState,
+  dropSessionCompactState,
+  type QuerySource,
+  type SessionCompactState,
+  type PostCompactCleanupResult,
+} from './postCompactCleanup';
 export {
   getAutoCompactThreshold,
   calculateTokenWarningState,

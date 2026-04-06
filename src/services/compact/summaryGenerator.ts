@@ -5,7 +5,9 @@
  * compaction summary preserving key context for the agent.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { CompactMessage, CompactContentBlock } from './types';
+import { MAX_OUTPUT_TOKENS_FOR_SUMMARY } from './types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -147,4 +149,147 @@ export function buildStructuredSummary(opts: {
   }
 
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Forked LLM summarization (FR-P10-004)
+// ---------------------------------------------------------------------------
+
+/**
+ * The compact prompt CC fork-summarises with. Lifted nearly verbatim from
+ * `claude-code/src/services/compact/prompt.ts` so the wire-format the
+ * forked agent sees matches CC's behaviour.
+ */
+export function getCompactPrompt(): string {
+  return [
+    'You are a context compaction agent. Summarise the conversation so far',
+    'so that another agent can resume the work without losing important state.',
+    '',
+    'Cover (in this order, omit empty sections):',
+    '1. Files referenced or modified',
+    '2. Decisions made and rationale',
+    '3. Pending work / TODOs',
+    '4. Errors encountered and their fixes',
+    '5. Tools used and their key results',
+    '',
+    'Be concise but complete. Prefer bullet points. Do not apologise or ',
+    'add meta-commentary. Output the summary directly.',
+  ].join('\n');
+}
+
+/** Wraps the LLM-generated summary into a user-visible message stub. */
+export function getCompactUserSummaryMessage(summary: string): string {
+  return [
+    '## Compaction Summary (auto-generated)',
+    '',
+    'The prior conversation has been compacted to fit the context window.',
+    'Resume from this checkpoint:',
+    '',
+    summary,
+  ].join('\n');
+}
+
+/** A forked LLM call. The harness injects this — in tests we mock it. */
+export type ForkedLLMCall = (params: {
+  readonly prompt: string;
+  readonly conversation: readonly CompactMessage[];
+  readonly maxOutputTokens: number;
+}) => Promise<{ readonly text: string }>;
+
+export interface SummaryGenerationOptions {
+  readonly tailRounds?: number;
+  readonly forkedLLM?: ForkedLLMCall;
+  readonly maxOutputTokens?: number;
+}
+
+export interface GeneratedSummary {
+  /** The replacement messages: [boundary, userSummary, ...tail]. */
+  readonly messages: CompactMessage[];
+  /** The summary text (LLM or structured fallback). */
+  readonly summaryText: string;
+  /** Was the summary produced by a forked LLM call? */
+  readonly viaLLM: boolean;
+}
+
+function createBoundaryMessage(): CompactMessage {
+  return Object.freeze({
+    uuid: randomUUID(),
+    type: 'system' as const,
+    content: Object.freeze([
+      Object.freeze({
+        type: 'text' as const,
+        text: '[Compaction boundary — prior history summarised below]',
+      }),
+    ]),
+    timestamp: Date.now(),
+  });
+}
+
+function createUserSummaryMessage(summary: string): CompactMessage {
+  return Object.freeze({
+    uuid: randomUUID(),
+    type: 'user' as const,
+    content: Object.freeze([
+      Object.freeze({
+        type: 'text' as const,
+        text: getCompactUserSummaryMessage(summary),
+      }),
+    ]),
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Generate the replacement message array for a compaction. If a forked
+ * LLM is provided, summarisation runs through it (capped at
+ * MAX_OUTPUT_TOKENS_FOR_SUMMARY). Otherwise, falls back to the
+ * deterministic structured extractor — still a real summary, never a
+ * stub.
+ *
+ * Tail-window invariant: the last K message rounds are preserved
+ * verbatim after the boundary.
+ */
+export async function generateCompactionMessages(
+  messages: readonly CompactMessage[],
+  opts: SummaryGenerationOptions = {},
+): Promise<GeneratedSummary> {
+  const tailRounds = opts.tailRounds ?? 2;
+  // A "round" is one user/assistant pair → 2 messages.
+  const tailCount = Math.max(0, tailRounds * 2);
+  const tailStart = Math.max(0, messages.length - tailCount);
+  const oldMessages = messages.slice(0, tailStart);
+  const tail = messages.slice(tailStart);
+
+  let summaryText: string;
+  let viaLLM = false;
+
+  if (opts.forkedLLM) {
+    const maxOutputTokens = Math.min(
+      opts.maxOutputTokens ?? MAX_OUTPUT_TOKENS_FOR_SUMMARY,
+      MAX_OUTPUT_TOKENS_FOR_SUMMARY,
+    );
+    const result = await opts.forkedLLM({
+      prompt: getCompactPrompt(),
+      conversation: oldMessages,
+      maxOutputTokens,
+    });
+    summaryText = result.text;
+    viaLLM = true;
+  } else {
+    summaryText = buildStructuredSummary({
+      messageCount: oldMessages.length,
+      filesModified: extractFilePaths(oldMessages),
+      pendingWork: extractPendingWork(oldMessages),
+      keyDecisions: extractDecisions(oldMessages),
+    });
+  }
+
+  const boundary = createBoundaryMessage();
+  const userSummary = createUserSummaryMessage(summaryText);
+
+  return {
+    messages: [boundary, userSummary, ...tail],
+    summaryText,
+    viaLLM,
+  };
 }

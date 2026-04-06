@@ -168,10 +168,12 @@ describe('LinearClient', () => {
   describe('fetchIssueStatesByIds', () => {
     it('returns id/state pairs for reconciliation', async () => {
       const { fetchFn } = createMockFetch({
-        nodes: [
-          { id: 'issue-1', state: { name: 'Todo' } },
-          { id: 'issue-2', state: { name: 'Done' } },
-        ],
+        issues: {
+          nodes: [
+            { id: 'issue-1', state: { name: 'Todo' } },
+            { id: 'issue-2', state: { name: 'Done' } },
+          ],
+        },
       });
       const client = createLinearClient({ apiKey: 'test-key', fetchFn });
 
@@ -184,7 +186,7 @@ describe('LinearClient', () => {
     });
 
     it('returns an empty array when no ids are provided', async () => {
-      const { fetchFn } = createMockFetch({ nodes: [] });
+      const { fetchFn } = createMockFetch({ issues: { nodes: [] } });
       const client = createLinearClient({ apiKey: 'test-key', fetchFn });
 
       const result = await client.fetchIssueStatesByIds([]);
