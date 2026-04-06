@@ -15,6 +15,7 @@ import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
 import { createDomainEvent } from '../../shared/event-bus';
 import type { SimpleExecutor } from '../simple-executor';
+import type { LocalAgentTaskExecutor } from '../../tasks/local-agent';
 import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import { createWorkTracker } from './work-tracker';
 import type { GitHubClient } from '../../integration/github-client';
@@ -31,6 +32,13 @@ export interface ExecutionEngineDeps {
   eventBus: EventBus;
   logger: Logger;
   simpleExecutor: SimpleExecutor;
+  /**
+   * CC-aligned coordinator dispatch path. Wired to the AgentPrompted handler
+   * (Linear comment / agent-session prompt). The IntakeCompleted handler
+   * keeps using simpleExecutor for the legacy template-driven multi-agent
+   * path. See src/tasks/local-agent/LocalAgentTask.ts.
+   */
+  localAgentTask: LocalAgentTaskExecutor;
   workflowConfig: WorkflowConfig;
   githubClient?: GitHubClient;
   linearClient?: LinearClient;
@@ -45,7 +53,7 @@ export interface ExecutionEngineDeps {
  * Returns an unsubscribe function for cleanup.
  */
 export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
-  const { eventBus, logger, simpleExecutor, workflowConfig } = deps;
+  const { eventBus, logger, simpleExecutor, localAgentTask, workflowConfig } = deps;
   const tracker = createWorkTracker();
   const unsubscribers: Array<() => void> = [];
 
@@ -328,7 +336,10 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     tracker.start(planId, executionKey);
 
     try {
-      const result = await simpleExecutor.execute(plan, intakeEvent);
+      // CC-aligned dispatch: AgentPrompted always runs in coordinator mode.
+      // Routes through LocalAgentTask (src/tasks/local-agent/) instead of
+      // the legacy SimpleExecutor path used by IntakeCompleted.
+      const result = await localAgentTask.execute(plan, intakeEvent);
       tracker.complete(planId);
 
       if (result.status === 'failed') {
