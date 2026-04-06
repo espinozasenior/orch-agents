@@ -20,6 +20,7 @@ import { createSimpleExecutor } from '../simple-executor';
 import { createWorktreeManager } from '../workspace/worktree-manager';
 import { createArtifactApplier } from '../workspace/artifact-applier';
 import { createSdkExecutor } from '../runtime/sdk-executor';
+import { createEventBus, createDomainEvent } from '../../shared/event-bus';
 import { getDefaultRegistry } from '../../agent-registry/agent-registry';
 import { createGitHubClient } from '../../integration/github-client';
 import { createGitHubAppTokenProvider } from '../../integration/github-app-auth';
@@ -99,10 +100,21 @@ async function main(): Promise<void> {
     basePath: data.worktreeBasePath,
   });
   const artifactApplier = createArtifactApplier({ logger });
+  // P11: Worker-local eventBus so WorkCancelled domain events (emitted on
+  // inbound 'stop' message) reach sdk-executor's P11 abort bridge, aborting
+  // in-flight SDK requests gracefully before the worker exits.
+  // The workItemId MUST match what simple-executor passes to sdk-executor
+  // in request.metadata.workItemId (issue.identifier), not the main-thread
+  // WorkCancelled format ('linear-session-{sessionId}').
+  const workerEventBus = createEventBus(logger);
+  const workerWorkItemId = data.issue.identifier;
+
   const interactiveExecutor = createSdkExecutor({
     logger,
     eventSink: (payload) => parentPort?.postMessage(payload),
     linearToolBridge: linearClient ? createLinearToolBridge(linearClient) : undefined,
+    // P11: WorkCancelled → AbortController bridge
+    eventBus: workerEventBus,
   });
 
   // Phase 7F: Inbound message channel — listen for prompted + stop messages
@@ -114,8 +126,14 @@ async function main(): Promise<void> {
       if (typed.type === 'prompted' && 'body' in typed) {
         pendingPrompts.push(typed.body);
       } else if (typed.type === 'stop') {
-        // Signal graceful stop — exit with code 0
-        process.exit(0);
+        // P11: Publish WorkCancelled so sdk-executor aborts its in-flight
+        // SDK call via AbortController, then exit after a short grace window.
+        workerEventBus.publish(createDomainEvent('WorkCancelled', {
+          workItemId: workerWorkItemId,
+          cancellationReason: typed.reason ?? 'stop_message',
+        }));
+        // Grace window lets the abort propagate and cleanup run before exit.
+        setTimeout(() => process.exit(0), 250).unref();
       }
     });
   }

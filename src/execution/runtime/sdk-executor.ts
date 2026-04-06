@@ -12,6 +12,15 @@ import type { Logger } from '../../shared/logger';
 import type { LinearToolBridge, LinearToolOperation } from '../../integration/linear/linear-client';
 import { evaluatePermission } from './permission-evaluator';
 import type { SessionPermissionPolicy as EvaluatorPolicy } from './permission-evaluator';
+import type { EventBus } from '../../shared/event-bus';
+import {
+  callWithOverloadRetry,
+  createWorkCancelledStopRegistry,
+  OverloadExhaustedError,
+  OverloadAbortedError,
+  type QueryEventEmitter,
+  type OverloadRetryOptions,
+} from '../../query';
 import type {
   InteractiveTaskExecutor,
   InteractiveExecutionRequest,
@@ -101,6 +110,17 @@ export interface SdkExecutorDeps {
   taskOutputWriter?: import('../task/taskOutputWriter').TaskOutputWriter;
   /** P7: Optional permission policy for evaluating child permission requests. */
   permissionPolicy?: EvaluatorPolicy;
+  /** P11: Optional EventBus — when supplied, WorkCancelled domain events
+   *  will abort an in-flight SDK execution for the matching workItemId. */
+  eventBus?: Pick<EventBus, 'subscribe'>;
+  /** P11: Optional observability emitter — receives QueryLoopEvent payloads
+   *  for overload retries and stop-hook firings. */
+  emitQueryEvent?: QueryEventEmitter;
+  /** P11: Override overload retry tuning (tests + advanced configs). */
+  overloadRetry?: Pick<
+    OverloadRetryOptions,
+    'maxRetries' | 'baseDelayMs' | 'maxDelayMs' | 'jitterRatio' | 'sleep' | 'random'
+  >;
 }
 
 export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskExecutor {
@@ -185,6 +205,23 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
         }
       }
 
+      // P11: Per-execution AbortController + WorkCancelled bridge.
+      // The orchestrator passes workItemId via request.metadata; when an
+      // EventBus is wired, we register a stop hook that aborts this
+      // controller the moment WorkCancelled fires. The controller is
+      // also checked between SDK events so iteration halts within one
+      // event of the cancellation.
+      const metaWorkItemId = (request.metadata as Record<string, unknown> | undefined)?.workItemId as string | undefined;
+      const sdkAbortController = new AbortController();
+      let unbindAbort: (() => void) | undefined;
+      let stopRegistry: ReturnType<typeof createWorkCancelledStopRegistry> | undefined;
+      if (deps.eventBus && metaWorkItemId) {
+        stopRegistry = createWorkCancelledStopRegistry(deps.eventBus, {
+          emit: deps.emitQueryEvent,
+        });
+        unbindAbort = stopRegistry.bindAbortController(metaWorkItemId, sdkAbortController);
+      }
+
       try {
         const createQuery = deps.queryFactory ?? await resolveQueryFactory();
         // When fork context is provided, prepend it to the prompt so the
@@ -192,14 +229,26 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
         const effectivePrompt = request.forkContextPrefix
           ? `${request.forkContextPrefix}\n\n${request.prompt}`
           : request.prompt;
-        const stream = await createQuery({
-          prompt: effectivePrompt,
-          cwd: resolvedWorktree,
-          allowedTools,
-          maxTurns: Math.max(1, Math.floor(request.timeout / 60_000)) || 20,
-          permissionPolicy,
-          linearToolBridge: deps.linearToolBridge,
-        });
+        // P11: wrap the SDK stream construction with overload retry.
+        // 529 / overloaded_error responses are retried with exponential
+        // backoff (1s, 2s, 4s, 8s ±25%) up to 4 times. Non-overload
+        // errors propagate immediately.
+        const stream = await callWithOverloadRetry(
+          () => Promise.resolve(createQuery({
+            prompt: effectivePrompt,
+            cwd: resolvedWorktree,
+            allowedTools,
+            maxTurns: Math.max(1, Math.floor(request.timeout / 60_000)) || 20,
+            permissionPolicy,
+            linearToolBridge: deps.linearToolBridge,
+          })),
+          {
+            ...(deps.overloadRetry ?? {}),
+            signal: sdkAbortController.signal,
+            emit: deps.emitQueryEvent,
+            taskId: (request.metadata as Record<string, unknown> | undefined)?.taskId as string | undefined,
+          },
+        );
 
         let output = '';
         let tokenUsage: TaskExecutionResult['tokenUsage'];
@@ -213,6 +262,13 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
         let taskTransitionedToRunning = false;
 
         for await (const event of stream) {
+          // P11: bail out promptly if WorkCancelled flipped the abort
+          // controller mid-stream. Best-effort — we cannot interrupt the
+          // SDK's internal generator, but we stop consuming + reporting.
+          if (sdkAbortController.signal.aborted) {
+            resultError = 'cancelled';
+            break;
+          }
           const activityTimestamp = Date.now();
           lastActivityAt = new Date(activityTimestamp).toISOString();
           sessionId = extractSessionId(event) ?? sessionId;
@@ -367,7 +423,13 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
           continuationState,
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        // P11: tag overload-specific failures so callers can distinguish.
+        let message = err instanceof Error ? err.message : String(err);
+        if (err instanceof OverloadExhaustedError) {
+          message = `overloaded_exhausted: ${message}`;
+        } else if (err instanceof OverloadAbortedError) {
+          message = 'cancelled';
+        }
         emitNormalizedEvent(eventSink, {
           type: 'error',
           timestamp: Date.now(),
@@ -387,6 +449,12 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
           duration: Date.now() - startTime,
           error: message,
         };
+      } finally {
+        // P11: ensure the WorkCancelled subscription + abort binding are
+        // released even on early returns / exceptions. No leaked
+        // listeners (NFR-P11-003).
+        try { unbindAbort?.(); } catch { /* best effort */ }
+        try { stopRegistry?.dispose(); } catch { /* best effort */ }
       }
     },
   };

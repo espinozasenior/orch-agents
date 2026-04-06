@@ -36,3 +36,32 @@ export type {
   QueryLoopFactoryDeps,
   QueryLoopCallbacks,
 } from './queryLoopFactory.js';
+
+// P11 — observability events, overload retry, and stop hook bridge
+export type {
+  QueryTransitionEvent,
+  OverloadRetryEvent,
+  BudgetContinuationEvent,
+  StopHookFiredEvent,
+  QueryLoopEvent,
+  QueryEventEmitter,
+} from './events.js';
+export {
+  callWithOverloadRetry,
+  abortableSleep,
+  isOverloadedError,
+  OverloadExhaustedError,
+  OverloadAbortedError,
+  DEFAULT_OVERLOAD_MAX_RETRIES,
+  DEFAULT_OVERLOAD_BASE_DELAY_MS,
+  DEFAULT_OVERLOAD_MAX_DELAY_MS,
+  DEFAULT_OVERLOAD_JITTER_RATIO,
+} from './overloadRetry.js';
+export type { OverloadRetryOptions } from './overloadRetry.js';
+export {
+  createWorkCancelledStopRegistry,
+} from './stopHooks.js';
+export type {
+  WorkCancelledStopRegistry,
+  CreateStopRegistryOptions,
+} from './stopHooks.js';

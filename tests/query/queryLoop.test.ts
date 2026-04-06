@@ -405,6 +405,73 @@ describe('QueryLoop', () => {
     });
   });
 
+  describe('P11 observability — emitEvent', () => {
+    it('emits a terminal QueryTransition on normal completion', async () => {
+      const events: Array<{ type: string; kind?: string; reason?: string }> = [];
+      const params = makeParams([[textEvent('hi')]], {
+        emitEvent: (e) => events.push(e),
+        taskId: 'task-1',
+      });
+      await consumeLoop(params);
+      const terminals = events.filter((e) => e.type === 'QueryTransition' && e.kind === 'terminal');
+      assert.equal(terminals.length, 1);
+      assert.equal(terminals[0].reason, 'completed');
+    });
+
+    it('emits continue QueryTransition events on tool_use iterations', async () => {
+      const events: Array<{ type: string; kind?: string; reason?: string }> = [];
+      const params = makeParams(
+        [
+          [toolUseEvent('read_file')],
+          [toolUseEvent('read_file')],
+          [textEvent('done')],
+        ],
+        { emitEvent: (e) => events.push(e) },
+      );
+      await consumeLoop(params);
+      const continues = events.filter((e) => e.type === 'QueryTransition' && e.kind === 'continue');
+      // Two tool_use transitions before the terminal
+      assert.equal(continues.length, 2);
+      assert.equal(continues[0].reason, 'tool_use');
+    });
+
+    it('emits BudgetContinuation event when budget continues the loop', async () => {
+      let budgetCalls = 0;
+      const events: Array<{ type: string }> = [];
+      const params = makeParams(
+        [
+          [textEvent('partial')],
+          [textEvent('done')],
+        ],
+        {
+          emitEvent: (e) => events.push(e),
+          checkBudget: (): BudgetDecision => {
+            budgetCalls++;
+            if (budgetCalls === 1) {
+              return { action: 'continue', nudgeMessage: 'keep going' };
+            }
+            return { action: 'stop' };
+          },
+        },
+      );
+      await consumeLoop(params);
+      assert.ok(events.some((e) => e.type === 'BudgetContinuation'));
+    });
+
+    it('emits a terminal QueryTransition on max_turns', async () => {
+      const events: Array<{ type: string; kind?: string; reason?: string }> = [];
+      const responses: ModelEvent[][] = Array.from({ length: 10 }, () => [toolUseEvent('bash')]);
+      const params = makeParams(responses, {
+        maxTurns: 3,
+        emitEvent: (e) => events.push(e),
+      });
+      await consumeLoop(params);
+      const terminal = events.find((e) => e.type === 'QueryTransition' && e.kind === 'terminal');
+      assert.ok(terminal);
+      assert.equal(terminal!.reason, 'max_turns');
+    });
+  });
+
   describe('multiple events per model turn', () => {
     it('should handle text followed by tool_use in same turn', async () => {
       const params = makeParams([

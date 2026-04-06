@@ -6,6 +6,7 @@ import type { Terminal, Continue } from './transitions.js';
 import type { QueryLoopState, QueryMessage } from './state.js';
 import type { QueryDeps } from './deps.js';
 import { createInitialState } from './state.js';
+import type { QueryEventEmitter } from './events.js';
 import type {
   CompactMessage,
   CompactionConfig,
@@ -447,6 +448,12 @@ export interface QueryParams {
    *  proactive snip+autoCompact each turn and reactive compact on
    *  prompt_too_long errors. When omitted, behaviour is unchanged. */
   compaction?: CompactionHooks;
+  /** P11: optional observability emitter. Fires QueryTransition events
+   *  on every continue/terminal transition. Pure additive — no behaviour
+   *  change when omitted. */
+  emitEvent?: QueryEventEmitter;
+  /** P11: optional task id propagated into emitted events. */
+  taskId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -474,15 +481,50 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
     checkBudget = noopBudgetCheck,
     executeTool = noopToolExecution,
     compaction,
+    emitEvent,
+    taskId,
   } = params;
 
   const compactionCtx = compaction
     ? ensureCompactionContext(compaction)
     : undefined;
 
+  // P11: emit a terminal QueryTransition and return.
+  const emitTerminal = (terminal: Terminal, turnCount: number): Terminal => {
+    emitEvent?.({
+      type: 'QueryTransition',
+      kind: 'terminal',
+      reason: terminal.reason,
+      turnCount,
+      timestamp: Date.now(),
+      taskId,
+    });
+    return terminal;
+  };
+
   let state: QueryLoopState = createInitialState(params.messages);
+  let lastEmittedTurnCount = -1;
 
   while (true) {
+    // P11: emit a continue QueryTransition once per turn re-entry. We
+    // dedupe by turnCount so the loop header (which destructures state
+    // each iteration) doesn't double-fire for the same turn.
+    if (
+      emitEvent &&
+      state.transition &&
+      state.turnCount !== lastEmittedTurnCount
+    ) {
+      lastEmittedTurnCount = state.turnCount;
+      emitEvent({
+        type: 'QueryTransition',
+        kind: 'continue',
+        reason: state.transition.reason,
+        turnCount: state.turnCount,
+        timestamp: Date.now(),
+        taskId,
+      });
+    }
+
     // 1. Destructure state (read-only within iteration)
     const {
       messages,
@@ -492,7 +534,7 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
 
     // 2. Check turn limit
     if (turnCount > maxTurns) {
-      return { reason: 'max_turns' };
+      return emitTerminal({ reason: 'max_turns' }, turnCount);
     }
 
     // 3. Run compaction pipeline (P0 integration point)
@@ -527,7 +569,7 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
         content: 'Prompt too long — context window exceeded.',
       };
       yield { type: 'error_message', message: errorMsg };
-      return { reason: 'blocking_limit' };
+      return emitTerminal({ reason: 'blocking_limit' }, turnCount);
     }
 
     // 5. Call model with streaming
@@ -551,7 +593,7 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
             isMeta: true,
           };
           yield { type: 'interruption', message: interruptMsg };
-          return { reason: 'aborted_streaming' };
+          return emitTerminal({ reason: 'aborted_streaming' }, turnCount);
         }
 
         if (event.type === 'text') {
@@ -592,7 +634,7 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
         content: errorContent,
       };
       yield { type: 'error_message', message: errorMsg };
-      return { reason: 'model_error', error };
+      return emitTerminal({ reason: 'model_error', error }, turnCount);
     }
 
     // 6. Process tool_use blocks (main continue path)
@@ -608,7 +650,7 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
           isMeta: true,
         };
         yield { type: 'interruption', message: interruptMsg };
-        return { reason: 'aborted_tools' };
+        return emitTerminal({ reason: 'aborted_tools' }, turnCount);
       }
 
       for (const msg of toolResult.messages) {
@@ -654,7 +696,7 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
         content: 'Prompt too long — reactive compaction failed.',
       };
       yield { type: 'error_message', message: errorMsg };
-      return { reason: 'prompt_too_long' };
+      return emitTerminal({ reason: 'prompt_too_long' }, turnCount);
     }
 
     // 7a. Max output tokens recovery
@@ -685,7 +727,7 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
     // 7b. Stop hooks
     const stopResult = await handleStopHooks(messages, assistantMessages);
     if (stopResult.preventContinuation) {
-      return { reason: 'stop_hook_prevented' };
+      return emitTerminal({ reason: 'stop_hook_prevented' }, turnCount);
     }
     if (stopResult.blockingErrors.length > 0) {
       state = {
@@ -706,6 +748,13 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
         content: budgetDecision.nudgeMessage,
         isMeta: true,
       };
+      emitEvent?.({
+        type: 'BudgetContinuation',
+        turnCount: turnCount + 1,
+        nudgeMessage: budgetDecision.nudgeMessage,
+        timestamp: Date.now(),
+        taskId,
+      });
       state = {
         ...state,
         messages: [...messages, ...assistantMessages, nudgeMsg],
@@ -716,6 +765,6 @@ export async function* queryLoop(params: QueryParams): AsyncGenerator<QueryEvent
     }
 
     // 8. Normal completion
-    return { reason: 'completed' };
+    return emitTerminal({ reason: 'completed' }, turnCount);
   }
 }
