@@ -5,9 +5,6 @@
  * Manages CoordinatorState across turns, intercepts task-notification
  * XML from workers, and uses the full coordinator type system for
  * dispatch decisions.
- *
- * When CLAUDE_CODE_COORDINATOR_MODE=0, falls back to pass-through
- * (existing behavior).
  */
 
 import type {
@@ -24,7 +21,6 @@ import {
   isTaskNotification,
 } from '../../coordinator/notificationParser';
 import { decideContinueOrSpawn } from '../../coordinator/decisionMatrix';
-import { isCoordinatorMode } from '../../coordinator/index';
 import type {
   WorkerPhase,
   WorkerState,
@@ -282,10 +278,6 @@ export function createCoordinatorSession(
     async execute(
       request: InteractiveExecutionRequest,
     ): Promise<TaskExecutionResult> {
-      if (!isCoordinatorMode()) {
-        return baseExecutor.execute(request);
-      }
-
       logger?.info('Coordinator session: enhancing prompt with coordinator context', {
         agentRole: request.agentRole,
         mcpClientCount: mcpClients.length,

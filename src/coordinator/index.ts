@@ -29,13 +29,3 @@ export {
 } from './notificationParser';
 
 export { decideContinueOrSpawn } from './decisionMatrix';
-
-/**
- * Check whether the current process is running in coordinator mode.
- *
- * P9: Coordinator mode is the default execution model.
- * Opt out by setting CLAUDE_CODE_COORDINATOR_MODE=0.
- */
-export function isCoordinatorMode(): boolean {
-  return process.env.CLAUDE_CODE_COORDINATOR_MODE !== '0';
-}

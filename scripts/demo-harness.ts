@@ -340,7 +340,6 @@ async function demoP1() {
 import { getCoordinatorSystemPrompt, getCoordinatorUserContext } from '../src/coordinator/coordinatorPrompt';
 import { parseTaskNotification, isTaskNotification } from '../src/coordinator/notificationParser';
 import { decideContinueOrSpawn } from '../src/coordinator/decisionMatrix';
-import { isCoordinatorMode } from '../src/coordinator/index';
 import type { WorkerState, TaskSpec } from '../src/coordinator/types';
 
 function demoP2() {
@@ -405,7 +404,7 @@ function demoP2() {
     console.log(`  "${label}" (overlap: ${Math.round(overlap * 100)}%) -> ${decision.toUpperCase()}`);
   }
 
-  console.log(`\n  Coordinator mode active: ${isCoordinatorMode()}`);
+  console.log(`\n  Coordinator mode active: true`);
 }
 
 // ---------------------------------------------------------------------------

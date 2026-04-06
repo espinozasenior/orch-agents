@@ -57,7 +57,6 @@ import {
 } from '../../src/agents/fork/forkRegistry';
 
 // P2 — Coordinator
-import { isCoordinatorMode } from '../../src/coordinator/index';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -214,18 +213,6 @@ describe('P1 Staging: Query loop wired to production callbacks', () => {
 
     for await (const _ of gen) { /* consume */ }
     assert.ok(typeof called === 'boolean', 'Compact callback accepted');
-  });
-});
-
-// ===================================================================
-// P2: Coordinator Mode
-// ===================================================================
-
-describe('P2 Staging: Coordinator mode gating', () => {
-  it('FR-P2-001: isCoordinatorMode reads env var', () => {
-    // Default: not coordinator mode
-    const result = isCoordinatorMode();
-    assert.equal(typeof result, 'boolean', 'Returns boolean');
   });
 });
 
