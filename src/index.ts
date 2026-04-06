@@ -21,6 +21,7 @@ import type { FixExecutor, FixReviewer, FixCommitter, FixPromptBuilder } from '.
 import { buildFixPrompt } from './execution/prompt-builder';
 import { isAbsolute as pathIsAbsolute } from 'node:path';
 import { createSimpleExecutor, type SimpleExecutor } from './execution/simple-executor';
+import { createLocalAgentTaskExecutor, type LocalAgentTaskExecutor } from './tasks/local-agent';
 import { getDefaultRegistry } from './agent-registry/agent-registry';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import { resolve as pathResolve } from 'node:path';
@@ -168,6 +169,7 @@ async function main(): Promise<void> {
   const useInteractiveAgents = process.env.ENABLE_INTERACTIVE_AGENTS === 'true';
 
   let simpleExecutor: SimpleExecutor | undefined;
+  let localAgentTask: LocalAgentTaskExecutor | undefined;
   let reviewGate: ReturnType<typeof createReviewGate> | undefined;
   let symphonyOrchestrator: SymphonyOrchestrator | undefined;
   let workpadReporter: WorkpadReporter | undefined;
@@ -291,7 +293,7 @@ async function main(): Promise<void> {
       githubClient = createGitHubClient({ logger: execLogger, token: effectiveGithubToken });
     }
 
-    // Wire SimpleExecutor
+    // Wire SimpleExecutor (legacy template-driven path — IntakeCompleted)
     simpleExecutor = createSimpleExecutor({
       interactiveExecutor,
       worktreeManager,
@@ -304,6 +306,20 @@ async function main(): Promise<void> {
       logger: execLogger,
       eventBus,
       maxFixAttempts,
+      agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
+    });
+
+    // Wire LocalAgentTask (CC-aligned coordinator dispatch — AgentPrompted).
+    // Mirrors src/tasks/LocalAgentTask/ in Claude Code's codebase.
+    localAgentTask = createLocalAgentTaskExecutor({
+      interactiveExecutor,
+      worktreeManager,
+      artifactApplier,
+      agentRegistry: getDefaultRegistry(),
+      githubClient,
+      linearClient,
+      logger: execLogger,
+      eventBus,
       agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
     });
 
@@ -387,8 +403,18 @@ async function main(): Promise<void> {
     logger.info('Running in stub mode (ENABLE_INTERACTIVE_AGENTS not set)');
   }
 
+  if (!localAgentTask) {
+    // Stub LocalAgentTask: same shape, no real execution.
+    localAgentTask = {
+      async execute(plan) {
+        logger.info('Stub local-agent task: no real execution', { planId: plan.id });
+        return { status: 'completed', agentResults: [], totalDuration: 0 };
+      },
+    };
+  }
+
   const pipeline = startPipeline({
-    eventBus, logger, reviewGate, simpleExecutor, workflowConfig,
+    eventBus, logger, reviewGate, simpleExecutor, localAgentTask, workflowConfig,
     linearExecutionMode,
     githubClient: tokenProvider
       ? createGitHubClient({ logger, tokenProvider })
