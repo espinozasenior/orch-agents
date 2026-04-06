@@ -11,7 +11,6 @@ import { createEventBus } from './shared/event-bus';
 import { buildServer } from './server';
 import { startPipeline } from './pipeline';
 import { createWorktreeManager } from './execution/workspace/worktree-manager';
-import { createInteractiveExecutor } from './execution/runtime/interactive-executor';
 import { createSdkExecutor } from './execution/runtime/sdk-executor';
 import { createArtifactApplier } from './execution/workspace/artifact-applier';
 import { createReviewGate, createStubDiffReviewer, createCliTestRunner, createPatternSecurityScanner } from './review/review-gate';
@@ -30,6 +29,7 @@ import { setBotName } from './shared/agent-identity';
 import { createLinearClient, type LinearAuthStrategy } from './integration/linear/linear-client';
 import { createOAuthTokenStore, type OAuthTokenStore } from './integration/linear/oauth-token-store';
 import { createSymphonyOrchestrator, type SymphonyOrchestrator } from './execution/orchestrator/symphony-orchestrator';
+import { createCoordinatorSession } from './execution/runtime/coordinator-session';
 import { createWorkpadReporter, type WorkpadReporter } from './integration/linear/workpad-reporter';
 import { createWorkflowConfigStore } from './integration/linear/workflow-config-store';
 import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
@@ -101,6 +101,7 @@ async function main(): Promise<void> {
   // ── Build Linear auth strategy ──────────────────────────────
   let linearAuthStrategy: LinearAuthStrategy | undefined;
   let oauthTokenStore: OAuthTokenStore | undefined;
+  let tokenPersistence: import('./integration/linear/oauth-token-persistence').OAuthTokenPersistence | undefined;
 
   // API key is always available for data queries (fetchIssues, etc.)
   // OAuth is layered on top for agent-specific mutations (activities, sessions)
@@ -112,13 +113,13 @@ async function main(): Promise<void> {
     } else {
       // Persistent token storage via SQLite — survives restarts
       const { createOAuthTokenPersistence } = require('./integration/linear/oauth-token-persistence');
-      const tokenPersistence = createOAuthTokenPersistence({
+      tokenPersistence = createOAuthTokenPersistence({
         dbPath: process.env.OAUTH_TOKEN_DB_PATH ?? './data/oauth-tokens.db',
         logger,
       });
 
       // Load saved tokens from last session
-      const savedTokens = tokenPersistence.load('default');
+      const savedTokens = tokenPersistence!.load('default');
 
       oauthTokenStore = createOAuthTokenStore({
         clientId: config.linearClientId,
@@ -127,7 +128,7 @@ async function main(): Promise<void> {
         logger,
         onTokenRefreshed: (tokens) => {
           // Persist to SQLite so they survive restarts
-          tokenPersistence.save('default', tokens);
+          tokenPersistence!.save('default', tokens);
           // Keep the strategy object in sync for worker thread seeding
           if (linearAuthStrategy && linearAuthStrategy.mode === 'oauth') {
             linearAuthStrategy.accessToken = tokens.accessToken;
@@ -185,9 +186,17 @@ async function main(): Promise<void> {
     const maxFixAttempts = (isNaN(parsedAttempts) || parsedAttempts < 1 || parsedAttempts > 10) ? 3 : parsedAttempts;
 
     const worktreeManager = createWorktreeManager({ logger: execLogger, basePath: worktreeBasePath });
-    const interactiveExecutor = process.env.USE_LEGACY_INTERACTIVE_EXECUTOR === 'true'
-      ? createInteractiveExecutor({ logger: execLogger })
-      : createSdkExecutor({ logger: execLogger });
+    const baseExecutor = createSdkExecutor({ logger: execLogger });
+
+    // Apply harness enhancements: P0 compaction + P3 budget + P1 query loop + P2 coordinator
+    const { buildExecutor } = await import('./execution/runtime/executor-factory');
+    const interactiveExecutor = buildExecutor({
+      baseExecutor,
+      logger: execLogger,
+      contextWindowTokens: parseInt(process.env.CONTEXT_WINDOW_TOKENS ?? '200000', 10),
+      tokenBudget: process.env.TOKEN_BUDGET ? parseInt(process.env.TOKEN_BUDGET, 10) : undefined,
+      enableCompaction: process.env.ENABLE_COMPACTION !== 'false',
+    });
     const artifactApplier = createArtifactApplier({ logger: execLogger });
     const linearClient = linearAuthStrategy
       ? createLinearClient({ apiKey: linearApiKey, authStrategy: linearAuthStrategy, tokenStore: oauthTokenStore, logger: execLogger })
@@ -302,6 +311,14 @@ async function main(): Promise<void> {
     });
 
     if (config.linearEnabled && linearClient) {
+      // P9: Create coordinator session for symphony orchestrator dispatch.
+      // When coordinator mode is active, the symphony orchestrator routes
+      // issues through this session instead of spawning raw Workers.
+      const symphonyCoordinatorSession = createCoordinatorSession({
+        baseExecutor: interactiveExecutor,
+        logger: execLogger,
+      });
+
       symphonyOrchestrator = createSymphonyOrchestrator({
         workflowConfig,
         workflowConfigProvider: () => workflowConfigStore.requireConfig(),
@@ -311,6 +328,23 @@ async function main(): Promise<void> {
         worktreeBasePath,
         defaultRepo: process.env.GITHUB_REPOSITORY,
         defaultBranch: process.env.GITHUB_BASE_BRANCH ?? 'main',
+        coordinatorEnqueue: (req) => symphonyCoordinatorSession.enqueueTask(req),
+        getOAuthCredentials: oauthTokenStore
+          ? () => {
+            try {
+              const tokens = oauthTokenStore!.getTokenSet();
+              return {
+                clientId: config.linearClientId,
+                clientSecret: config.linearClientSecret,
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+                expiresAt: tokens.expiresAt,
+              };
+            } catch {
+              return undefined;
+            }
+          }
+          : undefined,
       });
       linearExecutionMode = 'symphony';
 
@@ -384,6 +418,7 @@ async function main(): Promise<void> {
     linearClient: config.linearEnabled && linearAuthStrategy
       ? createLinearClient({ apiKey: linearApiKey, authStrategy: linearAuthStrategy, tokenStore: oauthTokenStore, logger })
       : undefined,
+    tokenPersistence,
   });
 
   try {

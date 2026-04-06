@@ -9,7 +9,7 @@
  * 5. Default repo fallback
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
@@ -190,12 +190,12 @@ async function doCloneOrFetch(
 ): Promise<string> {
   if (existsSync(joinPath(clonePath, '.git'))) {
     logger?.info?.('Fetching latest for existing clone', { clonePath });
-    execSync('git fetch origin', { cwd: clonePath, stdio: 'pipe' });
+    execFileSync('git', ['fetch', 'origin'], { cwd: clonePath, stdio: 'pipe' });
     return clonePath;
   }
 
   logger?.info?.('Cloning repository', { repoUrl, clonePath });
-  execSync(`git clone ${repoUrl} ${clonePath}`, { stdio: 'pipe' });
+  execFileSync('git', ['clone', repoUrl, clonePath], { stdio: 'pipe' });
   return clonePath;
 }
 
@@ -207,6 +207,9 @@ async function doCloneOrFetch(
  * Get the clone path for a repo within the workspace root.
  */
 export function getRepoClonePath(workspaceRoot: string, repoName: string): string {
+  if (repoName.includes('..') || repoName.startsWith('/')) {
+    throw new Error(`Invalid repo name: ${repoName}`);
+  }
   return joinPath(workspaceRoot, 'repos', repoName);
 }
 

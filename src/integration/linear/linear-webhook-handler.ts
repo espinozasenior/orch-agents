@@ -26,6 +26,7 @@ import type { LinearWebhookPayload } from './types';
 import { handleWebhookError } from '../../shared/webhook-error-handler';
 import type { IntakeEvent } from '../../types';
 import type { LinearClient } from './linear-client';
+import type { OAuthTokenPersistence } from './oauth-token-persistence';
 
 /**
  * Payload shape for AgentSessionEvent webhooks from Linear.
@@ -38,6 +39,7 @@ export interface AgentSessionEventPayload {
   agentSession: {
     id: string;
     issue: { id: string; identifier?: string; title?: string };
+    comment?: { body?: string };
   };
   promptContext?: string;
   agentActivity?: { body?: string; signal?: string | null };
@@ -50,6 +52,8 @@ export interface LinearWebhookHandlerDeps {
   eventBuffer?: EventBuffer;
   onLinearIntake?: (intakeEvent: IntakeEvent, meta: { deliveryId: string }) => Promise<void> | void;
   linearClient?: LinearClient;
+  /** Token persistence for cleanup on OAuth revocation. */
+  tokenPersistence?: OAuthTokenPersistence;
 }
 
 /**
@@ -64,35 +68,36 @@ export async function linearWebhookHandler(
   const buffer = deps.eventBuffer ?? createEventBuffer();
 
   // Capture raw body for HMAC signature verification.
-  // Only register if the GitHub webhook router hasn't already registered
-  // its own JSON parser on this Fastify instance.
-  if (!fastify.hasContentTypeParser('application/json')) {
-    fastify.addContentTypeParser(
-      'application/json',
-      { parseAs: 'string' },
-      (req, body, done) => {
-        try {
-          const raw = body as string;
-          (req as unknown as Record<string, unknown>).__rawBody = raw;
-          (req as unknown as Record<string, unknown>).rawBodyString = raw;
-          const parsed = JSON.parse(raw);
-          done(null, parsed);
-        } catch (err) {
-          done(err as Error, undefined);
-        }
-      },
-    );
-
-    fastify.addHook('preHandler', async (request) => {
-      const raw =
-        request.rawBodyString
-        ?? ((request.raw as unknown as Record<string, unknown>).__rawBody as string | undefined)
-        ?? ((request as unknown as Record<string, unknown>).__rawBody as string | undefined);
-      if (typeof raw === 'string') {
-        request.rawBodyString = raw;
+  // Remove the default Fastify JSON parser so we can install one that
+  // preserves the raw bytes for HMAC verification. When the GitHub
+  // webhook router has already registered its own parser on this instance,
+  // this is a no-op because the default is already gone.
+  fastify.removeContentTypeParser('application/json');
+  fastify.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (req, body, done) => {
+      try {
+        const raw = body as string;
+        (req as unknown as Record<string, unknown>).__rawBody = raw;
+        (req as unknown as Record<string, unknown>).rawBodyString = raw;
+        const parsed = JSON.parse(raw);
+        done(null, parsed);
+      } catch (err) {
+        done(err as Error, undefined);
       }
-    });
-  }
+    },
+  );
+
+  fastify.addHook('preHandler', async (request) => {
+    const raw =
+      request.rawBodyString
+      ?? ((request.raw as unknown as Record<string, unknown>).__rawBody as string | undefined)
+      ?? ((request as unknown as Record<string, unknown>).__rawBody as string | undefined);
+    if (typeof raw === 'string') {
+      request.rawBodyString = raw;
+    }
+  });
 
   // Dispose event buffer on server close to stop the cleanup timer
   fastify.addHook('onClose', async () => {
@@ -135,61 +140,21 @@ export async function linearWebhookHandler(
         }
       }
 
-      // 2b. Move issue to first active state so the orchestrator can find it.
-      // This prevents the chicken-and-egg problem where the orchestrator only
-      // polls for issues in activeStates, but setupIssueForExecution (which
-      // would move the issue) only runs inside a dispatched worker.
-      if (deps.linearClient) {
-        try {
-          const issue = await deps.linearClient.fetchIssue(issueId);
-          const teamId = issue.team?.id;
-          if (teamId && issue.state?.type !== 'started' && issue.state?.type !== 'completed' && issue.state?.type !== 'canceled') {
-            const states = await deps.linearClient.fetchTeamStates(teamId);
-            const startedStates = states
-              .filter((s) => s.type === 'started')
-              .sort((a, b) => (a.position ?? 999) - (b.position ?? 999));
-            if (startedStates[0]) {
-              await deps.linearClient.updateIssueState(issueId, startedStates[0].id);
-              log.info('Moved issue to started state for orchestrator dispatch', {
-                issueId,
-                fromState: issue.state.name,
-                toState: startedStates[0].name,
-              });
-            }
-          }
-        } catch (err) {
-          log.warn('Failed to move issue to active state (non-blocking)', {
-            issueId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
+      // 2b. All AgentSessionEvent (created) go to AgentPrompted — let the running
+      // Claude Code session handle the content. The triage/workflow pipeline is
+      // reserved for issue status changes (state, label, priority, assignee) and
+      // GitHub webhooks only.
+      const commentBody = payload.agentSession.comment?.body;
+      const body = commentBody || promptContext.issue.description || payload.agentSession.issue.title || '';
 
-      // 3. Normalize to IntakeEvent with enriched metadata
-      const intakeEvent: IntakeEvent = {
-        id: randomUUID(),
-        timestamp: new Date().toISOString(),
-        source: 'linear',
-        sourceMetadata: {
-          agentSessionId: sessionId,
-          linearIssueId: issueId,
-          linearIdentifier: payload.agentSession.issue.identifier,
-          promptContext,
-        },
-        intent: 'custom:linear-agent-session' as IntakeEvent['intent'],
-        entities: {
-          requirementId: payload.agentSession.issue.identifier,
-          labels: [],
-        },
-        rawText: promptContext.issue.description || payload.agentSession.issue.title || '',
-      };
+      eventBus.publish(createDomainEvent('AgentPrompted', {
+        agentSessionId: sessionId,
+        issueId,
+        body,
+      }));
 
-      // 4. Publish to event bus + trigger Symphony tick
-      eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, deliveryId));
-      await deps.onLinearIntake?.(intakeEvent, { deliveryId });
-
-      log.info('AgentSessionEvent created processed', { deliveryId, sessionId, issueId });
-      return reply.status(202).send({ id: deliveryId, status: 'queued' });
+      log.info('AgentSessionEvent forwarded as AgentPrompted', { deliveryId, sessionId, issueId });
+      return reply.status(202).send({ id: deliveryId, status: 'prompted' });
     }
 
     if (action === 'prompted') {
@@ -256,7 +221,13 @@ export async function linearWebhookHandler(
         const deliveryId = (request.headers['linear-delivery'] as string | undefined) ?? randomUUID();
 
         // Get raw body for signature verification
-        const rawBody = request.rawBodyString ?? JSON.stringify(request.body);
+        // SECURITY: rawBodyString MUST be set by the content type parser.
+        // Falling back to JSON.stringify would produce a different byte sequence
+        // than the original payload, potentially bypassing HMAC verification.
+        if (!request.rawBodyString) {
+          throw new Error('Raw body not captured — cannot verify webhook signature safely');
+        }
+        const rawBody = request.rawBodyString;
 
         // Step 1: Verify signature (using shared verifier with no prefix for Linear)
         verifySignature(rawBody, signature ?? '', config.linearWebhookSecret, { prefix: '' });
@@ -266,28 +237,6 @@ export async function linearWebhookHandler(
 
         // Route by payload.type
         switch (payload.type) {
-          case 'Comment': {
-            // AIG: Stop command detection in Linear comments
-            if (payload.action === 'create') {
-              const commentData = payload.data as unknown as Record<string, unknown>;
-              const commentBody = (commentData.body as string) ?? '';
-              const commentTrimmed = commentBody.trim().toLowerCase();
-
-              if (commentTrimmed === 'stop') {
-                const issueId = (commentData.issueId as string) ?? '';
-                eventBus.publish(createDomainEvent('WorkCancelled', {
-                  workItemId: `linear-${issueId}`,
-                  cancellationReason: 'User requested stop via Linear comment',
-                }));
-
-                log.info('Linear stop command detected', { deliveryId, issueId });
-                return reply.status(202).send({ id: deliveryId, status: 'cancelling' });
-              }
-            }
-            // Non-stop comments are skipped
-            return reply.status(202).send({ id: deliveryId, status: 'skipped' });
-          }
-
           case 'Issue': {
             // Step 3: Deduplication
             const eventKey = `linear-${payload.data.id}-${payload.createdAt}`;
@@ -339,6 +288,31 @@ export async function linearWebhookHandler(
               payload as unknown as AgentSessionEventPayload,
               { deliveryId, log, reply },
             );
+          }
+
+          case 'OAuthAuthorization': {
+            // Linear sends this when the app is revoked from a workspace.
+            // Clean up persisted tokens so stale credentials don't linger.
+            const action = (payload as unknown as Record<string, unknown>).action as string | undefined;
+            if (action === 'revoked' || action === 'remove') {
+              if (deps.tokenPersistence) {
+                deps.tokenPersistence.delete('default');
+                log.warn('OAuth tokens deleted — app revoked from Linear workspace', {
+                  deliveryId,
+                  action,
+                });
+              } else {
+                log.warn('OAuth revocation received but no token persistence configured', {
+                  deliveryId,
+                  action,
+                });
+              }
+
+              return reply.status(200).send({ id: deliveryId, status: 'revoked' });
+            }
+
+            log.info('OAuthAuthorization event received', { deliveryId, action });
+            return reply.status(202).send({ id: deliveryId, status: 'acknowledged' });
           }
 
           default: {

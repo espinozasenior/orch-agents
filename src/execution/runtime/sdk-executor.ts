@@ -10,11 +10,16 @@ import { resolve as pathResolve } from 'node:path';
 import { parentPort } from 'node:worker_threads';
 import type { Logger } from '../../shared/logger';
 import type { LinearToolBridge, LinearToolOperation } from '../../integration/linear/linear-client';
+import { evaluatePermission } from './permission-evaluator';
+import type { SessionPermissionPolicy as EvaluatorPolicy } from './permission-evaluator';
 import type {
   InteractiveTaskExecutor,
   InteractiveExecutionRequest,
 } from './interactive-executor';
 import type { TaskExecutionResult } from './task-executor';
+import { AgentRunner } from './agent-runner';
+import { MemoryTransport } from './transport-inbound';
+import { AgentMessageType } from './agent-message-types';
 
 const ALLOWED_WORKTREE_PREFIXES = ['/tmp/', '/var/tmp/', '/private/tmp/'];
 
@@ -88,6 +93,14 @@ export interface SdkExecutorDeps {
   queryFactory?: QueryFactory;
   eventSink?: (payload: Record<string, unknown>) => void;
   linearToolBridge?: LinearToolBridge;
+  /** 9A: Use AgentRunner async iterator loop instead of raw SDK query. */
+  useAgentRunner?: boolean;
+  /** P6: Optional TaskRegistry for lifecycle transitions. */
+  taskRegistry?: import('../task/taskRegistry').TaskRegistry;
+  /** P6: Optional TaskOutputWriter for JSONL progress logging. */
+  taskOutputWriter?: import('../task/taskOutputWriter').TaskOutputWriter;
+  /** P7: Optional permission policy for evaluating child permission requests. */
+  permissionPolicy?: EvaluatorPolicy;
 }
 
 export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskExecutor {
@@ -117,10 +130,70 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
         };
       }
 
+      // 9A: AgentRunner path — async iterator with built-in compaction + budget
+      if (deps.useAgentRunner) {
+        try {
+          const transport = new MemoryTransport();
+          await transport.connect();
+          const history: unknown[] = [];
+          let tokenCount = 0;
+          const runner = new AgentRunner({
+            transport,
+            deps: {
+              countTokens: (payload: unknown) => JSON.stringify(payload).length / 4,
+              executeTask: async (payload: unknown) => payload,
+              sendResponse: () => {},
+              compactHistory: async (h: unknown[]) => h.slice(-5),
+              getCurrentTokenCount: () => tokenCount,
+              getConversationHistory: () => history,
+              setConversationHistory: (h: unknown[]) => { history.length = 0; history.push(...h); tokenCount = JSON.stringify(h).length / 4; },
+            },
+            config: { contextWindow: 200_000, maxTasks: 200 },
+            logger,
+          });
+
+          const effectivePrompt = request.forkContextPrefix
+            ? `${request.forkContextPrefix}\n\n${request.prompt}`
+            : request.prompt;
+          transport.push({
+            id: `task-${Date.now()}`,
+            timestamp: Date.now(),
+            type: AgentMessageType.UserTask,
+            payload: { prompt: effectivePrompt, cwd: resolvedWorktree },
+          });
+          transport.end();
+
+          let output = '';
+          for await (const msg of runner.messageStream()) {
+            if (typeof msg === 'object' && msg !== null && 'output' in msg) {
+              output += String((msg as Record<string, unknown>).output ?? '');
+            }
+          }
+
+          return {
+            status: 'completed' as const,
+            output,
+            duration: Date.now() - startTime,
+          };
+        } catch (err) {
+          return {
+            status: 'failed' as const,
+            output: '',
+            duration: Date.now() - startTime,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
       try {
         const createQuery = deps.queryFactory ?? await resolveQueryFactory();
+        // When fork context is provided, prepend it to the prompt so the
+        // forked child inherits the parent conversation as additional context.
+        const effectivePrompt = request.forkContextPrefix
+          ? `${request.forkContextPrefix}\n\n${request.prompt}`
+          : request.prompt;
         const stream = await createQuery({
-          prompt: request.prompt,
+          prompt: effectivePrompt,
           cwd: resolvedWorktree,
           allowedTools,
           maxTurns: Math.max(1, Math.floor(request.timeout / 60_000)) || 20,
@@ -135,11 +208,25 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
         let sessionId: string | undefined;
         let lastActivityAt: string | undefined;
         let continuationState: TaskExecutionResult['continuationState'];
+        // P6: Task backbone tracking
+        const metaTaskId = (request.metadata as Record<string, unknown> | undefined)?.taskId as string | undefined;
+        let taskTransitionedToRunning = false;
 
         for await (const event of stream) {
           const activityTimestamp = Date.now();
           lastActivityAt = new Date(activityTimestamp).toISOString();
           sessionId = extractSessionId(event) ?? sessionId;
+
+          // P6: Transition pending -> running on first SDK event
+          if (!taskTransitionedToRunning && metaTaskId && deps.taskRegistry) {
+            const currentTask = deps.taskRegistry.get(metaTaskId);
+            if (currentTask && currentTask.status === 'pending') {
+              const { transition: tsTransition, TaskStatus: TS } = await import('../task');
+              const running = tsTransition(currentTask, TS.running);
+              deps.taskRegistry.update(metaTaskId, running);
+            }
+            taskTransitionedToRunning = true;
+          }
 
           const eventText = extractText(event);
           if (eventText) {
@@ -153,6 +240,14 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
               textDelta: eventText,
               output,
             });
+            // P6: Append progress to JSONL output file
+            if (metaTaskId && deps.taskOutputWriter) {
+              deps.taskOutputWriter.append(metaTaskId, {
+                timestamp: activityTimestamp,
+                delta: eventText,
+                sessionId,
+              });
+            }
           }
 
           const usage = extractTokenUsage(event);
@@ -220,6 +315,17 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
         }
 
         if (!completed && resultError) {
+          // P6: Transition task to failed
+          if (metaTaskId && deps.taskRegistry) {
+            try {
+              const currentTask = deps.taskRegistry.get(metaTaskId);
+              if (currentTask && currentTask.status === 'running') {
+                const { transition: tsTransition, TaskStatus: TS } = await import('../task');
+                const failed = tsTransition(currentTask, TS.failed);
+                deps.taskRegistry.update(metaTaskId, failed);
+              }
+            } catch { /* best effort */ }
+          }
           return {
             status: 'failed',
             output: '',
@@ -230,6 +336,18 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
             lastActivityAt,
             continuationState,
           };
+        }
+
+        // P6: Transition task to completed
+        if (metaTaskId && deps.taskRegistry) {
+          try {
+            const currentTask = deps.taskRegistry.get(metaTaskId);
+            if (currentTask && currentTask.status === 'running') {
+              const { transition: tsTransition, TaskStatus: TS } = await import('../task');
+              const done = tsTransition(currentTask, TS.completed);
+              deps.taskRegistry.update(metaTaskId, done);
+            }
+          } catch { /* best effort */ }
         }
 
         logger?.info('Claude Code SDK execution completed', {
@@ -273,6 +391,25 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
     },
   };
 }
+
+/**
+ * P7: Evaluate a permission request against the executor's policy.
+ * Used by session-runner / swarm-daemon when a child sends a permission_request.
+ */
+export function evaluateSessionPermission(
+  request: { tool: string; args?: Record<string, unknown> },
+  policy: EvaluatorPolicy | SessionPermissionPolicy,
+): { approved: boolean; reason?: string } {
+  return evaluatePermission(
+    { tool: request.tool, args: request.args },
+    { allowedTools: policy.allowedTools, writableRoots: policy.writableRoots },
+  );
+}
+
+/**
+ * P7: Build a permission policy from agent role and worktree path.
+ */
+export { buildSessionPolicy } from './permission-evaluator';
 
 async function resolveQueryFactory(): Promise<QueryFactory> {
   const sdkModule = await import('@anthropic-ai/claude-agent-sdk');

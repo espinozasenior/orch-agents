@@ -68,9 +68,9 @@ export const FETCH_ISSUES_BY_STATES_QUERY = `
 `;
 
 export const FETCH_ISSUE_STATES_BY_IDS_QUERY = `
-  query FetchIssueStatesByIds($issueIds: [String!]!) {
-    nodes(ids: $issueIds) {
-      ... on Issue {
+  query FetchIssueStatesByIds($issueIds: [ID!]!) {
+    issues(filter: { id: { in: $issueIds } }) {
+      nodes {
         id
         state { name }
       }
@@ -93,6 +93,15 @@ export const FETCH_COMMENTS_QUERY = `
 export const CREATE_COMMENT_MUTATION = `
   mutation CreateComment($issueId: String!, $body: String!) {
     commentCreate(input: { issueId: $issueId, body: $body }) {
+      success
+      comment { id }
+    }
+  }
+`;
+
+export const REPLY_TO_COMMENT_MUTATION = `
+  mutation ReplyToComment($issueId: String!, $body: String!, $parentId: String!) {
+    commentCreate(input: { issueId: $issueId, body: $body, parentId: $parentId }) {
       success
       comment { id }
     }

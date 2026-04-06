@@ -28,6 +28,7 @@ import {
   FETCH_ISSUE_STATES_BY_IDS_QUERY,
   FETCH_COMMENTS_QUERY,
   CREATE_COMMENT_MUTATION,
+  REPLY_TO_COMMENT_MUTATION,
   UPDATE_COMMENT_MUTATION,
   UPDATE_ISSUE_STATE_MUTATION,
   AGENT_ACTIVITY_CREATE_MUTATION,
@@ -59,6 +60,8 @@ export interface LinearClient {
   fetchComments(issueId: string): Promise<LinearCommentResponse[]>;
   /** Create a comment on an issue. */
   createComment(issueId: string, body: string): Promise<string>;
+  /** Reply to an existing comment thread. */
+  replyToComment(issueId: string, body: string, parentId: string): Promise<string>;
   /** Update an existing comment. */
   updateComment(commentId: string, body: string): Promise<void>;
   /** Update issue state. */
@@ -335,9 +338,9 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
         return [];
       }
       const data = await graphql<{
-        nodes: Array<{ id: string; state?: { name: string } | null } | null>;
+        issues: { nodes: Array<{ id: string; state?: { name: string } | null } | null> };
       }>(FETCH_ISSUE_STATES_BY_IDS_QUERY, { issueIds });
-      return data.nodes
+      return data.issues.nodes
         .filter((node): node is { id: string; state?: { name: string } | null } => node !== null)
         .map((node) => ({
           id: node.id,
@@ -356,6 +359,19 @@ export function createLinearClient(deps: LinearClientDeps): LinearClient {
       const data = await graphql<{
         commentCreate: { success: boolean; comment: { id: string } };
       }>(CREATE_COMMENT_MUTATION, { issueId, body });
+      return data.commentCreate.comment.id;
+    },
+
+    async replyToComment(issueId, body, parentId) {
+      const data = await graphql<{
+        commentCreate: { success: boolean; comment: { id: string } | null };
+      }>(REPLY_TO_COMMENT_MUTATION, { issueId, body, parentId });
+      if (!data.commentCreate.success || !data.commentCreate.comment) {
+        log?.warn('replyToComment: mutation returned success=false or null comment', {
+          issueId, parentId, success: data.commentCreate.success,
+        });
+        throw new Error('Reply comment creation failed');
+      }
       return data.commentCreate.comment.id;
     },
 

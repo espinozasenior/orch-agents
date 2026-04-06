@@ -2,6 +2,8 @@ import type { IntakeEvent, PlannedAgent, WorkflowPlan, WorktreeHandle } from '..
 import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
 import type { AgentPlanStep } from '../../integration/linear/types';
+import { createTask, TaskType, TaskStatus } from '../task';
+import type { TaskRegistry } from '../task';
 
 // ---------------------------------------------------------------------------
 // Phase 7F: Plan step definitions
@@ -59,6 +61,8 @@ export interface IssueWorkerLifecycleDeps {
   logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void };
   /** Optional queue of pending prompted messages from orchestrator (Phase 7F). */
   pendingPrompts?: string[];
+  /** P6 (FR-P6-008): Optional task registry for backbone tracking. */
+  taskRegistry?: TaskRegistry;
 }
 
 export interface IssueWorkerLifecycleResult {
@@ -150,7 +154,22 @@ export async function runIssueWorkerLifecycle(
       // Phase 7F: Step 1 (Implement) inProgress
       await updateAgentPlan(1, 'inProgress');
 
+      // P6 (FR-P6-008): Create task for backbone tracking before dispatch
+      const turnTask = createTask(TaskType.local_agent);
+      if (deps.taskRegistry) {
+        deps.taskRegistry.register(turnTask);
+        Object.assign(turnTask, { status: TaskStatus.running, updatedAt: Date.now(), startedAt: Date.now() });
+        deps.taskRegistry.update(turnTask.id, turnTask);
+      }
+
       const result = await deps.executeTurn(plan, intakeEvent, handle);
+
+      // P6: Transition task to terminal state based on result
+      if (deps.taskRegistry) {
+        const terminalStatus = result.status === 'failed' ? TaskStatus.failed : TaskStatus.completed;
+        Object.assign(turnTask, { status: terminalStatus, updatedAt: Date.now(), completedAt: Date.now() });
+        deps.taskRegistry.update(turnTask.id, turnTask);
+      }
       lastPrUrl = result.prUrl ?? lastPrUrl;
 
       if (result.status === 'failed') {

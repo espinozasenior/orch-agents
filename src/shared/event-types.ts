@@ -208,6 +208,34 @@ export type AgentPromptedEvent = DomainEvent<
 >;
 
 // ---------------------------------------------------------------------------
+// Harness observability events (P0/P3 integration)
+// ---------------------------------------------------------------------------
+
+export type CompactionTriggeredEvent = DomainEvent<
+  'CompactionTriggered',
+  { tier: 'pipeline' | 'reactive'; tokensBefore: number; tokensAfter: number; execId: string }
+>;
+
+export type BudgetContinuationEvent = DomainEvent<
+  'BudgetContinuation',
+  { pct: number; tokens: number; continuationCount: number; execId: string }
+>;
+
+// ---------------------------------------------------------------------------
+// Task backbone events (P6)
+// ---------------------------------------------------------------------------
+
+export type TaskOutputDeltaEvent = DomainEvent<
+  'TaskOutputDelta',
+  { taskId: string; delta: string; offset: number }
+>;
+
+export type TaskNotifiedEvent = DomainEvent<
+  'TaskNotified',
+  { taskId: string; status: string }
+>;
+
+// ---------------------------------------------------------------------------
 // Union of all domain event types
 // ---------------------------------------------------------------------------
 
@@ -242,7 +270,11 @@ export type AnyDomainEvent =
   | AgentCompletedEvent
   | AgentFailedEvent
   | AgentCancelledEvent
-  | AgentPromptedEvent;
+  | AgentPromptedEvent
+  | CompactionTriggeredEvent
+  | BudgetContinuationEvent
+  | TaskOutputDeltaEvent
+  | TaskNotifiedEvent;
 
 // ---------------------------------------------------------------------------
 // Event type string literals for use with the event bus
@@ -286,4 +318,8 @@ export interface DomainEventMap {
   AgentFailed: AgentFailedEvent;
   AgentCancelled: AgentCancelledEvent;
   AgentPrompted: AgentPromptedEvent;
+  CompactionTriggered: CompactionTriggeredEvent;
+  BudgetContinuation: BudgetContinuationEvent;
+  TaskOutputDelta: TaskOutputDeltaEvent;
+  TaskNotified: TaskNotifiedEvent;
 }

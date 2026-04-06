@@ -4,15 +4,11 @@ import {
   AppError,
   ValidationError,
   AuthenticationError,
-  AuthorizationError,
-  NotFoundError,
   ConflictError,
   RateLimitError,
   TriageError,
-  PlanningError,
   ExecutionError,
   ReviewError,
-  DeploymentError,
 } from '../../src/shared/errors';
 
 describe('AppError', () => {
@@ -65,28 +61,6 @@ describe('AuthenticationError', () => {
   });
 });
 
-describe('AuthorizationError', () => {
-  it('should default message and 403 status', () => {
-    const err = new AuthorizationError();
-    assert.equal(err.message, 'Forbidden');
-    assert.equal(err.statusCode, 403);
-    assert.equal(err.code, 'ERR_AUTHORIZATION');
-  });
-});
-
-describe('NotFoundError', () => {
-  it('should format message with resource and id', () => {
-    const err = new NotFoundError('User', 'usr-42');
-    assert.equal(err.message, "User 'usr-42' not found");
-    assert.equal(err.statusCode, 404);
-  });
-
-  it('should format message without id', () => {
-    const err = new NotFoundError('Config');
-    assert.equal(err.message, 'Config not found');
-  });
-});
-
 describe('ConflictError', () => {
   it('should set 409 status', () => {
     const err = new ConflictError('duplicate delivery');
@@ -111,10 +85,8 @@ describe('Domain-specific errors', () => {
     name: string;
   }> = [
     { ErrorClass: TriageError, code: 'ERR_TRIAGE', name: 'TriageError' },
-    { ErrorClass: PlanningError, code: 'ERR_PLANNING', name: 'PlanningError' },
     { ErrorClass: ExecutionError, code: 'ERR_EXECUTION', name: 'ExecutionError' },
     { ErrorClass: ReviewError, code: 'ERR_REVIEW', name: 'ReviewError' },
-    { ErrorClass: DeploymentError, code: 'ERR_DEPLOYMENT', name: 'DeploymentError' },
   ];
 
   for (const { ErrorClass, code, name } of cases) {

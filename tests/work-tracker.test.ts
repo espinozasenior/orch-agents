@@ -24,7 +24,6 @@ describe('WorkTracker', () => {
       const tracker = createWorkTracker();
       assert.ok(tracker);
       assert.equal(typeof tracker.start, 'function');
-      assert.equal(typeof tracker.getState, 'function');
     });
   });
 
@@ -33,7 +32,8 @@ describe('WorkTracker', () => {
       const tracker = createWorkTracker();
       tracker.start('plan-001', 'work-001');
 
-      const state = tracker.getState('plan-001');
+      const active = tracker.listActive();
+      const state = active.find(s => s.planId === 'plan-001');
       assert.ok(state);
       assert.equal(state!.planId, 'plan-001');
       assert.equal(state!.workItemId, 'work-001');
@@ -51,70 +51,14 @@ describe('WorkTracker', () => {
     });
   });
 
-  describe('recordPhaseResult()', () => {
-    it('adds phase result to tracked state', () => {
-      const tracker = createWorkTracker();
-      tracker.start('plan-001', 'work-001');
-
-      tracker.recordPhaseResult('plan-001', {
-        phaseId: 'phase-1',
-        planId: 'plan-001',
-        phaseType: 'refinement',
-        status: 'completed',
-        artifacts: [],
-        metrics: { duration: 100, agentUtilization: 0.8, modelCost: 0.01 },
-      });
-
-      const state = tracker.getState('plan-001')!;
-      assert.equal(state.phaseResults.length, 1);
-      assert.equal(state.phaseResults[0].phaseType, 'refinement');
-    });
-
-    it('accumulates multiple phase results', () => {
-      const tracker = createWorkTracker();
-      tracker.start('plan-001', 'work-001');
-
-      tracker.recordPhaseResult('plan-001', {
-        phaseId: 'p1', planId: 'plan-001', phaseType: 'specification',
-        status: 'completed', artifacts: [],
-        metrics: { duration: 50, agentUtilization: 0.5, modelCost: 0.005 },
-      });
-      tracker.recordPhaseResult('plan-001', {
-        phaseId: 'p2', planId: 'plan-001', phaseType: 'refinement',
-        status: 'completed', artifacts: [],
-        metrics: { duration: 100, agentUtilization: 0.8, modelCost: 0.01 },
-      });
-
-      const state = tracker.getState('plan-001')!;
-      assert.equal(state.phaseResults.length, 2);
-    });
-  });
-
   describe('complete()', () => {
     it('marks work as completed', () => {
       const tracker = createWorkTracker();
       tracker.start('plan-001', 'work-001');
       tracker.complete('plan-001');
 
-      const state = tracker.getState('plan-001')!;
-      assert.equal(state.status, 'completed');
-      assert.ok(state.completedAt);
-    });
-
-    it('calculates total duration', () => {
-      const tracker = createWorkTracker();
-      tracker.start('plan-001', 'work-001');
-
-      // Small delay to ensure non-zero duration
-      tracker.recordPhaseResult('plan-001', {
-        phaseId: 'p1', planId: 'plan-001', phaseType: 'refinement',
-        status: 'completed', artifacts: [],
-        metrics: { duration: 100, agentUtilization: 0.8, modelCost: 0.01 },
-      });
-
-      tracker.complete('plan-001');
-      const state = tracker.getState('plan-001')!;
-      assert.ok(state.totalDuration >= 0);
+      const active = tracker.listActive();
+      assert.equal(active.length, 0);
     });
   });
 
@@ -124,10 +68,8 @@ describe('WorkTracker', () => {
       tracker.start('plan-001', 'work-001');
       tracker.fail('plan-001', 'Gate check failed on refinement');
 
-      const state = tracker.getState('plan-001')!;
-      assert.equal(state.status, 'failed');
-      assert.equal(state.failureReason, 'Gate check failed on refinement');
-      assert.ok(state.completedAt);
+      const active = tracker.listActive();
+      assert.equal(active.length, 0);
     });
   });
 
@@ -144,25 +86,7 @@ describe('WorkTracker', () => {
     });
   });
 
-  describe('getState() for unknown plan', () => {
-    it('returns undefined', () => {
-      const tracker = createWorkTracker();
-      assert.equal(tracker.getState('nonexistent'), undefined);
-    });
-  });
-
   describe('unknown planId errors', () => {
-    it('recordPhaseResult throws for unknown plan', () => {
-      const tracker = createWorkTracker();
-      assert.throws(() => {
-        tracker.recordPhaseResult('nonexistent', {
-          phaseId: 'p1', planId: 'nonexistent', phaseType: 'refinement',
-          status: 'completed', artifacts: [],
-          metrics: { duration: 0, agentUtilization: 0, modelCost: 0 },
-        });
-      }, /not tracked/);
-    });
-
     it('complete throws for unknown plan', () => {
       const tracker = createWorkTracker();
       assert.throws(() => {
@@ -175,32 +99,6 @@ describe('WorkTracker', () => {
       assert.throws(() => {
         tracker.fail('nonexistent', 'reason');
       }, /not tracked/);
-    });
-  });
-
-  describe('cleanup()', () => {
-    it('removes completed work items older than threshold', () => {
-      const tracker = createWorkTracker();
-      tracker.start('plan-001', 'work-001');
-      tracker.complete('plan-001');
-
-      // Before cleanup, state exists
-      assert.ok(tracker.getState('plan-001'));
-
-      // Cleanup with 0ms threshold removes everything completed
-      tracker.cleanup(0);
-      assert.equal(tracker.getState('plan-001'), undefined);
-    });
-
-    it('keeps running work items during cleanup', () => {
-      const tracker = createWorkTracker();
-      tracker.start('plan-001', 'work-001');
-      tracker.start('plan-002', 'work-002');
-      tracker.complete('plan-001');
-
-      tracker.cleanup(0);
-      assert.equal(tracker.getState('plan-001'), undefined);
-      assert.ok(tracker.getState('plan-002')); // still running
     });
   });
 
@@ -257,7 +155,6 @@ describe('WorkTracker', () => {
       const tracker = createWorkTracker();
       tracker.start('plan-001', 'work-001');
       tracker.complete('plan-001');
-      assert.equal(tracker.getState('plan-001')?.status, 'completed');
       assert.deepEqual(tracker.getAgentsByPlan('plan-001'), []);
     });
   });

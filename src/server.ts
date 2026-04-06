@@ -19,6 +19,7 @@ import type { IntakeEvent } from './types';
 import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 import type { LinearAuthStrategy } from './integration/linear/linear-client';
 import type { OAuthTokenStore } from './integration/linear/oauth-token-store';
+import type { OAuthTokenPersistence } from './integration/linear/oauth-token-persistence';
 
 export interface ServerDependencies {
   config: AppConfig;
@@ -33,6 +34,8 @@ export interface ServerDependencies {
   oauthTokenStore?: OAuthTokenStore;
   /** Linear client for Agent Activity emission in webhook handler. */
   linearClient?: import('./integration/linear/linear-client').LinearClient;
+  /** Token persistence for cleanup on OAuth revocation. */
+  tokenPersistence?: OAuthTokenPersistence;
 }
 
 /**
@@ -79,6 +82,7 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
       eventBus: deps.eventBus,
       onLinearIntake: deps.onLinearIntake,
       linearClient: deps.linearClient,
+      tokenPersistence: deps.tokenPersistence,
     });
     logger.info('Linear webhook route registered', { path: '/webhooks/linear' });
   }

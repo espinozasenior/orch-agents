@@ -89,7 +89,9 @@ describe('WorkflowParser', () => {
     const config = parseWorkflowMdString(VALID_WORKFLOW);
 
     assert.equal(config.tracker.kind, 'linear');
-    assert.equal(config.tracker.apiKey, 'test-api-key-123');
+    // $LINEAR_API_KEY is a secret and is NOT in the safe env allowlist,
+    // so it resolves to empty string. The app falls back to config.linearApiKey.
+    assert.equal(config.tracker.apiKey, '');
     assert.equal(config.tracker.team, 'my-team');
     assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
     assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
@@ -220,11 +222,25 @@ Prompt here.
     assert.ok(config.promptTemplate.includes('{{ issue.description }}'));
   });
 
-  it('should resolve environment variables in string values', () => {
-    process.env.LINEAR_API_KEY = 'resolved-key';
+  it('should resolve safe environment variables in string values', () => {
+    process.env.LINEAR_TEAM = 'resolved-team';
+    const teamWorkflow = VALID_WORKFLOW.replace('team: my-team', 'team: $LINEAR_TEAM');
+    const config = parseWorkflowMdString(teamWorkflow);
+
+    assert.equal(config.tracker.team, 'resolved-team');
+    delete process.env.LINEAR_TEAM;
+  });
+
+  it('should NOT resolve secret environment variables (allowlist enforcement)', () => {
+    // SECRET env vars like LINEAR_API_KEY, ANTHROPIC_API_KEY, GITHUB_TOKEN
+    // must NOT be resolvable via WORKFLOW.md env substitution
+    process.env.LINEAR_API_KEY = 'secret-key-should-not-resolve';
+    process.env.ANTHROPIC_API_KEY = 'another-secret';
     const config = parseWorkflowMdString(VALID_WORKFLOW);
 
-    assert.equal(config.tracker.apiKey, 'resolved-key');
+    // $LINEAR_API_KEY is blocked → resolves to empty string
+    assert.equal(config.tracker.apiKey, '');
+    delete process.env.ANTHROPIC_API_KEY;
   });
 
   it('should resolve missing env vars to empty string', () => {

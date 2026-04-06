@@ -188,7 +188,14 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
     state.elapsedMs = Date.now() - Date.parse(state.startedAt);
 
     const content = buildWorkpadComment(state);
-    await postOrUpdateWorkpad(linearClient, issueId, content, logger);
+
+    // Prefer Agent Activity API (posts as the app/bot actor).
+    // Fall back to comment API only when no agent session is available.
+    if (agentSessionId) {
+      await emitActivity({ type: 'response', body: content });
+    } else {
+      await postOrUpdateWorkpad(linearClient, issueId, content, logger);
+    }
   }
 
   return {

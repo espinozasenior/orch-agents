@@ -317,9 +317,32 @@ function validatePromptTemplate(body: string): void {
   }
 }
 
+/**
+ * Allowlist of environment variable names that may be substituted in WORKFLOW.md.
+ * Prevents leaking sensitive secrets (API keys, tokens) if an attacker controls
+ * WORKFLOW.md content. Only non-secret, configuration-level variables are allowed.
+ */
+export const WORKFLOW_SAFE_ENV_VARS = new Set([
+  // Runtime / system
+  'NODE_ENV', 'HOME', 'USER', 'TMPDIR', 'TMP', 'TEMP', 'PATH',
+  // Project-level config (non-secret)
+  'LINEAR_TEAM', 'LINEAR_TEAM_ID', 'LINEAR_ENABLED',
+  'GITHUB_OWNER', 'GITHUB_REPO',
+  'WEBHOOK_PORT', 'LOG_LEVEL',
+  'BOT_USERNAME',
+  'WORKSPACE_ROOT',
+  // Claude Flow feature flags
+  'CLAUDE_FLOW_V3_ENABLED', 'CLAUDE_FLOW_HOOKS_ENABLED',
+]);
+
 function resolveEnvInValue(value: unknown): unknown {
   if (typeof value === 'string') {
-    return value.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_match, varName) => process.env[varName] ?? '');
+    return value.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_match, varName) => {
+      if (!WORKFLOW_SAFE_ENV_VARS.has(varName)) {
+        return '';
+      }
+      return process.env[varName] ?? '';
+    });
   }
   if (Array.isArray(value)) {
     return value.map((entry) => resolveEnvInValue(entry));
