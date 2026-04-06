@@ -392,8 +392,8 @@ agents:
     );
   });
 
-  it('should throw when agents.routing.default is missing', () => {
-    const bad = `---
+  it('falls back to coordinator when agents.routing.default is missing (Option C step 2b)', () => {
+    const config = parseWorkflowMdString(`---
 templates:
   quick-fix:
     - .claude/agents/core/coder.md
@@ -404,13 +404,22 @@ tracker:
 
 agents:
   routing:
-    bug: tdd-workflow
+    bug: quick-fix
 ---
-`;
-    assert.throws(
-      () => parseWorkflowMdString(bad),
-      (err: Error) => err instanceof WorkflowParseError && err.message.includes('routing.default'),
-    );
+`);
+    assert.equal(config.agents.defaultTemplate, 'coordinator');
+  });
+
+  it('parses successfully when templates: section is absent (Option C step 2b)', () => {
+    const config = parseWorkflowMdString(`---
+tracker:
+  kind: linear
+  team: my-team
+---
+`);
+    assert.deepEqual(config.templates, {});
+    assert.equal(config.agents.defaultTemplate, 'coordinator');
+    assert.deepEqual(config.agents.routing, {});
   });
 
   it('should handle quoted values', () => {
@@ -480,8 +489,12 @@ agents:
     assert.equal(config.promptTemplate, '');
   });
 
-  it('should reject unknown routed templates', () => {
-    const bad = `---
+  it('warns but does not throw on unknown routed templates (Option C step 2b)', () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: string) => { warnings.push(msg); };
+    try {
+      const config = parseWorkflowMdString(`---
 templates:
   quick-fix:
     - .claude/agents/core/coder.md
@@ -496,12 +509,16 @@ agents:
     bug: missing-template
 ---
 Prompt here.
-`;
-
-    assert.throws(
-      () => parseWorkflowMdString(bad),
-      (err: Error) => err instanceof WorkflowParseError && err.message.includes('unknown template'),
-    );
+`);
+      assert.equal(config.agents.defaultTemplate, 'quick-fix');
+      assert.equal(config.agents.routing.bug, 'missing-template');
+      assert.ok(
+        warnings.some((w) => w.includes('missing-template')),
+        'expected warning about unknown template',
+      );
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   // ---------------------------------------------------------------------------

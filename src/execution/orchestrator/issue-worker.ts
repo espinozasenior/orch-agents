@@ -16,7 +16,7 @@ import type { LinearIssueResponse } from '../../integration/linear/linear-client
 import { createLinearClient } from '../../integration/linear/linear-client';
 import { createLinearToolBridge } from '../../integration/linear/linear-client';
 import { createOAuthTokenStore } from '../../integration/linear/oauth-token-store';
-import { createSimpleExecutor } from '../simple-executor';
+import { createLocalAgentTaskExecutor } from '../../tasks/local-agent';
 import { createWorktreeManager } from '../workspace/worktree-manager';
 import { createArtifactApplier } from '../workspace/artifact-applier';
 import { createSdkExecutor } from '../runtime/sdk-executor';
@@ -225,7 +225,12 @@ async function main(): Promise<void> {
       );
     },
     executeTurn: async (plan, intakeEvent, handle) => {
-      const persistentExecutor = createSimpleExecutor({
+      // Option C step 2b (PR B): coordinator-only dispatch via LocalAgentTask.
+      // The persistent worktree handle is wired via a shim worktreeManager so
+      // LocalAgentTask reuses the worker-thread workspace across turns
+      // instead of creating/disposing per call. Dispose is a no-op so the
+      // workspace survives until the worker lifecycle releases it.
+      const localAgentTask = createLocalAgentTaskExecutor({
         interactiveExecutor,
         worktreeManager: {
           create: async () => handle,
@@ -241,7 +246,7 @@ async function main(): Promise<void> {
         agentTimeoutMs: data.workflowConfig.agentRunner.turnTimeoutMs,
       });
 
-      return persistentExecutor.execute(plan, intakeEvent);
+      return localAgentTask.execute(plan, intakeEvent);
     },
     defaultRepo: data.resolvedRepo?.name ?? data.defaultRepo,
     defaultBranch: effectiveBranch,

@@ -174,14 +174,16 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
   }
 
   const team = readString(tracker.team, 'tracker.team');
-  const templates = readTemplates(document.templates);
-  const routing = readRouting(document.agents);
-  const defaultTemplate = routing.default;
-  if (!defaultTemplate) {
-    throw new WorkflowParseError('agents.routing.default is required');
-  }
+  // Option C step 2b (PR B): templates and routing are now fully optional.
+  // The worker thread no longer reads templates (coordinator-only dispatch),
+  // and the main-thread engine ignored them since PR A. We still parse them
+  // when present for normalizer metadata, but a missing/empty templates:
+  // section is no longer an error and routing validation is best-effort.
+  const templates = readTemplatesOptional(document.templates);
+  const routing = readRoutingOptional(document.agents);
+  const defaultTemplate = routing.default ?? 'coordinator';
   delete routing.default;
-  validateTemplateRouting(templates, routing, defaultTemplate);
+  validateTemplateRoutingPermissive(templates, routing, defaultTemplate);
 
   const workspace = asOptionalRecord(document.workspace);
   const hooks = asOptionalRecord(document.hooks);
@@ -294,7 +296,13 @@ function buildGitHubConfig(github: unknown): WorkflowConfig['github'] | undefine
   return Object.keys(normalized).length > 0 ? { events: normalized } : undefined;
 }
 
-function readTemplates(value: unknown): Record<string, string[]> {
+function readTemplatesOptional(value: unknown): Record<string, string[]> {
+  // Option C step 2b: templates: section is fully optional. If absent or
+  // empty, return an empty map and let downstream callers fall back to
+  // coordinator mode.
+  if (value === undefined || value === null) {
+    return {};
+  }
   const templates = asRecord(value, 'templates');
   const normalized = Object.fromEntries(
     Object.entries(templates).map(([templateName, members]) => {
@@ -307,35 +315,49 @@ function readTemplates(value: unknown): Record<string, string[]> {
       throw new WorkflowParseError(`templates.${templateName} must be a string or string[]`);
     }),
   );
-
-  if (Object.keys(normalized).length === 0) {
-    throw new WorkflowParseError('templates section must define at least one template');
-  }
-
   return normalized;
 }
 
-function readRouting(value: unknown): Record<string, string> {
-  const agents = asRecord(value, 'agents');
+function readRoutingOptional(value: unknown): Record<string, string> {
+  // agents: section itself is still parsed when present, but agents.routing
+  // is now optional. Returns an empty map when absent.
+  if (value === undefined || value === null) {
+    return {};
+  }
+  const agents = asOptionalRecord(value);
+  if (!agents || agents.routing === undefined || agents.routing === null) {
+    return {};
+  }
   const routing = asRecord(agents.routing, 'agents.routing');
   return Object.fromEntries(
     Object.entries(routing).map(([route, templateName]) => [route, readString(templateName, `agents.routing.${route}`)]),
   );
 }
 
-function validateTemplateRouting(
+function validateTemplateRoutingPermissive(
   templates: Record<string, string[]>,
   routing: Record<string, string>,
   defaultTemplate: string,
 ): void {
+  // Option C step 2b: routing references to unknown templates emit a
+  // best-effort warning but never throw. If templates: is empty, all
+  // routing entries are treated as observability metadata only.
   const templateNames = new Set(Object.keys(templates));
-  if (!templateNames.has(defaultTemplate)) {
-    throw new WorkflowParseError(`agents.routing.default references unknown template '${defaultTemplate}'`);
+  if (templateNames.size === 0) {
+    return;
   }
-
+  if (defaultTemplate !== 'coordinator' && !templateNames.has(defaultTemplate)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `WORKFLOW.md agents.routing.default references unknown template '${defaultTemplate}' — falling back to 'coordinator' at dispatch time.`,
+    );
+  }
   for (const [route, templateName] of Object.entries(routing)) {
     if (!templateNames.has(templateName)) {
-      throw new WorkflowParseError(`agents.routing.${route} references unknown template '${templateName}'`);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `WORKFLOW.md agents.routing.${route} references unknown template '${templateName}' — coordinator mode will be used at dispatch time.`,
+      );
     }
   }
 }
