@@ -72,35 +72,6 @@ export class AuthenticationError extends AppError {
   }
 }
 
-export class AuthorizationError extends AppError {
-  constructor(message = 'Forbidden', options: { cause?: unknown } = {}) {
-    super(message, {
-      code: 'ERR_AUTHORIZATION',
-      statusCode: 403,
-      isOperational: true,
-      cause: options.cause,
-    });
-    this.name = 'AuthorizationError';
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Not-found error
-// ---------------------------------------------------------------------------
-
-export class NotFoundError extends AppError {
-  constructor(resource: string, id?: string, options: { cause?: unknown } = {}) {
-    const msg = id ? `${resource} '${id}' not found` : `${resource} not found`;
-    super(msg, {
-      code: 'ERR_NOT_FOUND',
-      statusCode: 404,
-      isOperational: true,
-      cause: options.cause,
-    });
-    this.name = 'NotFoundError';
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Conflict error (duplicate delivery, idempotency)
 // ---------------------------------------------------------------------------
@@ -152,18 +123,6 @@ export class TriageError extends AppError {
   }
 }
 
-export class PlanningError extends AppError {
-  constructor(message: string, options: { cause?: unknown } = {}) {
-    super(message, {
-      code: 'ERR_PLANNING',
-      statusCode: 500,
-      isOperational: true,
-      cause: options.cause,
-    });
-    this.name = 'PlanningError';
-  }
-}
-
 export class ExecutionError extends AppError {
   constructor(message: string, options: { cause?: unknown } = {}) {
     super(message, {
@@ -188,59 +147,3 @@ export class ReviewError extends AppError {
   }
 }
 
-export class SwarmError extends AppError {
-  constructor(message: string, options: { cause?: unknown } = {}) {
-    super(message, {
-      code: 'ERR_SWARM',
-      statusCode: 500,
-      isOperational: true,
-      cause: options.cause,
-    });
-    this.name = 'SwarmError';
-  }
-}
-
-export class AgentSpawnError extends AppError {
-  constructor(message: string, options: { cause?: unknown } = {}) {
-    super(message, {
-      code: 'ERR_AGENT_SPAWN',
-      statusCode: 500,
-      isOperational: true,
-      cause: options.cause,
-    });
-    this.name = 'AgentSpawnError';
-  }
-}
-
-export class AgentTimeoutError extends AppError {
-  public readonly agentId: string;
-  /** All agent IDs that were still pending at timeout. */
-  public readonly pendingAgentIds: string[];
-
-  constructor(agentId: string, timeoutMs: number, pendingAgentIds?: string[]) {
-    const ids = pendingAgentIds ?? [agentId];
-    const msg = ids.length > 1
-      ? `${ids.length} agents timed out after ${timeoutMs}ms: ${ids.join(', ')}`
-      : `Agent ${agentId} timed out after ${timeoutMs}ms`;
-    super(msg, {
-      code: 'ERR_AGENT_TIMEOUT',
-      statusCode: 500,
-      isOperational: true,
-    });
-    this.name = 'AgentTimeoutError';
-    this.agentId = agentId;
-    this.pendingAgentIds = ids;
-  }
-}
-
-export class DeploymentError extends AppError {
-  constructor(message: string, options: { cause?: unknown } = {}) {
-    super(message, {
-      code: 'ERR_DEPLOYMENT',
-      statusCode: 500,
-      isOperational: true,
-      cause: options.cause,
-    });
-    this.name = 'DeploymentError';
-  }
-}

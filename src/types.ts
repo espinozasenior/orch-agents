@@ -85,18 +85,6 @@ export interface WorkflowPlan {
   maxAgents?: number;
   /** @deprecated Kept for backward compat with prompt-builder / fix-it-loop. */
   methodology?: string;
-  /** @deprecated Kept for backward compat. */
-  topology?: string;
-  /** @deprecated Kept for backward compat. */
-  swarmStrategy?: string;
-  /** @deprecated Kept for backward compat. */
-  consensus?: string;
-  /** @deprecated Kept for backward compat. */
-  phases?: PlannedPhase[];
-  /** @deprecated Kept for backward compat. */
-  estimatedDuration?: number;
-  /** @deprecated Kept for backward compat. */
-  estimatedCost?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,18 +122,13 @@ export interface ReviewVerdict {
 // Agent types
 // ---------------------------------------------------------------------------
 
-export interface PlannedPhase {
-  type: SPARCPhase;
-  agents: string[];
-  gate: string;
-  skippable: boolean;
-}
-
 export interface PlannedAgent {
   role: string;
   type: string;
   tier: 1 | 2 | 3;
   required: boolean;
+  /** Explicit subagent type. When omitted and fork is eligible, FORK_AGENT is used. */
+  subagentType?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,14 +155,6 @@ export interface Finding {
 // Artifact Execution Layer types
 // ---------------------------------------------------------------------------
 
-export type ArtifactKind = 'analysis' | 'code-patch' | 'new-file' | 'test' | 'pr-comment' | 'commit';
-
-export interface CodeArtifactMetadata {
-  path: string;
-  diff?: string;
-  commitSha?: string;
-}
-
 export interface WorktreeHandle {
   planId: string;
   path: string;
@@ -200,18 +175,6 @@ export interface ApplyResult {
   changedFiles: string[];
   rejectionReason?: string;
 }
-
-export interface FixItAttempt {
-  attempt: number;
-  findings: Finding[];
-  feedback: string;
-  commitSha?: string;
-}
-
-/**
- * FixItResult is canonically defined in execution/fix-it-loop.ts (richer version with history).
- * Import from there instead of duplicating here.
- */
 
 // ---------------------------------------------------------------------------
 // Agent Execution Tracking (Dorothy streaming layer)
