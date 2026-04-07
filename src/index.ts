@@ -183,11 +183,17 @@ async function main(): Promise<void> {
     const maxFixAttempts = (isNaN(parsedAttempts) || parsedAttempts < 1 || parsedAttempts > 10) ? 3 : parsedAttempts;
 
     const worktreeManager = createWorktreeManager({ logger: execLogger, basePath: worktreeBasePath });
+    // P12: deferred-tool registry — built-ins (Read/Edit/Write/Bash/Grep/Glob/Agent)
+    // and the ToolSearch meta-tool registered as alwaysLoad.
+    const { createDefaultDeferredToolRegistry } = await import('./services/deferred-tools');
+    const deferredToolRegistry = createDefaultDeferredToolRegistry();
     const baseExecutor = createSdkExecutor({
       logger: execLogger,
       // P11: pass eventBus so WorkCancelled domain events abort in-flight
       // SDK executions via the stop-hook → AbortController bridge.
       eventBus,
+      // P12: feed the registry so allowedTools is computed from it.
+      deferredToolRegistry,
     });
 
     // Apply harness enhancements: P0 compaction + P3 budget + P1 query loop + P2 coordinator

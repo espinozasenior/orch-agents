@@ -109,12 +109,18 @@ async function main(): Promise<void> {
   const workerEventBus = createEventBus(logger);
   const workerWorkItemId = data.issue.identifier;
 
+  // P12: deferred-tool registry — same defaults as main thread.
+  const { createDefaultDeferredToolRegistry } = await import('../../services/deferred-tools');
+  const deferredToolRegistry = createDefaultDeferredToolRegistry();
+
   const interactiveExecutor = createSdkExecutor({
     logger,
     eventSink: (payload) => parentPort?.postMessage(payload),
     linearToolBridge: linearClient ? createLinearToolBridge(linearClient) : undefined,
     // P11: WorkCancelled → AbortController bridge
     eventBus: workerEventBus,
+    // P12: feed the registry so allowedTools is computed from it.
+    deferredToolRegistry,
   });
 
   // Phase 7F: Inbound message channel — listen for prompted + stop messages
