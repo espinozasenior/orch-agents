@@ -18,7 +18,7 @@ import { createTask, TaskType } from '../task/index';
 import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
 import { createDomainEvent } from '../../shared/event-bus';
-import type { LocalAgentTaskExecutor } from '../../tasks/local-agent';
+import type { CoordinatorDispatcher } from '../coordinator-dispatcher';
 import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import { createWorkTracker } from './work-tracker';
 import type { GitHubClient } from '../../integration/github-client';
@@ -38,9 +38,9 @@ export interface ExecutionEngineDeps {
    * CC-aligned coordinator dispatch path. Wired to BOTH the IntakeCompleted
    * and AgentPrompted handlers as of Option C step 2 (PR A). All main-thread
    * dispatches now route through LocalAgentTask in coordinator mode.
-   * See src/tasks/local-agent/LocalAgentTask.ts.
+   * See src/execution/coordinator-dispatcher.ts.
    */
-  localAgentTask: LocalAgentTaskExecutor;
+  localAgentTask: CoordinatorDispatcher;
   workflowConfig: WorkflowConfig;
   githubClient?: GitHubClient;
   linearClient?: LinearClient;

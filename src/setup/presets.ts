@@ -9,54 +9,19 @@ import type {
   SetupConfig, PresetKey, AgentToggle, EventToggle,
   TopologyChoice, ConsensusChoice, StrategyChoice,
 } from './types';
-import { getDefaultRegistry, createAgentRegistry, type AgentRegistry } from '../agent-registry';
 
 // ---------------------------------------------------------------------------
-// Agent type discovery from .claude/agents/**/*.md (via AgentRegistry)
+// Agent type list (static fallback — replaces former AgentRegistry discovery)
 // ---------------------------------------------------------------------------
 
-const FALLBACK_AGENT_TYPES = [
+export const FALLBACK_AGENT_TYPES = [
   'architect', 'coder', 'researcher', 'reviewer',
   'security-architect', 'tester',
 ];
 
-/**
- * Discover agent types by scanning .claude/agents/ Markdown frontmatter.
- * Falls back to hardcoded list if no agents are found.
- *
- * @param agentsDirOrRegistry - path to agents dir (for backward compat) or AgentRegistry instance
- */
-export function discoverAgentTypes(agentsDirOrRegistry?: string | AgentRegistry): string[] {
-  // Support legacy callers that pass a directory path
-  if (typeof agentsDirOrRegistry === 'string') {
-    const registry = createAgentRegistry({ agentsDir: agentsDirOrRegistry });
-    const names = registry.getNames();
-    return names.length > 0 ? names : [...FALLBACK_AGENT_TYPES];
-  }
-
-  const registry = agentsDirOrRegistry ?? getDefaultRegistry();
-  const names = registry.getNames();
-  return names.length > 0 ? names : [...FALLBACK_AGENT_TYPES];
-}
-
-let _cachedAgentTypes: string[] | undefined;
-
-/**
- * Get available agent types (cached after first call).
- * Discovers from .claude/agents/ via AgentRegistry.
- */
+/** Static list of agent types used by setup wizard + presets. */
 export function getAgentTypes(): string[] {
-  if (!_cachedAgentTypes) {
-    _cachedAgentTypes = discoverAgentTypes();
-  }
-  return _cachedAgentTypes;
-}
-
-/**
- * Reset cached agent types (for testing).
- */
-export function resetAgentTypesCache(): void {
-  _cachedAgentTypes = undefined;
+  return [...FALLBACK_AGENT_TYPES];
 }
 
 /** @deprecated Use getAgentTypes() for dynamic discovery */

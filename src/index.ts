@@ -17,8 +17,7 @@ import { createReviewGate, createStubDiffReviewer, createCliTestRunner, createPa
 import { createClaudeDiffReviewer } from './review/claude-diff-reviewer';
 import { createGitHubClient } from './integration/github-client';
 import { isAbsolute as pathIsAbsolute } from 'node:path';
-import { createLocalAgentTaskExecutor, type LocalAgentTaskExecutor } from './tasks/local-agent';
-import { getDefaultRegistry } from './agent-registry/agent-registry';
+import { createCoordinatorDispatcher, type CoordinatorDispatcher } from './execution/coordinator-dispatcher';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import { resolve as pathResolve } from 'node:path';
 import { createGitHubAppTokenProvider, type GitHubTokenProvider } from './integration/github-app-auth';
@@ -164,7 +163,7 @@ async function main(): Promise<void> {
   // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
   const useInteractiveAgents = process.env.ENABLE_INTERACTIVE_AGENTS === 'true';
 
-  let localAgentTask: LocalAgentTaskExecutor | undefined;
+  let localAgentTask: CoordinatorDispatcher | undefined;
   let reviewGate: ReturnType<typeof createReviewGate> | undefined;
   let symphonyOrchestrator: SymphonyOrchestrator | undefined;
   let workpadReporter: WorkpadReporter | undefined;
@@ -248,11 +247,10 @@ async function main(): Promise<void> {
 
     // Wire LocalAgentTask (CC-aligned coordinator dispatch — IntakeCompleted + AgentPrompted).
     // Mirrors src/tasks/LocalAgentTask/ in Claude Code's codebase.
-    localAgentTask = createLocalAgentTaskExecutor({
+    localAgentTask = createCoordinatorDispatcher({
       interactiveExecutor,
       worktreeManager,
       artifactApplier,
-      agentRegistry: getDefaultRegistry(),
       githubClient,
       linearClient,
       logger: execLogger,

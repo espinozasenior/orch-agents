@@ -25,42 +25,6 @@ import type { PlannedAgent } from '../../src/types';
 import type { SetupConfig, AgentToggle, EventToggle } from '../../src/setup/types';
 
 // ---------------------------------------------------------------------------
-// Agent discovery
-// ---------------------------------------------------------------------------
-
-describe('discoverAgentTypes', () => {
-  it('discovers agent types from .claude/agents/ Markdown files', () => {
-    const { discoverAgentTypes } = require('../../src/setup/presets');
-    const types = discoverAgentTypes();
-    // Should find agents from .claude/agents/ via AgentRegistry
-    assert.ok(types.includes('coder'), 'should find coder');
-    assert.ok(types.includes('tester'), 'should find tester');
-    assert.ok(types.includes('reviewer'), 'should find reviewer');
-    assert.ok(types.includes('architect'), 'should find architect');
-    assert.ok(types.includes('security-architect'), 'should find security-architect');
-    // Should be sorted for deterministic UI (localeCompare)
-    const sorted = [...types].sort((a, b) => a.localeCompare(b));
-    assert.deepEqual(types, sorted, 'agent types should be sorted');
-  });
-
-  it('returns fallback list when agents/ directory does not exist', () => {
-    const { discoverAgentTypes } = require('../../src/setup/presets');
-    // Call with a non-existent directory
-    const types = discoverAgentTypes('/tmp/nonexistent-agents-dir-' + Date.now());
-    assert.ok(types.length > 0, 'should return fallback list');
-    assert.ok(types.includes('coder'), 'fallback should include coder');
-  });
-
-  it('getAgentTypes returns discovered types (not just hardcoded)', () => {
-    const { getAgentTypes } = require('../../src/setup/presets');
-    const types = getAgentTypes();
-    // Must include the on-disk agents
-    assert.ok(types.includes('architect'), 'should include architect from disk');
-    assert.ok(types.length >= 5, 'should have at least 5 agent types');
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Presets
 // ---------------------------------------------------------------------------
 

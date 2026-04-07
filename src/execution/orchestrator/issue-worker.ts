@@ -16,12 +16,11 @@ import type { LinearIssueResponse } from '../../integration/linear/linear-client
 import { createLinearClient } from '../../integration/linear/linear-client';
 import { createLinearToolBridge } from '../../integration/linear/linear-client';
 import { createOAuthTokenStore } from '../../integration/linear/oauth-token-store';
-import { createLocalAgentTaskExecutor } from '../../tasks/local-agent';
+import { createCoordinatorDispatcher } from '../coordinator-dispatcher';
 import { createWorktreeManager } from '../workspace/worktree-manager';
 import { createArtifactApplier } from '../workspace/artifact-applier';
 import { createSdkExecutor } from '../runtime/sdk-executor';
 import { createEventBus, createDomainEvent } from '../../shared/event-bus';
-import { getDefaultRegistry } from '../../agent-registry/agent-registry';
 import { createGitHubClient } from '../../integration/github-client';
 import { createGitHubAppTokenProvider } from '../../integration/github-app-auth';
 import { buildWorkpadComment, syncPersistentWorkpadComment } from '../../integration/linear/workpad-reporter';
@@ -236,7 +235,7 @@ async function main(): Promise<void> {
       // LocalAgentTask reuses the worker-thread workspace across turns
       // instead of creating/disposing per call. Dispose is a no-op so the
       // workspace survives until the worker lifecycle releases it.
-      const localAgentTask = createLocalAgentTaskExecutor({
+      const localAgentTask = createCoordinatorDispatcher({
         interactiveExecutor,
         worktreeManager: {
           create: async () => handle,
@@ -246,7 +245,6 @@ async function main(): Promise<void> {
           dispose: async () => {},
         },
         artifactApplier,
-        agentRegistry: getDefaultRegistry(),
         githubClient,
         logger,
         agentTimeoutMs: data.workflowConfig.agentRunner.turnTimeoutMs,
