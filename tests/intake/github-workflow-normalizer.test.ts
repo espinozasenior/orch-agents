@@ -72,7 +72,6 @@ function makeWorkflowConfig(overrides?: Partial<WorkflowConfig>): WorkflowConfig
         'push.default_branch': '.claude/skills/cicd/SKILL.md',
         'issues.labeled.bug': '.claude/skills/bug-fix/SKILL.md',
       },
-      default: '.claude/skills/general-intake/SKILL.md',
     },
     agents: { maxConcurrent: 8, routing: {}, defaultTemplate: 'coordinator' },
     agent: { maxConcurrentAgents: 8, maxRetryBackoffMs: 0, maxTurns: 20 },
@@ -139,20 +138,9 @@ describe('normalizeGitHubEventFromWorkflow (P20)', () => {
     assert.equal(result.sourceMetadata.skillPath, '.claude/skills/cicd/SKILL.md');
   });
 
-  it('falls back to github.default when no rule matches', () => {
+  it('returns null for unmapped events — explicit-only routing', () => {
     const parsed = makeParsed({ eventType: 'star', action: 'created', branch: null });
-    const result = normalizeGitHubEventFromWorkflow(parsed, makeWorkflowConfig());
-    assert.ok(result);
-    assert.equal(result.sourceMetadata.skillPath, '.claude/skills/general-intake/SKILL.md');
-    assert.equal(result.sourceMetadata.ruleKey, 'default');
-  });
-
-  it('returns null when no rule matches and no default', () => {
-    const config = makeWorkflowConfig({
-      github: { events: { 'pull_request.opened': '.claude/skills/x/SKILL.md' } },
-    });
-    const parsed = makeParsed({ eventType: 'star', action: 'created', branch: null });
-    assert.equal(normalizeGitHubEventFromWorkflow(parsed, config), null);
+    assert.equal(normalizeGitHubEventFromWorkflow(parsed, makeWorkflowConfig()), null);
   });
 
   it('returns null when github section is absent', () => {
@@ -227,8 +215,9 @@ describe('normalizeGitHubEventFromWorkflow (P20)', () => {
     });
     const config = makeWorkflowConfig({
       github: {
-        events: {},
-        default: '.claude/skills/general-intake/SKILL.md',
+        events: {
+          issue_comment: '.claude/skills/mentions/SKILL.md',
+        },
       },
     });
     const result = normalizeGitHubEventFromWorkflow(parsed, config);

@@ -2,9 +2,9 @@
  * P20: Skill Resolver.
  *
  * Resolves a webhook event to a skill markdown file (path + frontmatter + body).
- * Routing source of truth: WORKFLOW.md `github.events` (and optional
- * `github.default`). Path is the identifier — no name indexing, no registry,
- * no caching.
+ * Routing source of truth: WORKFLOW.md `github.events`. Explicit-only — unmapped
+ * events return null (no default / catch-all). Path is the identifier — no name
+ * indexing, no registry, no caching.
  *
  * - `resolvePath` is pure (no I/O); used by the normalizer.
  * - `resolveByPath` performs a single readFileSync; used by execution-engine.
@@ -159,7 +159,13 @@ export interface SkillResolver {
   ): ResolvedSkill | null;
 }
 
-/** Pure path lookup — no I/O. */
+/**
+ * Pure path lookup — no I/O. Explicit routes only: returns null when no
+ * WORKFLOW.md `github.events` entry matches. The operator decides what flows
+ * through the pipeline by editing the events map; anything else is silently
+ * ignored at the normalizer layer (no IntakeEvent, no worktree, no coordinator
+ * cycle). No default / catch-all fallback by design.
+ */
 export function resolvePath(
   parsed: ParsedGitHubEvent,
   config: WorkflowConfig,
@@ -171,10 +177,6 @@ export function resolvePath(
     if (typeof relPath === 'string' && relPath.length > 0) {
       return { relPath, ruleKey };
     }
-  }
-  const fallback = config.github?.default;
-  if (typeof fallback === 'string' && fallback.length > 0) {
-    return { relPath: fallback, ruleKey: 'default' };
   }
   return null;
 }

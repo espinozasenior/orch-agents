@@ -26,7 +26,7 @@ The routing decision, the behavioral instructions, and the context-fetching logi
 - `WORKFLOW.md` `github.events` map becomes the single source of truth for routing: each webhook event key maps to a **relative file path** pointing at a skill file.
 - Each skill file is a markdown file with YAML frontmatter (`context-fetchers`, plus CC-native optional fields `description`, `when-to-use`, `allowed-tools`) and a prose body containing specific instructions for that kind of work.
 - The coordinator reads the resolved skill's body and runs the skill's declared `context-fetchers` before dispatch, composing the enriched prompt inline.
-- A `default:` fallback under `github:` handles events that don't have an explicit mapping.
+- Explicit-only routing: events without an entry in `github.events` are silently skipped at the normalizer (no IntakeEvent, no worktree, no coordinator cycle). No default / catch-all by design — operators opt every event in by declaring it.
 - Vestigial `deriveIntent` / `WorkIntent` enum / template-name strings all get deleted.
 
 The design mirrors ingress route tables: routing in config (WORKFLOW.md), behavior in content (skill files), code stays dumb.
@@ -41,19 +41,18 @@ functional_requirements:
     acceptance_criteria:
       - "Example: pull_request.opened: .claude/skills/github-ops/SKILL.md"
       - "workflow-parser already reads github.events as Record<string, string> — no parser shape change"
-      - "An optional top-level default: string field under github: is added and parsed"
       - "Paths resolve relative to repo root, NOT to a fixed .claude/skills/ directory (differs from CC-native skill scanning, which is hardcoded to that location)"
-      - "Existing workflow-parser tests still pass after the optional field is wired"
+      - "No github.default / catch-all field. Explicit-only routing by design — unmapped events are silently skipped at the normalizer, no IntakeEvent emitted"
 
   - id: "FR-P20-002"
     description: "New src/intake/skill-resolver.ts (~50 LOC) directly resolves a skill for a webhook event"
     priority: "critical"
     acceptance_criteria:
-      - "Exports resolveSkillForEvent(parsed, config, repoRoot): ResolvedSkill | null — used by normalizer to compute the path (does NOT read the file body itself; see resolvePath below)"
-      - "Exports resolvePath(parsed, config): string | null — pure path lookup; config.github.events[ruleKey] ?? config.github.default"
+      - "Exports resolveSkillForEvent(parsed, config, repoRoot): ResolvedSkill | null — convenience composition of the two primitives below"
+      - "Exports resolvePath(parsed, config): {relPath, ruleKey} | null — pure lookup. Returns the first matching entry from config.github.events in candidate priority order, or null if nothing matches. No default / fallback."
       - "Exports resolveByPath(relPath, repoRoot): ResolvedSkill | null — single readFileSync + parseFrontmatter, used by execution-engine"
       - "Returns {path, frontmatter, body} or null if path missing or file does not exist"
-      - "NO registry. NO scanning. NO indexing. NO caching."
+      - "NO registry. NO scanning. NO indexing. NO caching. NO default fallback."
       - "Normalizer calls resolvePath only (no I/O); execution-engine calls resolveByPath once per dispatch"
 
   - id: "FR-P20-003"
@@ -62,7 +61,7 @@ functional_requirements:
     acceptance_criteria:
       - "parseRuleKey builds keys like pull_request.opened, issues.labeled.bug, push.default_branch"
       - "buildRuleKeyCandidates(parsed): string[] emits candidate keys in priority order — event.action.condition → event.action → event.condition → event. Conditions are derived implicitly from parsed state: `merged`, `changes_requested`, `failure`, `default_branch` / `other`, and every label. This preserves label-based routing (`issues.labeled.bug`) after the deletion of matchGitHubEventRule."
-      - "resolvePath iterates candidates against config.github.events and returns the first hit; falls through to config.github.default if none match"
+      - "resolvePath iterates candidates against config.github.events and returns the first hit, or null when nothing matches (explicit-only routing)"
       - "KNOWN_ACTION_EVENTS constant ports with it"
       - "Existing normalizer tests covering parseRuleKey move to skill-resolver.test.ts"
       - "No duplicate parseRuleKey export remains in github-workflow-normalizer.ts"
@@ -73,7 +72,7 @@ functional_requirements:
     acceptance_criteria:
       - "New optional field: context-fetchers: string[] (fetcher names) — P20 extension, not present in CC-native"
       - "New optional CC-native field: description: string (falls back to first H1 if absent)"
-      - "New optional CC-native field: when-to-use: string (guidance for future model-driven fallback)"
+      - "New optional CC-native field: when-to-use: string (guidance for future model-driven selection)"
       - "New optional CC-native field: allowed-tools: string[] (per-skill tool restriction; aligns with P7 permissions)"
       - "Does NOT add triggers, severity, name, timeoutMs, arguments, model, or agent — out of scope for webhook-routed skills"
       - "Naming convention: frontmatter keys are kebab-case (CC-native); JS/TS identifiers exposed by the parser remain camelCase (e.g. frontmatter['context-fetchers'] → parsed.contextFetchers)"
@@ -139,13 +138,12 @@ functional_requirements:
       - "Same pattern applied in runIssueWorkerLifecycle if IntakeCompleted path is used there"
 
   - id: "FR-P20-010"
-    description: "Two new skill files land with this PR + WORKFLOW.md updated"
+    description: "One new skill file lands with this PR + WORKFLOW.md updated"
     priority: "high"
     acceptance_criteria:
-      - ".claude/skills/github-ops/SKILL.md created (~80 LOC prose, context-fetchers: [gh-pr-view, gh-pr-diff])"
-      - ".claude/skills/general-intake/SKILL.md created (~40 LOC fallback prose)"
-      - "WORKFLOW.md github.events values updated from template names to relative paths"
-      - "WORKFLOW.md github.default: .claude/skills/general-intake/SKILL.md added"
+      - ".claude/skills/github-ops/SKILL.md created (context-fetchers: [gh-pr-view, gh-pr-diff])"
+      - "WORKFLOW.md github.events values updated from template names to relative paths for pull_request.opened / synchronize / ready_for_review"
+      - "Unmapped events (push, issue_comment, workflow_run, etc) are silently skipped — no IntakeEvent emitted, no worktree, no coordinator cycle"
       - "No additional skill files created in this PR"
 ```
 
@@ -156,7 +154,7 @@ non_functional_requirements:
   - id: "NFR-P20-001"
     category: "backward-compatibility"
     description: "github.events shape (Record<string,string>) preserved; only value semantics change"
-    measurement: "workflow-parser tests pass without schema changes beyond adding the optional default field"
+    measurement: "workflow-parser tests pass with no schema changes"
 
   - id: "NFR-P20-002"
     category: "isolation"
@@ -171,7 +169,7 @@ non_functional_requirements:
   - id: "NFR-P20-004"
     category: "reliability"
     description: "Graceful degradation for missing skill files"
-    measurement: "Missing explicit path → fall back to default; missing default → log warning + skip dispatch, no crash"
+    measurement: "Unmapped events → null from resolver → normalizer returns null → no IntakeEvent emitted. Missing skill file (mapped but on disk absent) → execution-engine logs warning + skips dispatch, no crash"
 
   - id: "NFR-P20-005"
     category: "observability"
@@ -190,10 +188,10 @@ constraints:
     - "NO re-implementing parseRuleKey — port the existing one"
 
   scope:
-    - "Do NOT touch workflow-parser.ts beyond adding the optional default field under github:"
+    - "Do NOT touch workflow-parser.ts beyond the github.events parsing (no schema changes)"
     - "Do NOT touch any P6–P13 internal module"
     - "Do NOT migrate the Linear AgentSessionEvent path to skills (out of scope)"
-    - "Do NOT create more than 2 skill files in this PR (github-ops + general-intake)"
+    - "Do NOT create more than 1 skill file in this PR (github-ops only — additional skills ship as follow-up PRs)"
     - "Do NOT delete the github.events block from WORKFLOW.md — update in place"
     - "Total PR scope cap: ~800 LOC including tests + skill files"
 
@@ -216,11 +214,12 @@ use_cases:
       - "coordinatorDispatcher dispatches enriched intake; real PR review posted via `gh pr review`"
 
   - id: "UC-P20-002"
-    title: "Unmapped event falls back to default skill"
+    title: "Unmapped event is silently skipped — no coordinator noise"
     flow:
-      - "issues.labeled.security has no explicit mapping → resolver returns github.default"
-      - "general-intake/SKILL.md dispatched with generic triage instructions"
-      - "Follow-up PR adds security-audit/SKILL.md + WORKFLOW.md entry — zero code changes"
+      - "push on a non-default branch arrives with no explicit rule in github.events"
+      - "resolvePath returns null → normalizer returns null → no IntakeEvent emitted"
+      - "No worktree created, no coordinator cycle, no PR comments. Event is observable only in the webhook-router debug log."
+      - "Follow-up PR adds push.default_branch: .claude/skills/cicd-watch/SKILL.md + the skill file — zero code changes"
 
   - id: "UC-P20-003"
     title: "Operator edits skill prose without restart"
@@ -242,17 +241,18 @@ Feature: Skill-Based Event Routing
     And the IntakeCompleted handler composes skill body + PR view + PR diff into rawText
     And coordinator dispatch receives the enriched intake
 
-  Scenario: Unmapped event falls back to default
-    Given WORKFLOW.md has no explicit entry for issues.labeled.security
-    And github.default is .claude/skills/general-intake/SKILL.md
+  Scenario: Unmapped event is silently skipped
+    Given WORKFLOW.md has no entry matching issues.labeled.security
     When an issues.labeled.security webhook arrives
-    Then the resolver returns the default skill
+    Then resolvePath returns null
+    And the normalizer returns null
+    And no IntakeEvent is published
 
-  Scenario: Missing skill file returns null
+  Scenario: Mapped path points at missing file
     Given WORKFLOW.md maps pull_request.opened to a nonexistent path
-    And no default is configured
     When a pull_request.opened webhook arrives
-    Then the resolver returns null
+    Then resolvePath returns the relPath
+    And resolveByPath returns null
     And execution-engine logs a warning and skips dispatch
 
   Scenario: Context fetcher failure is isolated
@@ -273,7 +273,11 @@ Feature: Skill-Based Event Routing
 ```
 resolveSkillForEvent(parsed, config, repoRoot):
   ruleKey = parseRuleKey(parsed)                        // pull_request.opened, etc.
-  relPath = config.github.events[ruleKey] ?? config.github.default
+  // explicit-only: no default fallback
+  for candidate in buildRuleKeyCandidates(parsed):
+    relPath = config.github.events[candidate]
+    IF relPath: RETURN { relPath, ruleKey: candidate }
+  RETURN null
   IF !relPath: RETURN null
   absPath = path.resolve(repoRoot, relPath)
   IF !existsSync(absPath): RETURN null
@@ -399,9 +403,8 @@ src/integration/linear/
 
 .claude/skills/
   github-ops/SKILL.md            (NEW, ~80 LOC — real PR review instructions)
-  general-intake/SKILL.md        (NEW, ~40 LOC — fallback)
 
-WORKFLOW.md                      (MODIFY — values → paths, add default:)
+WORKFLOW.md                      (MODIFY — values → relative skill paths)
 ```
 
 ### Integration Sequence
@@ -444,7 +447,7 @@ sequenceDiagram
 
 | FR | Test file | Key assertions |
 |----|-----------|----------------|
-| FR-P20-002 | `tests/intake/skill-resolver.test.ts` | map lookup hit; map miss → default; default miss → null; nonexistent file → null; valid skill returns `{path, frontmatter, body}`; path resolution respects `repoRoot` |
+| FR-P20-002 | `tests/intake/skill-resolver.test.ts` | map lookup hit → {relPath, ruleKey}; unmapped event → null (no default fallback); candidate priority order (event.action.condition → event.action → event.condition → event); nonexistent file → null; valid skill returns `{path, frontmatter, body}`; path resolution respects `repoRoot` |
 | FR-P20-003 | `tests/intake/skill-resolver.test.ts` (ported) | `parseRuleKey` — `pull_request.opened`, `issues.labeled.bug`, `push.default_branch`; `KNOWN_ACTION_EVENTS` handling |
 | FR-P20-004 | `tests/shared/frontmatter-parser.test.ts` | `context-fetchers` parsed as string array; `description` / `when-to-use` / `allowed-tools` parsed; absence of all still valid |
 | FR-P20-005 | `tests/intake/context-fetchers.test.ts` | each fetcher happy path; each fetcher error path logs warning + returns ''; parallel execution; unknown fetcher name warns + skips; empty `context-fetchers` returns empty string |
@@ -502,8 +505,8 @@ migration:
   phase_5: "Shrink github-workflow-normalizer (delete deriveIntent/templateToSeverity/matchGitHubEventRule); wire skillResolver dep; LOC ≤130"
   phase_6: "Delete WorkIntent + IntakeEvent.intent from types.ts; add sourceMetadata.skillPath + sourceMetadata.ruleKey; drop Linear import"
   phase_7: "Rewrite execution-engine IntakeCompleted handler (resolve + fetch + compose + dispatch)"
-  phase_8: "Author .claude/skills/github-ops/SKILL.md + general-intake/SKILL.md"
-  phase_9: "Update WORKFLOW.md values to paths; add github.default"
+  phase_8: "Author .claude/skills/github-ops/SKILL.md"
+  phase_9: "Update WORKFLOW.md values to relative skill paths (explicit routes only, no default)"
   phase_10: "Full suite + manual PR smoke test (baseline ~1596 ± 15)"
 ```
 
@@ -525,8 +528,7 @@ completion:
     - "src/execution/orchestrator/execution-engine.ts — IntakeCompleted rewrite composes skill + context"
     - "src/integration/linear/linear-normalizer.ts — drop WorkIntent import"
     - ".claude/skills/github-ops/SKILL.md — real PR review instructions"
-    - ".claude/skills/general-intake/SKILL.md — fallback"
-    - "WORKFLOW.md — values are paths, default: set"
+    - "WORKFLOW.md — github.events values are relative skill paths, explicit-only routing"
 
   test_deliverables:
     - "tests/intake/skill-resolver.test.ts (new, parseRuleKey ported in)"
@@ -560,7 +562,8 @@ completion:
 - **No cache.** The no-cache decision is intentional. Webhook rate is low enough that `readFileSync` is cheap. Cache is speculative optimization and can be added later if a profile shows it matters.
 - **No `triggers` / `severity` / `name` / `timeoutMs` frontmatter.** The user rejected these as load-bearing fields. Routing is centralized in `WORKFLOW.md`; skill files carry `context-fetchers` (P20 extension) plus the CC-native optional fields `description`, `when-to-use`, `allowed-tools`. `timeoutMs` deliberately omitted — rely on token budgets, add later only if profiling demands.
 - **CC-native alignment.** P20 extends the CC-native skill format with two additions: (a) routing via `WORKFLOW.md github.events` paths (CC has no event routing — skills are model-driven via descriptions), and (b) `context-fetchers` for pre-dispatch parallel context loading. All other frontmatter fields use kebab-case per CC convention. File layout (`.claude/skills/<name>/SKILL.md`, capital exact) matches CC. Path resolution differs: P20 resolves relative to repo root (driven by `WORKFLOW.md`), while CC scans a fixed `.claude/skills/` directory.
-- **Two skill files is the MVP.** `github-ops/SKILL.md` (real) and `general-intake/SKILL.md` (fallback). Additional skills — `security-audit`, `bug-fix`, `dependency-update`, etc. — are explicit follow-up work, each a small standalone PR.
+- **One skill file is the MVP.** `github-ops/SKILL.md` handles real PR review. Additional skills — `security-audit`, `bug-fix`, `dependency-update`, `cicd-watch`, etc. — are explicit follow-up work, each a small standalone PR that adds one SKILL.md + one WORKFLOW.md entry.
+- **Explicit-only routing — no default / catch-all by design.** Unmapped events are silently skipped at the normalizer (no IntakeEvent, no worktree, no coordinator cycle). This was validated in production during the phase 10 smoke test: the initial implementation had a `github.default` → `general-intake` fallback which routed every unmapped event (push, issue_comment, workflow_run) through a full worktree + SDK dispatch cycle producing ~10s of noise per event with no actionable output. Ripping the fallback out gives operators explicit control: if you want an event handled, add a route; otherwise it goes nowhere. This is CC-native: declarative, opt-in, no magic catch-alls.
 - **Linear path is NOT migrated.** The Linear `AgentSessionEvent` path already has richer context (issue body + session `promptContext` XML). Migrating it to skills would be speculative. Out of scope.
 - **Depends on PR #17.** The mechanical refactor (coordinator-dispatcher rename + agent-registry deletion + frontmatter-parser move to `src/shared/`) must merge first. This spec assumes that baseline.
 - **Verified — single IntakeCompleted dispatch handler.** Grep on 2026-04-08 shows only `src/execution/orchestrator/execution-engine.ts:72` subscribes `IntakeCompleted` for dispatch. Other subscribers (`triage-engine.ts:103`, `workpad-reporter.ts:205`) are observability/mapping, not dispatch. `runIssueWorkerLifecycle` uses the `AgentPrompted` path (per CLAUDE.md Linear Agent Integration). Phase 7 rewrites a single handler. No duplication.

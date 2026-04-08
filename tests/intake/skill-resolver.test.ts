@@ -147,20 +147,7 @@ describe('resolvePath', () => {
     assert.equal(result?.relPath, '.claude/skills/cicd/SKILL.md');
   });
 
-  it('falls back to github.default when no rule matches', () => {
-    const parsed = makeParsed({ eventType: 'star', action: 'created', branch: null });
-    const config = makeConfig({
-      events: {},
-      default: '.claude/skills/general/SKILL.md',
-    });
-    const result = resolvePath(parsed, config);
-    assert.deepEqual(result, {
-      relPath: '.claude/skills/general/SKILL.md',
-      ruleKey: 'default',
-    });
-  });
-
-  it('returns null when no rule and no default', () => {
+  it('returns null when no rule matches — explicit-only routing', () => {
     const parsed = makeParsed({ eventType: 'star', action: 'created', branch: null });
     const config = makeConfig({ events: {} });
     assert.equal(resolvePath(parsed, config), null);

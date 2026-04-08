@@ -8,13 +8,13 @@ github:
   # P20: values are relative paths to skill files. Behavior lives in the
   # SKILL.md body; context fetchers live in its frontmatter. Add a new route
   # by editing this map — no TypeScript changes required. Events without an
-  # explicit entry fall through to `default`.
-  default: .claude/skills/general-intake/SKILL.md
+  # explicit entry here are silently skipped at the normalizer (no IntakeEvent,
+  # no worktree, no coordinator cycle). Explicit-only routing — no default
+  # catch-all by design.
   events:
     pull_request.opened: .claude/skills/github-ops/SKILL.md
     pull_request.synchronize: .claude/skills/github-ops/SKILL.md
     pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
-    issues.opened: .claude/skills/general-intake/SKILL.md
 
 tracker:
   kind: linear
