@@ -87,12 +87,20 @@ function validateRepo(repo: string): void {
   }
 }
 
-function validatePRNumber(prNumber: number): void {
-  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+function validatePositiveInt(label: string, value: number): void {
+  if (!Number.isInteger(value) || value <= 0) {
     throw new ExecutionError(
-      `Invalid PR number ${prNumber}. Must be a positive integer.`,
+      `Invalid ${label} ${value}. Must be a positive integer.`,
     );
   }
+}
+
+function validatePRNumber(prNumber: number): void {
+  validatePositiveInt('PR number', prNumber);
+}
+
+function validateIssueNumber(issueNumber: number): void {
+  validatePositiveInt('issue number', issueNumber);
 }
 
 function validateBody(body: string): void {
@@ -254,7 +262,7 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
 
     async issueView(repoFullName, issueNumber) {
       validateRepo(repoFullName);
-      validatePRNumber(issueNumber);
+      validateIssueNumber(issueNumber);
       const { stdout } = await run('gh', [
         'issue', 'view', String(issueNumber),
         '--repo', repoFullName,
