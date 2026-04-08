@@ -26,6 +26,8 @@ import type { LinearClient } from '../../integration/linear/linear-client';
 import type { CancellationController } from '../runtime/cancellation-controller';
 import { formatAgentComment, getBotName } from '../../shared/agent-identity';
 import { buildWorkpadComment, postOrUpdateWorkpad } from '../../integration/linear/workpad-reporter';
+import { createSkillResolver, type SkillResolver } from '../../intake/skill-resolver';
+import { fetchContextForSkill } from '../../intake/context-fetchers';
 
 // ---------------------------------------------------------------------------
 // Execution Engine
@@ -46,6 +48,10 @@ export interface ExecutionEngineDeps {
   linearClient?: LinearClient;
   cancellationController?: CancellationController;
   linearExecutionMode?: 'generic' | 'symphony';
+  /** P20: skill resolver for IntakeCompleted dispatch (defaults to filesystem-backed). */
+  skillResolver?: SkillResolver;
+  /** P20: repository root used to resolve relative skill paths from WORKFLOW.md. */
+  repoRoot?: string;
 }
 
 /**
@@ -55,6 +61,8 @@ export interface ExecutionEngineDeps {
  */
 export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
   const { eventBus, logger, localAgentTask, workflowConfig } = deps;
+  const skillResolver = deps.skillResolver ?? createSkillResolver();
+  const repoRoot = deps.repoRoot ?? process.cwd();
   const tracker = createWorkTracker();
   const unsubscribers: Array<() => void> = [];
 
@@ -158,8 +166,52 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       ).catch((err: unknown) => logger.warn('AIG instant feedback failed', { error: String(err) }));
     }
 
+    // P20: resolve the skill, fetch context in parallel, compose enriched intake.
+    let enrichedIntake = intakeEvent;
+    if (intakeEvent.source === 'github') {
+      const skillStart = Date.now();
+      const { skillPath, ruleKey, parsed: parsedGh } = intakeEvent.sourceMetadata ?? {};
+
+      if (!skillPath) {
+        logger.warn('IntakeCompleted has no skillPath — skipping dispatch', {
+          intakeId: intakeEvent.id,
+          ruleKey,
+        });
+        tracker.complete(planId);
+        return;
+      }
+
+      const skill = skillResolver.resolveByPath(skillPath, repoRoot);
+      if (!skill) {
+        logger.warn('Skill file missing or unparseable — skipping dispatch', {
+          intakeId: intakeEvent.id,
+          skillPath,
+          ruleKey,
+        });
+        tracker.complete(planId);
+        return;
+      }
+
+      let fetchedContext = '';
+      if (parsedGh && deps.githubClient) {
+        fetchedContext = await fetchContextForSkill(skill, parsedGh, deps.githubClient, logger);
+      }
+
+      const composedRawText = `${skill.body}\n\n## Trigger Context\n\n${fetchedContext}`;
+      enrichedIntake = { ...intakeEvent, rawText: composedRawText };
+
+      logger.info('Resolved skill for IntakeCompleted', {
+        skillPath,
+        ruleKey,
+        contextFetchers: skill.frontmatter.contextFetchers,
+        bytesInBody: skill.body.length,
+        bytesInContext: fetchedContext.length,
+        durationMs: Date.now() - skillStart,
+      });
+    }
+
     try {
-      const result = await localAgentTask.execute(plan, intakeEvent);
+      const result = await localAgentTask.execute(plan, enrichedIntake);
 
       tracker.complete(planId);
 
@@ -285,8 +337,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       id: randomUUID(),
       timestamp: new Date().toISOString(),
       source: 'linear' as const,
-      sourceMetadata: { agentSessionId, linearIssueId: issueId },
-      intent: 'custom:linear-prompted' as const,
+      sourceMetadata: { agentSessionId, linearIssueId: issueId, intent: 'custom:linear-prompted' },
       entities: { requirementId: issueId, labels: [] as string[] },
       rawText: rawTextParts.join('\n'),
     };

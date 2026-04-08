@@ -324,4 +324,93 @@ describe('GitHubClient', () => {
       );
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // P20: read methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  describe('prView', () => {
+    it('calls gh pr view and returns stdout', async () => {
+      const calls: ExecCall[] = [];
+      const exec: GitHubClientDeps['exec'] = async (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return { stdout: 'PR body text', stderr: '' };
+      };
+      const client = createGitHubClient({ exec });
+      const result = await client.prView('owner/repo', 17);
+      assert.equal(result, 'PR body text');
+      assert.deepEqual(calls[0].args, ['pr', 'view', '17', '--repo', 'owner/repo']);
+    });
+
+    it('validates repo and PR number', async () => {
+      const { exec } = createMockExec();
+      const client = createGitHubClient({ exec });
+      await assert.rejects(() => client.prView('bad', 1), ExecutionError);
+      await assert.rejects(() => client.prView('owner/repo', 0), ExecutionError);
+    });
+
+    it('propagates exec errors', async () => {
+      const client = createGitHubClient({ exec: createFailingExec('boom') });
+      await assert.rejects(() => client.prView('owner/repo', 1), ExecutionError);
+    });
+  });
+
+  describe('prDiff', () => {
+    it('calls gh pr diff and returns stdout', async () => {
+      const calls: ExecCall[] = [];
+      const exec: GitHubClientDeps['exec'] = async (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return { stdout: 'diff --git', stderr: '' };
+      };
+      const client = createGitHubClient({ exec });
+      const result = await client.prDiff('owner/repo', 17);
+      assert.equal(result, 'diff --git');
+      assert.deepEqual(calls[0].args, ['pr', 'diff', '17', '--repo', 'owner/repo']);
+    });
+
+    it('validates inputs', async () => {
+      const { exec } = createMockExec();
+      const client = createGitHubClient({ exec });
+      await assert.rejects(() => client.prDiff('bad', 1), ExecutionError);
+    });
+  });
+
+  describe('issueView', () => {
+    it('calls gh issue view and returns stdout', async () => {
+      const calls: ExecCall[] = [];
+      const exec: GitHubClientDeps['exec'] = async (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return { stdout: 'issue body', stderr: '' };
+      };
+      const client = createGitHubClient({ exec });
+      const result = await client.issueView('owner/repo', 5);
+      assert.equal(result, 'issue body');
+      assert.deepEqual(calls[0].args, ['issue', 'view', '5', '--repo', 'owner/repo']);
+    });
+
+    it('validates inputs', async () => {
+      const { exec } = createMockExec();
+      const client = createGitHubClient({ exec });
+      await assert.rejects(() => client.issueView('owner/repo', 0), ExecutionError);
+    });
+  });
+
+  describe('prChecks', () => {
+    it('calls gh pr checks and returns stdout', async () => {
+      const calls: ExecCall[] = [];
+      const exec: GitHubClientDeps['exec'] = async (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return { stdout: 'check pass', stderr: '' };
+      };
+      const client = createGitHubClient({ exec });
+      const result = await client.prChecks('owner/repo', 17);
+      assert.equal(result, 'check pass');
+      assert.deepEqual(calls[0].args, ['pr', 'checks', '17', '--repo', 'owner/repo']);
+    });
+
+    it('propagates exec errors', async () => {
+      const client = createGitHubClient({ exec: createFailingExec('checks-fail') });
+      await assert.rejects(() => client.prChecks('owner/repo', 1), ExecutionError);
+    });
+  });
 });

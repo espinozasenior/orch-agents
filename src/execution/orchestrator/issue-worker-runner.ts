@@ -486,8 +486,8 @@ export function buildIntakeEvent(params: {
       linearTeamKey: issue.team?.key,
       attempt,
       template: templateName,
+      intent: 'custom:linear-issue',
     },
-    intent: 'custom:linear-issue',
     entities: {
       repo: defaultRepo,
       branch: defaultBranch ?? 'main',

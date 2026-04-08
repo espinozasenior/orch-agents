@@ -95,7 +95,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.source, 'linear');
-    assert.equal(result.intent, 'custom:linear-todo');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-todo');
     assert.equal(result.sourceMetadata.template, 'quick-fix');
     assert.equal(result.sourceMetadata.linearIssueId, 'issue-abc');
     assert.equal(result.sourceMetadata.linearIdentifier, 'ENG-42');
@@ -110,7 +110,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-start');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-start');
     assert.equal(result.entities.severity, 'high'); // priority 2
   });
 
@@ -124,7 +124,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-bug');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-bug');
     assert.equal(result.sourceMetadata.template, 'tdd-workflow');
   });
 
@@ -137,7 +137,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-feature');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-feature');
     assert.equal(result.sourceMetadata.template, 'feature-build');
   });
 
@@ -150,7 +150,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-security');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-security');
     assert.equal(result.sourceMetadata.template, 'security-audit');
     assert.equal(result.entities.severity, 'critical');
   });
@@ -164,7 +164,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-refactor');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-refactor');
     assert.equal(result.sourceMetadata.template, 'sparc-full');
   });
 
@@ -177,7 +177,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-assigned');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-assigned');
     assert.equal(result.sourceMetadata.template, 'quick-fix');
   });
 
@@ -190,7 +190,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-urgent');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-urgent');
     assert.equal(result.entities.severity, 'critical');
   });
 
@@ -275,7 +275,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-todo');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-todo');
   });
 
   // Resilience: "In Progress" renamed to "Doing" still has type "started"
@@ -288,7 +288,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-start');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-start');
   });
 
   // Resilience: "Done" renamed to "Shipped" still has type "completed" → terminal, skip
@@ -313,7 +313,7 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.intent, 'custom:linear-todo');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-todo');
   });
 
   it('should return null when state changed to non-active, non-terminal state', () => {
@@ -348,7 +348,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     // First match: bug
-    assert.equal(result.intent, 'custom:linear-bug');
+    assert.equal(result.sourceMetadata.intent, 'custom:linear-bug');
     assert.equal(result.sourceMetadata.template, 'tdd-workflow');
   });
 

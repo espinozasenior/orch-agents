@@ -32,8 +32,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'intake-1',
     timestamp: new Date().toISOString(),
     source: 'linear',
-    sourceMetadata: { linearIssueId: 'issue-1', agentSessionId: 'session-1' },
-    intent: 'custom:linear-prompted',
+    sourceMetadata: { linearIssueId: 'issue-1', agentSessionId: 'session-1', intent: 'custom:linear-prompted' },
     entities: { requirementId: 'ENG-1', branch: 'main' },
     rawText: 'Investigate the regression in src/foo.ts',
     ...overrides,
@@ -166,7 +165,7 @@ describe('CoordinatorDispatcher', () => {
     executor = buildExecutor();
     await executor.execute(
       makeCoordinatorPlan(),
-      makeIntakeEvent({ intent: 'custom:linear-prompted', rawText: 'Why is the test failing?' }),
+      makeIntakeEvent({ sourceMetadata: { linearIssueId: 'issue-1', agentSessionId: 'session-1', intent: 'custom:linear-prompted' }, rawText: 'Why is the test failing?' }),
     );
 
     const req = (mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.calls[0]
@@ -179,7 +178,7 @@ describe('CoordinatorDispatcher', () => {
     executor = buildExecutor();
     await executor.execute(
       makeCoordinatorPlan(),
-      makeIntakeEvent({ intent: 'review-pr', rawText: 'Review PR #42' }),
+      makeIntakeEvent({ sourceMetadata: { linearIssueId: 'issue-1', intent: 'review-pr' }, rawText: 'Review PR #42' }),
     );
 
     const req = (mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.calls[0]
@@ -193,7 +192,7 @@ describe('CoordinatorDispatcher', () => {
     executor = buildExecutor();
     await executor.execute(
       makeCoordinatorPlan(),
-      makeIntakeEvent({ intent: 'review-pr', rawText: '' }),
+      makeIntakeEvent({ sourceMetadata: { linearIssueId: 'issue-1', intent: 'review-pr' }, rawText: '' }),
     );
 
     const req = (mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.calls[0]

@@ -42,6 +42,14 @@ export interface GitHubClient {
     verdict: 'APPROVE' | 'REQUEST_CHANGES',
     body: string,
   ): Promise<void>;
+  /** P20: Read PR view (`gh pr view`). */
+  prView(repoFullName: string, prNumber: number): Promise<string>;
+  /** P20: Read PR diff (`gh pr diff`). */
+  prDiff(repoFullName: string, prNumber: number): Promise<string>;
+  /** P20: Read issue view (`gh issue view`). */
+  issueView(repoFullName: string, issueNumber: number): Promise<string>;
+  /** P20: Read PR checks (`gh pr checks`). */
+  prChecks(repoFullName: string, prNumber: number): Promise<string>;
 }
 
 export interface PushOpts {
@@ -220,6 +228,48 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
         flag,
         '--body', body,
       ]);
+    },
+
+    // P20: Read methods used by context-fetchers.
+
+    async prView(repoFullName, prNumber) {
+      validateRepo(repoFullName);
+      validatePRNumber(prNumber);
+      const { stdout } = await run('gh', [
+        'pr', 'view', String(prNumber),
+        '--repo', repoFullName,
+      ]);
+      return stdout;
+    },
+
+    async prDiff(repoFullName, prNumber) {
+      validateRepo(repoFullName);
+      validatePRNumber(prNumber);
+      const { stdout } = await run('gh', [
+        'pr', 'diff', String(prNumber),
+        '--repo', repoFullName,
+      ]);
+      return stdout;
+    },
+
+    async issueView(repoFullName, issueNumber) {
+      validateRepo(repoFullName);
+      validatePRNumber(issueNumber);
+      const { stdout } = await run('gh', [
+        'issue', 'view', String(issueNumber),
+        '--repo', repoFullName,
+      ]);
+      return stdout;
+    },
+
+    async prChecks(repoFullName, prNumber) {
+      validateRepo(repoFullName);
+      validatePRNumber(prNumber);
+      const { stdout } = await run('gh', [
+        'pr', 'checks', String(prNumber),
+        '--repo', repoFullName,
+      ]);
+      return stdout;
     },
   };
 }

@@ -34,12 +34,11 @@ describe('DomainEvent type definitions', () => {
           id: 'evt-1',
           timestamp: '2026-01-01T00:00:00Z',
           source: 'github',
-          sourceMetadata: {},
-          intent: 'review-pr',
+          sourceMetadata: { intent: 'review-pr' },
           entities: { repo: 'test/repo', prNumber: 42 },
         },
       });
-      assert.equal(event.payload.intakeEvent.intent, 'review-pr');
+      assert.equal(event.payload.intakeEvent.sourceMetadata.intent, 'review-pr');
       assert.equal(event.payload.intakeEvent.entities.prNumber, 42);
     });
 
@@ -49,8 +48,7 @@ describe('DomainEvent type definitions', () => {
           id: 'evt-1',
           timestamp: '2026-01-01T00:00:00Z',
           source: 'github',
-          sourceMetadata: {},
-          intent: 'triage-issue',
+          sourceMetadata: { intent: 'triage-issue' },
           entities: {},
         },
         triageResult: {

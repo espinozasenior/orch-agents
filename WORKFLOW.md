@@ -5,20 +5,16 @@
 # 4-phase workflow (Research → Synthesis → Implementation → Verification).
 
 github:
+  # P20: values are relative paths to skill files. Behavior lives in the
+  # SKILL.md body; context fetchers live in its frontmatter. Add a new route
+  # by editing this map — no TypeScript changes required. Events without an
+  # explicit entry fall through to `default`.
+  default: .claude/skills/general-intake/SKILL.md
   events:
-    pull_request.opened: github-ops
-    pull_request.synchronize: github-ops
-    pull_request.closed.merged: release-pipeline
-    pull_request.ready_for_review: github-ops
-    push.default_branch: cicd-pipeline
-    issues.opened: github-ops
-    issues.labeled.bug: tdd-workflow
-    issues.labeled.enhancement: feature-build
-    issues.labeled.security: security-audit
-    issue_comment.mentions_bot: quick-fix
-    workflow_run.failure: quick-fix
-    release.published: release-pipeline
-    deployment_status.failure: quick-fix
+    pull_request.opened: .claude/skills/github-ops/SKILL.md
+    pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+    pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+    issues.opened: .claude/skills/general-intake/SKILL.md
 
 tracker:
   kind: linear

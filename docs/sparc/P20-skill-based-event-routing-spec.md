@@ -24,8 +24,8 @@ The routing decision, the behavioral instructions, and the context-fetching logi
 ### 2. Solution
 
 - `WORKFLOW.md` `github.events` map becomes the single source of truth for routing: each webhook event key maps to a **relative file path** pointing at a skill file.
-- Each skill file is a markdown file with YAML frontmatter (`contextFetchers`, optional `timeoutMs`) and a prose body containing specific instructions for that kind of work.
-- The coordinator reads the resolved skill's body and runs the skill's declared `contextFetchers` before dispatch, composing the enriched prompt inline.
+- Each skill file is a markdown file with YAML frontmatter (`context-fetchers`, plus CC-native optional fields `description`, `when-to-use`, `allowed-tools`) and a prose body containing specific instructions for that kind of work.
+- The coordinator reads the resolved skill's body and runs the skill's declared `context-fetchers` before dispatch, composing the enriched prompt inline.
 - A `default:` fallback under `github:` handles events that don't have an explicit mapping.
 - Vestigial `deriveIntent` / `WorkIntent` enum / template-name strings all get deleted.
 
@@ -42,38 +42,45 @@ functional_requirements:
       - "Example: pull_request.opened: .claude/skills/github-ops/SKILL.md"
       - "workflow-parser already reads github.events as Record<string, string> — no parser shape change"
       - "An optional top-level default: string field under github: is added and parsed"
+      - "Paths resolve relative to repo root, NOT to a fixed .claude/skills/ directory (differs from CC-native skill scanning, which is hardcoded to that location)"
       - "Existing workflow-parser tests still pass after the optional field is wired"
 
   - id: "FR-P20-002"
     description: "New src/intake/skill-resolver.ts (~50 LOC) directly resolves a skill for a webhook event"
     priority: "critical"
     acceptance_criteria:
-      - "Exports resolveSkillForEvent(parsed, config, repoRoot): ResolvedSkill | null"
-      - "Lookup order: config.github.events[ruleKey] ?? config.github.default"
-      - "Resolves relative to repoRoot, readFileSync the file, parses frontmatter + body"
+      - "Exports resolveSkillForEvent(parsed, config, repoRoot): ResolvedSkill | null — used by normalizer to compute the path (does NOT read the file body itself; see resolvePath below)"
+      - "Exports resolvePath(parsed, config): string | null — pure path lookup; config.github.events[ruleKey] ?? config.github.default"
+      - "Exports resolveByPath(relPath, repoRoot): ResolvedSkill | null — single readFileSync + parseFrontmatter, used by execution-engine"
       - "Returns {path, frontmatter, body} or null if path missing or file does not exist"
       - "NO registry. NO scanning. NO indexing. NO caching."
+      - "Normalizer calls resolvePath only (no I/O); execution-engine calls resolveByPath once per dispatch"
 
   - id: "FR-P20-003"
     description: "parseRuleKey ports from github-workflow-normalizer.ts to skill-resolver.ts with its tests"
     priority: "high"
     acceptance_criteria:
       - "parseRuleKey builds keys like pull_request.opened, issues.labeled.bug, push.default_branch"
+      - "buildRuleKeyCandidates(parsed): string[] emits candidate keys in priority order — event.action.condition → event.action → event.condition → event. Conditions are derived implicitly from parsed state: `merged`, `changes_requested`, `failure`, `default_branch` / `other`, and every label. This preserves label-based routing (`issues.labeled.bug`) after the deletion of matchGitHubEventRule."
+      - "resolvePath iterates candidates against config.github.events and returns the first hit; falls through to config.github.default if none match"
       - "KNOWN_ACTION_EVENTS constant ports with it"
       - "Existing normalizer tests covering parseRuleKey move to skill-resolver.test.ts"
       - "No duplicate parseRuleKey export remains in github-workflow-normalizer.ts"
 
   - id: "FR-P20-004"
-    description: "src/shared/frontmatter-parser.ts extends with two skill-specific optional fields"
+    description: "src/shared/frontmatter-parser.ts extends with skill-specific optional fields, all kebab-case per CC-native convention"
     priority: "high"
     acceptance_criteria:
-      - "New optional field: contextFetchers: string[] (fetcher names)"
-      - "New optional field: timeoutMs: number (coordinator timeout override)"
-      - "Does NOT add triggers, severity, or name as load-bearing fields — the file path is the identifier"
+      - "New optional field: context-fetchers: string[] (fetcher names) — P20 extension, not present in CC-native"
+      - "New optional CC-native field: description: string (falls back to first H1 if absent)"
+      - "New optional CC-native field: when-to-use: string (guidance for future model-driven fallback)"
+      - "New optional CC-native field: allowed-tools: string[] (per-skill tool restriction; aligns with P7 permissions)"
+      - "Does NOT add triggers, severity, name, timeoutMs, arguments, model, or agent — out of scope for webhook-routed skills"
+      - "Naming convention: frontmatter keys are kebab-case (CC-native); JS/TS identifiers exposed by the parser remain camelCase (e.g. frontmatter['context-fetchers'] → parsed.contextFetchers)"
       - "Backward compatible with existing frontmatter consumers"
 
   - id: "FR-P20-005"
-    description: "New src/intake/context-fetchers.ts (~160 LOC) composes per-skill context fetching"
+    description: "New src/intake/context-fetchers.ts (~80 LOC code) composes per-skill context fetching"
     priority: "critical"
     acceptance_criteria:
       - "Exports CONTEXT_FETCHERS: Record<string, ContextFetcher>"
@@ -87,10 +94,10 @@ functional_requirements:
     description: "src/integration/github-client.ts gains four new read methods"
     priority: "high"
     acceptance_criteria:
-      - "prView(repo, prNumber): Promise<string> wraps `gh pr view`"
-      - "prDiff(repo, prNumber): Promise<string> wraps `gh pr diff`"
-      - "issueView(repo, issueNumber): Promise<string> wraps `gh issue view`"
-      - "prChecks(repo, prNumber): Promise<string> wraps `gh pr checks`"
+      - "prView(repoFullName, prNumber): Promise<string> wraps `gh pr view`"
+      - "prDiff(repoFullName, prNumber): Promise<string> wraps `gh pr diff`"
+      - "issueView(repoFullName, issueNumber): Promise<string> wraps `gh issue view`"
+      - "prChecks(repoFullName, prNumber): Promise<string> wraps `gh pr checks`"
       - "All four reuse existing validateRepo + validatePRNumber input validation"
       - "All four call the existing private run() helper"
       - "~40 LOC code + ~60 LOC tests"
@@ -104,16 +111,18 @@ functional_requirements:
       - "Deleted: matchGitHubEventRule() + matchesCondition() (~80 LOC)"
       - "Moved: parseRuleKey → skill-resolver.ts"
       - "Kept: bot loop prevention, agent-commit filter"
-      - "Emits IntakeEvent with sourceMetadata.skillPath set from skill-resolver"
+      - "Emits IntakeEvent with sourceMetadata.{skillPath, ruleKey, parsed} stamped"
+      - "Calls skillResolver.resolvePath only — never reads the skill file body (that's the execution-engine's job)"
       - "Factory signature gains a skillResolver dependency"
 
   - id: "FR-P20-008"
-    description: "src/types.ts drops WorkIntent; intent becomes a free-form string"
+    description: "src/types.ts drops WorkIntent and IntakeEvent.intent; routing context moves to sourceMetadata"
     priority: "high"
     acceptance_criteria:
       - "WorkIntent union type removed from src/types.ts"
-      - "IntakeEvent.intent: WorkIntent → intent: string (kept for observability/logs)"
+      - "IntakeEvent.intent field DELETED entirely — ruleKey + sourceMetadata already cover observability needs"
       - "IntakeEvent.sourceMetadata.skillPath?: string added"
+      - "IntakeEvent.sourceMetadata.ruleKey?: string added (the resolved routing key, e.g. pull_request.opened)"
       - "src/integration/linear/linear-normalizer.ts drops WorkIntent import; string literals remain"
       - "grep of src/ shows zero WorkIntent references after the change"
 
@@ -123,7 +132,7 @@ functional_requirements:
     acceptance_criteria:
       - "Reads intakeEvent.sourceMetadata.skillPath"
       - "Missing skillPath → log warning + skip dispatch (no crash)"
-      - "Calls resolveSkillForEvent (or reads pre-resolved skill from metadata)"
+      - "Reads the skill file ONCE in this handler (single readFileSync per dispatch); the normalizer only stamps the path, never the body, to keep IntakeEvent payload small"
       - "Runs fetchContextForSkill in parallel before dispatch"
       - "Composes rawText as `${skill.body}\\n\\n## Trigger Context\\n\\n${fetchedContext}`"
       - "Passes enriched intake to coordinatorDispatcher.execute(plan, enrichedIntake)"
@@ -133,7 +142,7 @@ functional_requirements:
     description: "Two new skill files land with this PR + WORKFLOW.md updated"
     priority: "high"
     acceptance_criteria:
-      - ".claude/skills/github-ops/SKILL.md created (~80 LOC prose, contextFetchers: [gh-pr-view, gh-pr-diff])"
+      - ".claude/skills/github-ops/SKILL.md created (~80 LOC prose, context-fetchers: [gh-pr-view, gh-pr-diff])"
       - ".claude/skills/general-intake/SKILL.md created (~40 LOC fallback prose)"
       - "WORKFLOW.md github.events values updated from template names to relative paths"
       - "WORKFLOW.md github.default: .claude/skills/general-intake/SKILL.md added"
@@ -167,7 +176,7 @@ non_functional_requirements:
   - id: "NFR-P20-005"
     category: "observability"
     description: "Every skill resolution logs routing decision metadata"
-    measurement: "Log payload includes {skillPath, ruleKey, contextFetchers, bytesInBody, bytesInContext}"
+    measurement: "Log payload includes {skillPath, ruleKey, contextFetchers, bytesInBody, bytesInContext, durationMs}"
 ```
 
 ### 5. Constraints
@@ -226,7 +235,7 @@ Feature: Skill-Based Event Routing
 
   Scenario: PR opened resolves to github-ops skill and fetches diff
     Given WORKFLOW.md maps pull_request.opened to .claude/skills/github-ops/SKILL.md
-    And the skill declares contextFetchers [gh-pr-view, gh-pr-diff]
+    And the skill declares context-fetchers [gh-pr-view, gh-pr-diff]
     When a pull_request.opened webhook arrives
     Then skill-resolver returns the parsed skill
     And the IntakeEvent sourceMetadata.skillPath is set to that path
@@ -247,15 +256,12 @@ Feature: Skill-Based Event Routing
     And execution-engine logs a warning and skips dispatch
 
   Scenario: Context fetcher failure is isolated
-    Given a skill declares contextFetchers [gh-pr-view, gh-pr-diff]
+    Given a skill declares context-fetchers [gh-pr-view, gh-pr-diff]
     When gh-pr-diff fails
     Then the composed context contains gh-pr-view output
     And the composed context contains an empty section for gh-pr-diff
     And dispatch still proceeds
 
-  Scenario: WorkIntent type is deleted
-    When the codebase is grepped for WorkIntent
-    Then zero references exist in src/
 ```
 
 ---
@@ -280,14 +286,14 @@ resolveSkillForEvent(parsed, config, repoRoot):
 
 ```
 CONTEXT_FETCHERS = {
-  'gh-pr-view':    (p, gh) => gh.prView(p.repo, p.prNumber),
-  'gh-pr-diff':    (p, gh) => gh.prDiff(p.repo, p.prNumber),
-  'gh-issue-view': (p, gh) => gh.issueView(p.repo, p.issueNumber),
-  'gh-pr-checks':  (p, gh) => gh.prChecks(p.repo, p.prNumber),
+  'gh-pr-view':    (p, gh) => gh.prView(p.repoFullName, p.prNumber),
+  'gh-pr-diff':    (p, gh) => gh.prDiff(p.repoFullName, p.prNumber),
+  'gh-issue-view': (p, gh) => gh.issueView(p.repoFullName, p.issueNumber),
+  'gh-pr-checks':  (p, gh) => gh.prChecks(p.repoFullName, p.prNumber),
 }
 
 fetchContextForSkill(skill, parsed, gh, logger):
-  names = skill.frontmatter.contextFetchers ?? []
+  names = skill.frontmatter.contextFetchers ?? []   // parser maps 'context-fetchers' → contextFetchers
   results = await Promise.all(names.map(name =>
     (CONTEXT_FETCHERS[name] ?? warnAndEmpty)(parsed, gh)
       .catch(err => { logger.warn({name, err}); return '' })
@@ -298,34 +304,53 @@ fetchContextForSkill(skill, parsed, gh, logger):
 ### IntakeCompleted handler rewrite
 
 ```
+// dependencies injected at handler construction: skillResolver, contextFetcher, ghClient, config, repoRoot, logger
 onIntakeCompleted(intakeEvent):
+  start    = Date.now()
   skillPath = intakeEvent.sourceMetadata?.skillPath
+  ruleKey   = intakeEvent.sourceMetadata?.ruleKey
+  parsed    = intakeEvent.sourceMetadata?.parsed         // ParsedGitHubEvent stamped by normalizer
   IF !skillPath:
     logger.warn({intakeEvent}, 'no skillPath, skipping dispatch')
     RETURN
-  skill = resolveSkillForEvent(parsed, config, repoRoot)
-  IF !skill: logger.warn(...); RETURN
-  fetchedContext = await fetchContextForSkill(skill, parsed, ghClient, logger)
+  // single readFileSync per dispatch — normalizer stamped path only, never the body
+  skill = skillResolver.resolveByPath(skillPath, repoRoot)
+  IF !skill:
+    logger.warn({skillPath}, 'skill file missing, skipping dispatch')
+    RETURN
+  fetchedContext = await contextFetcher.fetchContextForSkill(skill, parsed, ghClient, logger)
   enriched = { ...intakeEvent, rawText:
     `${skill.body}\n\n## Trigger Context\n\n${fetchedContext}` }
-  logger.info({skillPath, ruleKey, contextFetchers, bytesInBody, bytesInContext})
+  logger.info({
+    skillPath,
+    ruleKey,
+    contextFetchers: skill.frontmatter.contextFetchers ?? [],
+    bytesInBody:    skill.body.length,
+    bytesInContext: fetchedContext.length,
+    durationMs:     Date.now() - start,
+  })
   await coordinatorDispatcher.execute(plan, enriched)
 ```
 
 ### github-workflow-normalizer.ts (shrunk)
 
 ```
-createGitHubNormalizer({ skillResolver, logger, config, repoRoot }):
+createGitHubNormalizer({ skillResolver, logger, config }):
   normalize(webhook):
     IF isBotLoop(webhook): RETURN null
     IF isAgentCommit(webhook): RETURN null
-    parsed = parseGitHubWebhook(webhook)
-    skill = skillResolver.resolve(parsed, config, repoRoot)   // may be null
+    parsed   = parseGitHubWebhook(webhook)
+    ruleKey  = parseRuleKey(parsed)
+    skillPath = skillResolver.resolvePath(parsed, config)     // pure lookup, no I/O
     RETURN {
       ...baseIntake(parsed),
-      intent: parsed.action ?? 'unknown',                     // free-form string
-      sourceMetadata: { ...parsed.meta, skillPath: skill?.path }
-    }
+      sourceMetadata: {
+        ...parsed.meta,
+        skillPath,                                             // string | undefined
+        ruleKey,
+        parsed,                                                // ParsedGitHubEvent for downstream fetchers
+      }
+    }                                                          // no `intent` field — deleted
 ```
 
 ---
@@ -355,16 +380,16 @@ flowchart TD
 ```
 src/intake/
   skill-resolver.ts              (NEW, ~50 LOC) — direct file read, no cache
-  context-fetchers.ts            (NEW, ~160 LOC) — gh-pr-view/diff/issue-view/checks
+  context-fetchers.ts            (NEW, ~80 LOC code) — gh-pr-view/diff/issue-view/checks
   github-workflow-normalizer.ts  (SHRINK from ~351 → ~120 LOC)
 
 src/shared/
-  frontmatter-parser.ts          (EXTEND, +20 LOC — contextFetchers + timeoutMs)
+  frontmatter-parser.ts          (EXTEND, +20 LOC — context-fetchers + description + when-to-use + allowed-tools)
 
 src/integration/
   github-client.ts               (EXTEND, +40 LOC — 4 new read methods)
 
-src/types.ts                     (MODIFY — delete WorkIntent, intent: string, add skillPath)
+src/types.ts                     (MODIFY — delete WorkIntent, delete IntakeEvent.intent, add sourceMetadata.skillPath + sourceMetadata.ruleKey)
 
 src/execution/orchestrator/
   execution-engine.ts            (MODIFY — rewrite IntakeCompleted handler)
@@ -394,12 +419,12 @@ sequenceDiagram
 
     GH->>WR: pull_request.opened
     WR->>NORM: rawWebhook
-    NORM->>SR: resolve(parsed, config, repoRoot)
-    SR->>SR: readFileSync + parseFrontmatter
-    SR-->>NORM: {path, frontmatter, body}
-    NORM-->>EE: IntakeEvent (sourceMetadata.skillPath)
-    EE->>SR: resolveSkillForEvent
-    SR-->>EE: skill
+    NORM->>SR: resolvePath(parsed, config)
+    SR-->>NORM: relPath (no file read)
+    NORM-->>EE: IntakeEvent (sourceMetadata.skillPath + ruleKey + parsed)
+    EE->>SR: resolveByPath(skillPath, repoRoot)
+    SR->>SR: readFileSync + parseFrontmatter (single read per dispatch)
+    SR-->>EE: {path, frontmatter, body}
     EE->>CF: fetchContextForSkill(skill, parsed, gh)
     par parallel
         CF->>GHC: prView
@@ -421,11 +446,11 @@ sequenceDiagram
 |----|-----------|----------------|
 | FR-P20-002 | `tests/intake/skill-resolver.test.ts` | map lookup hit; map miss → default; default miss → null; nonexistent file → null; valid skill returns `{path, frontmatter, body}`; path resolution respects `repoRoot` |
 | FR-P20-003 | `tests/intake/skill-resolver.test.ts` (ported) | `parseRuleKey` — `pull_request.opened`, `issues.labeled.bug`, `push.default_branch`; `KNOWN_ACTION_EVENTS` handling |
-| FR-P20-004 | `tests/shared/frontmatter-parser.test.ts` | `contextFetchers` parsed as string array; `timeoutMs` parsed as number; absence of both still valid |
-| FR-P20-005 | `tests/intake/context-fetchers.test.ts` | each fetcher happy path; each fetcher error path logs warning + returns ''; parallel execution; unknown fetcher name warns + skips; empty `contextFetchers` returns empty string |
+| FR-P20-004 | `tests/shared/frontmatter-parser.test.ts` | `context-fetchers` parsed as string array; `description` / `when-to-use` / `allowed-tools` parsed; absence of all still valid |
+| FR-P20-005 | `tests/intake/context-fetchers.test.ts` | each fetcher happy path; each fetcher error path logs warning + returns ''; parallel execution; unknown fetcher name warns + skips; empty `context-fetchers` returns empty string |
 | FR-P20-006 | `tests/integration/github-client.test.ts` | each new method mocked; validates repo + number; wraps `run()` correctly; error propagation |
 | FR-P20-007 | `tests/intake/github-workflow-normalizer.test.ts` (rewritten) | bot loop prevention still works; agent-commit filter still works; `skillResolver.resolve` is called; IntakeEvent carries `sourceMetadata.skillPath`; no reference to deleted `deriveIntent`/`templateToSeverity` |
-| FR-P20-008 | grep + `tests/types.test.ts` (if exists) | zero `WorkIntent` references in `src/`; `intent: string` at use sites |
+| FR-P20-008 | grep + `tests/types.test.ts` (if exists) | zero `WorkIntent` references in `src/`; zero `IntakeEvent.intent` references; `sourceMetadata.ruleKey` populated by normalizer |
 | FR-P20-009 | `tests/execution/execution-engine.test.ts` | IntakeCompleted reads `sourceMetadata.skillPath`; calls resolver; runs fetchers; composes enriched rawText; dispatches enriched intake; missing skillPath → warn + skip |
 | FR-P20-010 | manual smoke | `gh pr view 17 --repo espinozasenior/orch-agents` triggers `pull_request.synchronize` → real PR review comment posted (not "what task?") |
 
@@ -460,22 +485,22 @@ anti_patterns:
     good: "Port the existing implementation + tests from normalizer"
     enforcement: "git blame shows move, not rewrite"
 
-  - name: "Logging WorkIntent References After Deletion"
-    bad: "logger.info({intent: WorkIntent.ReviewPR})"
-    good: "logger.info({intent: 'review-pr'}) — free-form string"
-    enforcement: "grep WorkIntent returns zero hits in src/"
+  - name: "CC-Native Fields That Don't Apply To Webhook-Routed Skills"
+    bad: "Adding arguments / argument-hint / user-invocable / disable-model-invocation / model / agent to SKILL.md frontmatter"
+    good: "These CC-native fields exist for interactive slash-command skills (CLI argument substitution, user listing, model override). Webhook-routed skills have no user, no CLI args, and inherit the coordinator's model."
+    enforcement: "frontmatter-parser MUST NOT recognize these as load-bearing; reviewers reject PRs that introduce them"
 ```
 
 ### Migration Strategy
 
 ```yaml
 migration:
-  phase_1: "frontmatter-parser: add contextFetchers + timeoutMs (tsc + tests)"
+  phase_1: "frontmatter-parser: add context-fetchers + description + when-to-use + allowed-tools (tsc + tests)"
   phase_2: "github-client: add prView/prDiff/issueView/prChecks (tsc + tests)"
   phase_3: "skill-resolver.ts: create + port parseRuleKey from normalizer (tsc + tests)"
   phase_4: "context-fetchers.ts: registry + parallel + isolation (tsc + tests)"
   phase_5: "Shrink github-workflow-normalizer (delete deriveIntent/templateToSeverity/matchGitHubEventRule); wire skillResolver dep; LOC ≤130"
-  phase_6: "Delete WorkIntent from types.ts; intent: string; add sourceMetadata.skillPath; drop Linear import"
+  phase_6: "Delete WorkIntent + IntakeEvent.intent from types.ts; add sourceMetadata.skillPath + sourceMetadata.ruleKey; drop Linear import"
   phase_7: "Rewrite execution-engine IntakeCompleted handler (resolve + fetch + compose + dispatch)"
   phase_8: "Author .claude/skills/github-ops/SKILL.md + general-intake/SKILL.md"
   phase_9: "Update WORKFLOW.md values to paths; add github.default"
@@ -495,8 +520,8 @@ completion:
     - "src/intake/context-fetchers.ts — parallel gh CLI calls with per-fetcher isolation"
     - "src/integration/github-client.ts — prView / prDiff / issueView / prChecks"
     - "src/intake/github-workflow-normalizer.ts — shrunk from ~351 to ~120 LOC"
-    - "src/shared/frontmatter-parser.ts — contextFetchers + timeoutMs optional fields"
-    - "src/types.ts — WorkIntent deleted, intent: string, sourceMetadata.skillPath added"
+    - "src/shared/frontmatter-parser.ts — context-fetchers + description + when-to-use + allowed-tools optional fields (kebab-case per CC-native)"
+    - "src/types.ts — WorkIntent + IntakeEvent.intent deleted; sourceMetadata.skillPath + sourceMetadata.ruleKey added"
     - "src/execution/orchestrator/execution-engine.ts — IntakeCompleted rewrite composes skill + context"
     - "src/integration/linear/linear-normalizer.ts — drop WorkIntent import"
     - ".claude/skills/github-ops/SKILL.md — real PR review instructions"
@@ -533,9 +558,10 @@ completion:
 - **This is deliberate UI surface design.** Operators edit `WORKFLOW.md` to route, edit `.claude/skills/*.md` to change behavior, and never touch TypeScript for either concern. That separation is the entire point of this PR.
 - **No registry.** The user explicitly rejected a skill registry with name indexing. Routing is path-based; the path in `WORKFLOW.md` is the identifier.
 - **No cache.** The no-cache decision is intentional. Webhook rate is low enough that `readFileSync` is cheap. Cache is speculative optimization and can be added later if a profile shows it matters.
-- **No `triggers` / `severity` / `name` frontmatter.** The user rejected these as load-bearing fields. Routing is centralized in `WORKFLOW.md`; skill files carry only `contextFetchers` and optional `timeoutMs`.
+- **No `triggers` / `severity` / `name` / `timeoutMs` frontmatter.** The user rejected these as load-bearing fields. Routing is centralized in `WORKFLOW.md`; skill files carry `context-fetchers` (P20 extension) plus the CC-native optional fields `description`, `when-to-use`, `allowed-tools`. `timeoutMs` deliberately omitted — rely on token budgets, add later only if profiling demands.
+- **CC-native alignment.** P20 extends the CC-native skill format with two additions: (a) routing via `WORKFLOW.md github.events` paths (CC has no event routing — skills are model-driven via descriptions), and (b) `context-fetchers` for pre-dispatch parallel context loading. All other frontmatter fields use kebab-case per CC convention. File layout (`.claude/skills/<name>/SKILL.md`, capital exact) matches CC. Path resolution differs: P20 resolves relative to repo root (driven by `WORKFLOW.md`), while CC scans a fixed `.claude/skills/` directory.
 - **Two skill files is the MVP.** `github-ops/SKILL.md` (real) and `general-intake/SKILL.md` (fallback). Additional skills — `security-audit`, `bug-fix`, `dependency-update`, etc. — are explicit follow-up work, each a small standalone PR.
 - **Linear path is NOT migrated.** The Linear `AgentSessionEvent` path already has richer context (issue body + session `promptContext` XML). Migrating it to skills would be speculative. Out of scope.
 - **Depends on PR #17.** The mechanical refactor (coordinator-dispatcher rename + agent-registry deletion + frontmatter-parser move to `src/shared/`) must merge first. This spec assumes that baseline.
-- **Open unknown:** whether the `IntakeCompleted` handler inside `runIssueWorkerLifecycle` needs the same rewrite, or whether it bypasses that code path in practice. Will verify during Phase 7 implementation — if it does, the rewrite is duplicated; if not, this note is removed.
-- **Open unknown:** exact `ParsedGitHubEvent` shape used by fetchers — need to confirm `repo`, `prNumber`, `issueNumber` are all already populated by the parser, or whether Phase 4 needs to extend it. Trivial if so, but flagged.
+- **Verified — single IntakeCompleted dispatch handler.** Grep on 2026-04-08 shows only `src/execution/orchestrator/execution-engine.ts:72` subscribes `IntakeCompleted` for dispatch. Other subscribers (`triage-engine.ts:103`, `workpad-reporter.ts:205`) are observability/mapping, not dispatch. `runIssueWorkerLifecycle` uses the `AgentPrompted` path (per CLAUDE.md Linear Agent Integration). Phase 7 rewrites a single handler. No duplication.
+- **Verified — `ParsedGitHubEvent` shape sufficient.** `src/webhook-gateway/event-parser.ts:11` already exposes `eventType`, `action`, `repoFullName`, `prNumber`, `issueNumber`, `branch`, `labels`, `files`, `commentBody`, `reviewState`, `rawPayload`. **Naming note:** field is `repoFullName`, NOT `repo` — pseudocode and FR-P20-006 examples use `repoFullName` accordingly. No Phase 4 parser extension needed.

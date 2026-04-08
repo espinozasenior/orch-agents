@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { IntakeEvent, WorkIntent } from '../../types';
+import type { IntakeEvent } from '../../types';
 import { sanitize } from '../../shared/input-sanitizer';
 import type { LinearWebhookPayload } from './types';
 import type { WorkflowConfig } from './workflow-parser';
@@ -189,7 +189,7 @@ export function normalizeLinearEvent(
     wf.agents.defaultTemplate,
   );
 
-  // Determine intent from template and trigger context
+  // Determine intent label (kept as a sourceMetadata string for observability)
   const intent = buildIntent(template, issue, fields);
 
   // Check if we should process: active state or label/assignee/priority change
@@ -219,8 +219,8 @@ export function normalizeLinearEvent(
       linearUrl: issue.url,
       template,
       previousState: fields,
+      intent,
     },
-    intent: intent as WorkIntent,
     entities: {
       repo: findGitHubRepo(issue) ?? config?.defaultRepo,
       labels: issue.labels?.map((l) => l.name),

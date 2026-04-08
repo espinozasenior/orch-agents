@@ -34,6 +34,8 @@ export interface WorkflowConfig {
   };
   github?: {
     events: Record<string, string>;
+    /** P20: optional fallback skill path used when no event rule matches. */
+    default?: string;
   };
   workspace?: WorkspaceConfig;
   agents: {
@@ -281,19 +283,25 @@ function buildWorkspaceConfig(workspace: Record<string, unknown>): WorkspaceConf
 
 function buildGitHubConfig(github: unknown): WorkflowConfig['github'] | undefined {
   const record = asOptionalRecord(github);
-  const events = asOptionalRecord(record?.events);
-  if (!events) {
-    return undefined;
-  }
+  if (!record) return undefined;
+  const events = asOptionalRecord(record.events);
+  const defaultPath = readOptionalString(record.default);
 
   const normalized: Record<string, string> = {};
-  for (const [key, value] of Object.entries(events)) {
-    if (typeof value === 'string' && value.length > 0) {
-      normalized[key] = value;
+  if (events) {
+    for (const [key, value] of Object.entries(events)) {
+      if (typeof value === 'string' && value.length > 0) {
+        normalized[key] = value;
+      }
     }
   }
 
-  return Object.keys(normalized).length > 0 ? { events: normalized } : undefined;
+  if (Object.keys(normalized).length === 0 && !defaultPath) {
+    return undefined;
+  }
+  const result: WorkflowConfig['github'] = { events: normalized };
+  if (defaultPath) result.default = defaultPath;
+  return result;
 }
 
 function readTemplatesOptional(value: unknown): Record<string, string[]> {

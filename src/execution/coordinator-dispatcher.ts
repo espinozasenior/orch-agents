@@ -160,7 +160,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
 
           // If this is a comment/follow-up, label it clearly so the coordinator
           // knows this is a question about the issue, not a new task
-          if (intakeEvent.intent === ('custom:linear-prompted' as string) && issueDesc) {
+          if (intakeEvent.sourceMetadata.intent === 'custom:linear-prompted' && issueDesc) {
             contextParts.push(
               '## User Comment (follow-up on the issue above)',
               issueDesc,

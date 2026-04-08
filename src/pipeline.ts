@@ -22,6 +22,7 @@ import type { CoordinatorDispatcher } from './execution/coordinator-dispatcher';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import type { GitHubClient } from './integration/github-client';
 import type { LinearClient } from './integration/linear/linear-client';
+import type { SkillResolver } from './intake/skill-resolver';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,6 +42,10 @@ export interface PipelineDeps {
   githubClient?: GitHubClient;
   linearClient?: LinearClient;
   linearExecutionMode?: 'generic' | 'symphony';
+  /** P20 — optional skill resolver override (defaults to filesystem-backed). */
+  skillResolver?: SkillResolver;
+  /** P20 — repository root used to resolve relative skill paths. */
+  repoRoot?: string;
 }
 
 export interface PipelineHandle {
@@ -77,6 +82,8 @@ export function startPipeline(deps: PipelineDeps): PipelineHandle {
     githubClient: deps.githubClient,
     linearClient: deps.linearClient,
     linearExecutionMode: deps.linearExecutionMode,
+    skillResolver: deps.skillResolver,
+    repoRoot: deps.repoRoot,
   });
 
   // Wire review pipeline: WorkCompleted -> ReviewCompleted

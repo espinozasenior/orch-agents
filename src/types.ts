@@ -5,6 +5,8 @@
  * sourced from the architecture document Section 8.3.
  */
 
+import type { ParsedGitHubEvent } from './webhook-gateway/event-parser';
+
 // ---------------------------------------------------------------------------
 // SPARC Phase
 // ---------------------------------------------------------------------------
@@ -17,36 +19,25 @@ export type SPARCPhase =
   | 'completion';
 
 // ---------------------------------------------------------------------------
-// Work Intent (14 known intents from Section 8.1 + custom extensibility)
-// ---------------------------------------------------------------------------
-
-export type WorkIntent =
-  | 'validate-main'
-  | 'validate-branch'
-  | 'review-pr'
-  | 're-review-pr'
-  | 'post-merge'
-  | 'triage-issue'
-  | 'classify-issue'
-  | 'assign-issue'
-  | 'close-issue'
-  | 'respond-comment'
-  | 'process-review'
-  | 'debug-ci'
-  | 'deploy-release'
-  | 'incident-response'
-  | `custom:${string}`;
-
-// ---------------------------------------------------------------------------
 // Intake -> Triage
 // ---------------------------------------------------------------------------
+
+/**
+ * P20: routing metadata stamped onto IntakeEvent.sourceMetadata. The
+ * normalizer fills `skillPath` + `ruleKey` + `parsed`; the execution-engine
+ * reads them on the IntakeCompleted handler.
+ */
+export interface IntakeSourceMetadata extends Record<string, unknown> {
+  skillPath?: string;
+  ruleKey?: string;
+  parsed?: ParsedGitHubEvent;
+}
 
 export interface IntakeEvent {
   id: string;
   timestamp: string;
   source: 'github' | 'linear' | 'client' | 'schedule' | 'system';
-  sourceMetadata: Record<string, unknown>;
-  intent: WorkIntent;
+  sourceMetadata: IntakeSourceMetadata;
   entities: {
     repo?: string;
     branch?: string;

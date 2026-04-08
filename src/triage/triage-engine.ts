@@ -102,7 +102,7 @@ export function startTriageEngine(deps: TriageEngineDeps): () => void {
 
   return eventBus.subscribe('IntakeCompleted', (event) => {
     const intakeEvent = event.payload.intakeEvent;
-    logger.info('Triaging intake event', { eventId: intakeEvent.id, intent: intakeEvent.intent });
+    logger.info('Triaging intake event', { eventId: intakeEvent.id, ruleKey: intakeEvent.sourceMetadata.ruleKey });
 
     try {
       const triageResult = triageEvent(intakeEvent);

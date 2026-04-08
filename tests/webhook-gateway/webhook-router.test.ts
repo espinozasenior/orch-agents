@@ -249,7 +249,7 @@ describe('webhookRouter (integration)', () => {
     assert.ok(receivedEvent, 'IntakeCompleted event should have been published');
     assert.equal(receivedEvent!.type, 'IntakeCompleted');
     assert.equal(receivedEvent!.correlationId, deliveryId);
-    assert.equal(receivedEvent!.payload.intakeEvent.intent, 'review-pr');
+    assert.equal(receivedEvent!.payload.intakeEvent.sourceMetadata.ruleKey, 'pull_request.opened');
     assert.equal(receivedEvent!.payload.intakeEvent.entities.prNumber, 42);
   });
 
@@ -676,7 +676,7 @@ describe('webhookRouter (integration)', () => {
     });
 
     assert.ok(receivedEvent);
-    assert.equal(receivedEvent!.payload.intakeEvent.intent, 'validate-main');
+    assert.equal(receivedEvent!.payload.intakeEvent.sourceMetadata.ruleKey, 'push.default_branch');
   });
 
   it('returns workflow validity, active issue count, retry entries, latest error details, and next refresh timing', async () => {

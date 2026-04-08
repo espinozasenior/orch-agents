@@ -144,7 +144,7 @@ describe('LinearPollingLoop', () => {
     await loop.poll();
     assert.equal(capturedEvents.length, 1);
     assert.equal(capturedEvents[0].payload.intakeEvent.source, 'linear');
-    assert.equal(capturedEvents[0].payload.intakeEvent.intent, 'custom:linear-todo');
+    assert.equal(capturedEvents[0].payload.intakeEvent.sourceMetadata.intent, 'custom:linear-todo');
   });
 
   // AC6: Dedup against webhook events

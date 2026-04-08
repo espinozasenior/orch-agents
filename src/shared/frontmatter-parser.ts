@@ -17,6 +17,18 @@ export interface AgentFrontmatter {
   color: string | null;
   capabilities: string[];
   version: string | null;
+  /** P20: optional list of context fetcher names (kebab-case `context-fetchers`). */
+  contextFetchers: string[];
+  /** P20: optional CC-native field (kebab-case `when-to-use`). */
+  whenToUse: string | null;
+  /** P20: optional CC-native field (kebab-case `allowed-tools`). */
+  allowedTools: string[];
+}
+
+/** P20: a parsed skill markdown file (frontmatter + body). */
+export interface ParsedSkillFile {
+  frontmatter: AgentFrontmatter;
+  body: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +61,31 @@ export function parseFrontmatter(
   return parseSimpleYaml(yamlBlock);
 }
 
+/**
+ * P20: Parse markdown content into `{frontmatter, body}`.
+ *
+ * Returns null if no valid frontmatter block is present. The body is the
+ * content after the closing `---` delimiter, with leading/trailing whitespace
+ * trimmed. Used by the skill-resolver to load `.claude/skills/**\/SKILL.md`.
+ */
+export function parseSkillFile(content: string): ParsedSkillFile | null {
+  if (!content.startsWith('---')) return null;
+  const firstNewline = content.indexOf('\n');
+  if (firstNewline === -1) return null;
+  const endIndex = content.indexOf('\n---', firstNewline);
+  if (endIndex === -1) return null;
+
+  const yamlBlock = content.slice(firstNewline + 1, endIndex);
+  if (yamlBlock.trim() === '') return null;
+
+  const frontmatter = parseSimpleYaml(yamlBlock);
+  // body starts after the closing "\n---" + the rest-of-line newline.
+  const afterClose = content.slice(endIndex + 4);
+  const bodyNewline = afterClose.indexOf('\n');
+  const body = (bodyNewline === -1 ? '' : afterClose.slice(bodyNewline + 1)).trim();
+  return { frontmatter, body };
+}
+
 // ---------------------------------------------------------------------------
 // Simple YAML parser (flat keys + single-level arrays)
 // ---------------------------------------------------------------------------
@@ -61,6 +98,9 @@ function parseSimpleYaml(yaml: string): AgentFrontmatter {
     color: null,
     capabilities: [],
     version: null,
+    contextFetchers: [],
+    whenToUse: null,
+    allowedTools: [],
   };
 
   const lines = yaml.split('\n');
@@ -136,6 +176,16 @@ function assignField(
       break;
     case 'capabilities':
       if (Array.isArray(value)) result.capabilities = value;
+      break;
+    // P20: kebab-case CC-native + skill extension fields.
+    case 'context-fetchers':
+      if (Array.isArray(value)) result.contextFetchers = value;
+      break;
+    case 'when-to-use':
+      if (typeof value === 'string') result.whenToUse = value;
+      break;
+    case 'allowed-tools':
+      if (Array.isArray(value)) result.allowedTools = value;
       break;
   }
 }

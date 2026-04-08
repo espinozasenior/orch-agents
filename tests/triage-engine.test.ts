@@ -24,8 +24,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'test-intake-001',
     timestamp: new Date().toISOString(),
     source: 'github',
-    sourceMetadata: { eventType: 'push', template: 'cicd-pipeline', skipTriage: false },
-    intent: 'validate-main',
+    sourceMetadata: { eventType: 'push', template: 'cicd-pipeline', skipTriage: false, intent: 'validate-main' },
     entities: {
       repo: 'org/repo',
       branch: 'main',

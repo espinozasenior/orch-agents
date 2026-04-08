@@ -16,6 +16,22 @@ import type { EventBus } from '../../src/shared/event-bus';
 import type { DomainEventType } from '../../src/shared/event-types';
 import { createLogger } from '../../src/shared/logger';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
+import type { SkillResolver, ResolvedSkill } from '../../src/intake/skill-resolver';
+
+const STUB_SKILL: ResolvedSkill = {
+  path: '/abs/SKILL.md',
+  body: 'stub body',
+  frontmatter: {
+    name: 'stub', type: null, description: null, color: null,
+    capabilities: [], version: null, contextFetchers: [],
+    whenToUse: null, allowedTools: [],
+  },
+};
+const STUB_RESOLVER: SkillResolver = {
+  resolvePath: () => ({ relPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' }),
+  resolveByPath: () => STUB_SKILL,
+  resolveSkillForEvent: () => STUB_SKILL,
+};
 import type { CoordinatorDispatcher as LocalAgentTaskExecutor, ExecutionResult } from '../../src/execution/coordinator-dispatcher';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
 
@@ -46,8 +62,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'intake-interactive-001',
     timestamp: new Date().toISOString(),
     source: 'github',
-    sourceMetadata: { template: 'github-ops' },
-    intent: 'review-pr',
+    sourceMetadata: { template: 'github-ops', intent: 'review-pr', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
     entities: {
       repo: 'test-org/test-repo',
       branch: 'feature/fix-auth',
@@ -164,6 +179,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     const workCompletedPromise = waitForEvent(eventBus, 'WorkCompleted');
@@ -186,6 +202,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     const reviewPromise = waitForEvent(eventBus, 'ReviewCompleted');
@@ -206,6 +223,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     const triagedPromise = waitForEvent(eventBus, 'WorkTriaged');
@@ -240,6 +258,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
       eventBus, logger,
       localAgentTask: makeRejectingExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     const resultPromise = Promise.race([
@@ -262,6 +281,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     const reviewPromise = waitForEvent(eventBus, 'ReviewCompleted');
@@ -293,6 +313,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     const completedPromise = collectEvents(eventBus, 'WorkCompleted', 2, 8000);
