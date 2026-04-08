@@ -5,11 +5,13 @@
  * All terminal IO goes through the TerminalIO interface for testability.
  */
 
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import type { TerminalIO, SetupConfig, SelectItem, PresetKey, TopologyChoice, ConsensusChoice, StrategyChoice } from './types';
 import { getPresetDefs, applyPreset, getAgentTypes, ALL_EVENT_IDS } from './presets';
 import { singleSelect, multiSelect, numericInput } from './renderer';
 import { loadSetup, saveSetup, formatSummary } from './config-writer';
-import { getDefaultRegistry } from '../agent-registry';
+import { parseFrontmatter } from '../shared/frontmatter-parser';
 
 // ---------------------------------------------------------------------------
 // Wizard entry point
@@ -204,12 +206,44 @@ async function runCustomFlow(
 // Agent descriptions
 // ---------------------------------------------------------------------------
 
-function agentDescription(type: string): string {
-  const registry = getDefaultRegistry();
-  const def = registry.getByName(type);
-  if (def?.description) return def.description;
+// Lazy scan of .claude/agents/**/*.md → name → description map.
+// Inlined here (was previously AgentRegistry) to keep the wizard self-contained.
+let _agentDescCache: Map<string, string> | undefined;
 
-  // Fallback for agents not yet in registry
+function loadAgentDescriptions(): Map<string, string> {
+  if (_agentDescCache) return _agentDescCache;
+  const map = new Map<string, string>();
+  const baseDir = resolve(process.cwd(), '.claude', 'agents');
+  if (existsSync(baseDir)) {
+    const stack: string[] = [baseDir];
+    while (stack.length > 0) {
+      const dir = stack.pop()!;
+      let entries: string[] = [];
+      try { entries = readdirSync(dir); } catch { continue; }
+      for (const entry of entries) {
+        const full = dir + sep + entry;
+        let st;
+        try { st = statSync(full); } catch { continue; }
+        if (st.isDirectory()) {
+          stack.push(full);
+        } else if (entry.endsWith('.md')) {
+          try {
+            const fm = parseFrontmatter(readFileSync(full, 'utf-8'));
+            if (fm?.name && fm.description) map.set(fm.name, fm.description);
+          } catch { /* skip */ }
+        }
+      }
+    }
+  }
+  _agentDescCache = map;
+  return map;
+}
+
+function agentDescription(type: string): string {
+  const fromDisk = loadAgentDescriptions().get(type);
+  if (fromDisk) return fromDisk;
+
+  // Fallback for agents not present on disk
   const descs: Record<string, string> = {
     'coder': 'Writes and modifies code',
     'tester': 'Creates and runs tests',

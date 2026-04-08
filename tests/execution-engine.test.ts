@@ -22,9 +22,9 @@ import {
   startExecutionEngine,
 } from '../src/execution/orchestrator/execution-engine';
 import type {
-  LocalAgentTaskExecutor,
+  CoordinatorDispatcher as LocalAgentTaskExecutor,
   ExecutionResult,
-} from '../src/tasks/local-agent';
+} from '../src/execution/coordinator-dispatcher';
 import type { WorkflowConfig } from '../src/integration/linear/workflow-parser';
 import type { LinearClient } from '../src/integration/linear/linear-client';
 

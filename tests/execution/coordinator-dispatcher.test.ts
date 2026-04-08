@@ -1,29 +1,27 @@
 /**
- * LocalAgentTask — coordinator dispatch tests.
+ * CoordinatorDispatcher tests.
  *
- * Mock-first London School. Verifies the CC-aligned coordinator dispatch
- * path that lives in src/tasks/local-agent/LocalAgentTask.ts. The legacy
- * multi-agent template path remains tested in tests/execution/simple-executor.test.ts.
+ * Mock-first London School. Verifies the coordinator dispatch path
+ * (src/execution/coordinator-dispatcher.ts).
  */
 
 import { describe, it, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  createLocalAgentTaskExecutor,
-  type LocalAgentTaskDeps,
-  type LocalAgentTaskExecutor,
-} from '../../../src/tasks/local-agent';
-import type { WorkflowPlan, IntakeEvent, WorktreeHandle } from '../../../src/types';
-import type { InteractiveTaskExecutor, InteractiveExecutionRequest } from '../../../src/execution/runtime/interactive-executor';
-import type { TaskExecutionResult } from '../../../src/execution/runtime/task-executor';
-import type { WorktreeManager } from '../../../src/execution/workspace/worktree-manager';
-import type { ArtifactApplier, ApplyResult } from '../../../src/execution/workspace/artifact-applier';
-import type { AgentRegistry } from '../../../src/agent-registry/agent-registry';
-import type { GitHubClient } from '../../../src/integration/github-client';
-import type { LinearClient } from '../../../src/integration/linear/linear-client';
-import type { Logger } from '../../../src/shared/logger';
-import { clearTrackedCommits, isAgentCommit } from '../../../src/shared/agent-commit-tracker';
+  createCoordinatorDispatcher,
+  type CoordinatorDispatcherDeps,
+  type CoordinatorDispatcher,
+} from '../../src/execution/coordinator-dispatcher';
+import type { WorkflowPlan, IntakeEvent, WorktreeHandle } from '../../src/types';
+import type { InteractiveTaskExecutor, InteractiveExecutionRequest } from '../../src/execution/runtime/interactive-executor';
+import type { TaskExecutionResult } from '../../src/execution/runtime/task-executor';
+import type { WorktreeManager } from '../../src/execution/workspace/worktree-manager';
+import type { ArtifactApplier, ApplyResult } from '../../src/execution/workspace/artifact-applier';
+import type { GitHubClient } from '../../src/integration/github-client';
+import type { LinearClient } from '../../src/integration/linear/linear-client';
+import type { Logger } from '../../src/shared/logger';
+import { clearTrackedCommits, isAgentCommit } from '../../src/shared/agent-commit-tracker';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -87,7 +85,6 @@ interface Mocks {
   interactiveExecutor: InteractiveTaskExecutor;
   worktreeManager: WorktreeManager;
   artifactApplier: ArtifactApplier;
-  agentRegistry: AgentRegistry;
   githubClient: GitHubClient;
   linearClient: Pick<LinearClient, 'createComment' | 'createAgentActivity'>;
   logger: Logger;
@@ -109,15 +106,6 @@ function createMocks(): Mocks {
       apply: mock.fn(async () => makeAppliedResult()),
       rollback: mock.fn(async () => {}),
     },
-    agentRegistry: {
-      getAll: () => [],
-      getNames: () => [],
-      getByName: mock.fn(() => undefined),
-      getByPath: mock.fn(() => undefined),
-      getByCategory: () => [],
-      has: () => false,
-      refresh: () => {},
-    },
     githubClient: {
       postPRComment: mock.fn(async () => {}),
       postInlineComment: mock.fn(async () => {}),
@@ -136,21 +124,20 @@ function createMocks(): Mocks {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('LocalAgentTask (coordinator dispatch)', () => {
+describe('CoordinatorDispatcher', () => {
   let mocks: Mocks;
-  let executor: LocalAgentTaskExecutor;
+  let executor: CoordinatorDispatcher;
 
   beforeEach(() => {
     mocks = createMocks();
     clearTrackedCommits();
   });
 
-  function buildExecutor(overrides: Partial<LocalAgentTaskDeps> = {}): LocalAgentTaskExecutor {
-    return createLocalAgentTaskExecutor({
+  function buildExecutor(overrides: Partial<CoordinatorDispatcherDeps> = {}): CoordinatorDispatcher {
+    return createCoordinatorDispatcher({
       interactiveExecutor: mocks.interactiveExecutor,
       worktreeManager: mocks.worktreeManager,
       artifactApplier: mocks.artifactApplier,
-      agentRegistry: mocks.agentRegistry,
       githubClient: mocks.githubClient,
       linearClient: mocks.linearClient,
       logger: mocks.logger,
@@ -314,29 +301,6 @@ describe('LocalAgentTask (coordinator dispatch)', () => {
 
     const result = await executor.execute(makeCoordinatorPlan(), makeIntakeEvent());
     assert.equal(result.status, 'completed');
-  });
-
-  // -----------------------------------------------------------------------
-  // Fork eligibility — coordinator mode always blocks fork
-  // -----------------------------------------------------------------------
-
-  it('does not pass forkContextPrefix in coordinator mode (feature gate blocks)', async () => {
-    executor = buildExecutor();
-    await executor.execute(makeCoordinatorPlan(), makeIntakeEvent());
-
-    const req = (mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.calls[0]
-      .arguments[0] as InteractiveExecutionRequest;
-    assert.equal(req.forkContextPrefix, undefined);
-  });
-
-  it('does not include forkAgent metadata in coordinator mode', async () => {
-    executor = buildExecutor();
-    await executor.execute(makeCoordinatorPlan(), makeIntakeEvent());
-
-    const req = (mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.calls[0]
-      .arguments[0] as InteractiveExecutionRequest;
-    assert.equal(req.metadata.forkAgent, undefined);
-    assert.equal(req.metadata.forkModel, undefined);
   });
 
   // -----------------------------------------------------------------------

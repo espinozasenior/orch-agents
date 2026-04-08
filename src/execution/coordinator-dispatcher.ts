@@ -21,64 +21,45 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { WorkflowPlan, IntakeEvent, Finding } from '../../types';
-import type { InteractiveTaskExecutor } from '../../execution/runtime/interactive-executor';
-import type { WorktreeManager } from '../../execution/workspace/worktree-manager';
-import type { ArtifactApplier } from '../../execution/workspace/artifact-applier';
-import type { AgentRegistry } from '../../agent-registry/agent-registry';
-import type { GitHubClient } from '../../integration/github-client';
-import type { LinearClient } from '../../integration/linear/linear-client';
-import type { Logger } from '../../shared/logger';
-import type { EventBus } from '../../shared/event-bus';
-import { createDomainEvent } from '../../shared/event-bus';
-import { formatAgentComment, getBotMarker } from '../../shared/agent-identity';
-import { trackAgentCommit } from '../../shared/agent-commit-tracker';
-import { getCoordinatorSystemPrompt, getCoordinatorUserContext } from '../../coordinator/coordinatorPrompt';
-import {
-  isForkSubagentEnabled,
-  isInForkChild,
-  buildForkConversationMessages,
-  FORK_AGENT,
-  createCompositeAgentRegistry,
-  getDefaultProgrammaticAgents,
-} from '../../agents/fork/index';
-import type { ForkMessage } from '../../agents/fork/index';
-import { recordForkHistory, serializeForkContext } from '../../execution/fork-context';
-import { postAgentResponse, emitThought } from '../../integration/linear/activity-router';
-import { createTask, TaskType, TaskStatus, transition } from '../../execution/task';
-import type { TaskRegistry } from '../../execution/task';
+import type { WorkflowPlan, IntakeEvent, Finding } from '../types';
+import type { InteractiveTaskExecutor } from './runtime/interactive-executor';
+import type { WorktreeManager } from './workspace/worktree-manager';
+import type { ArtifactApplier } from './workspace/artifact-applier';
+import type { GitHubClient } from '../integration/github-client';
+import type { LinearClient } from '../integration/linear/linear-client';
+import type { Logger } from '../shared/logger';
+import type { EventBus } from '../shared/event-bus';
+import { createDomainEvent } from '../shared/event-bus';
+import { formatAgentComment, getBotMarker } from '../shared/agent-identity';
+import { trackAgentCommit } from '../shared/agent-commit-tracker';
+import { getCoordinatorSystemPrompt, getCoordinatorUserContext } from '../coordinator/coordinatorPrompt';
+import { postAgentResponse, emitThought } from '../integration/linear/activity-router';
+import { createTask, TaskType, TaskStatus, transition } from './task';
+import type { TaskRegistry } from './task';
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-export interface LocalAgentTaskDeps {
+export interface CoordinatorDispatcherDeps {
   interactiveExecutor: InteractiveTaskExecutor;
   worktreeManager: WorktreeManager;
   artifactApplier: ArtifactApplier;
-  agentRegistry: AgentRegistry;
   githubClient?: GitHubClient;
   linearClient?: Pick<LinearClient, 'createComment' | 'createAgentActivity'>;
   logger: Logger;
   eventBus?: EventBus;
   agentTimeoutMs?: number;
-  /**
-   * Whether the session is non-interactive. Fork is disabled for
-   * non-interactive sessions (background tasks cannot deliver
-   * task-notifications). Defaults to false.
-   */
-  isNonInteractive?: boolean;
   /** P6: Optional TaskRegistry for task backbone wiring. */
   taskRegistry?: TaskRegistry;
 }
 
-export interface LocalAgentTaskExecutor {
+export interface CoordinatorDispatcher {
   /**
    * Execute a single coordinator-mode plan end-to-end.
    *
    * The plan must contain exactly one agent (the coordinator). Multi-agent
-   * teams are NOT supported by this executor — use SimpleExecutor for the
-   * legacy template path.
+   * teams are NOT supported by this dispatcher.
    */
   execute(plan: WorkflowPlan, intakeEvent: IntakeEvent): Promise<ExecutionResult>;
 }
@@ -89,8 +70,8 @@ export interface ExecutionResult {
   totalDuration: number;
   sessionId?: string;
   lastActivityAt?: string;
-  continuationState?: import('../../execution/runtime/task-executor').TaskExecutionResult['continuationState'];
-  tokenUsage?: import('../../execution/runtime/task-executor').TaskExecutionResult['tokenUsage'];
+  continuationState?: import('./runtime/task-executor').TaskExecutionResult['continuationState'];
+  tokenUsage?: import('./runtime/task-executor').TaskExecutionResult['tokenUsage'];
 }
 
 export interface AgentResult {
@@ -102,8 +83,8 @@ export interface AgentResult {
   duration: number;
   sessionId?: string;
   lastActivityAt?: string;
-  continuationState?: import('../../execution/runtime/task-executor').TaskExecutionResult['continuationState'];
-  tokenUsage?: import('../../execution/runtime/task-executor').TaskExecutionResult['tokenUsage'];
+  continuationState?: import('./runtime/task-executor').TaskExecutionResult['continuationState'];
+  tokenUsage?: import('./runtime/task-executor').TaskExecutionResult['tokenUsage'];
   /** P6: Task ID from the task backbone, when TaskRegistry is wired. */
   taskId?: string;
 }
@@ -112,15 +93,7 @@ export interface AgentResult {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createLocalAgentTaskExecutor(deps: LocalAgentTaskDeps): LocalAgentTaskExecutor {
-  // P8: Composite registry — merge disk-loaded agents with programmatic agents
-  // (e.g., FORK_AGENT). Programmatic agents override disk agents with same key.
-  const programmaticAgents = getDefaultProgrammaticAgents();
-  const compositeAgentRegistry = createCompositeAgentRegistry(
-    new Map(deps.agentRegistry.getAll().map((a) => [a.name, { agentType: a.name, whenToUse: a.description || '', source: 'disk' }])),
-    programmaticAgents,
-  );
-
+export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): CoordinatorDispatcher {
   function emitPhaseCompleted(planId: string, status: 'completed' | 'failed', agentStart: number): void {
     if (!deps.eventBus) return;
     deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
@@ -144,18 +117,6 @@ export function createLocalAgentTaskExecutor(deps: LocalAgentTaskDeps): LocalAge
       // with the worktree creation API and base-branch fallback semantics.
       const lastCommitRef = intakeEvent.entities.branch ?? 'main';
 
-      // Fork context: in coordinator mode the gate always fails, but we
-      // preserve the API surface so future multi-tier composition can reuse
-      // this executor with fork enabled.
-      const forkHistory: ForkMessage[] = [];
-      const isCoordinator = true;
-      const isNonInteractive = deps.isNonInteractive ?? false;
-
-      const forkEnabled = isForkSubagentEnabled(isCoordinator, isNonInteractive);
-      if (forkEnabled && deps.taskRegistry) {
-        deps.logger.info('Fork-enabled: all dispatches forced async', { forkEnabled });
-      }
-
       for (const agent of agents) {
         const agentStart = Date.now();
         let handle: Awaited<ReturnType<WorktreeManager['create']>> | undefined;
@@ -172,7 +133,7 @@ export function createLocalAgentTaskExecutor(deps: LocalAgentTaskDeps): LocalAge
 
         try {
           // P6: Create task before dispatch (when registry is wired)
-          let task: import('../../execution/task/types').Task | undefined;
+          let task: import('./task/types').Task | undefined;
           if (deps.taskRegistry) {
             task = createTask(TaskType.local_agent);
             taskId = task.id;
@@ -214,37 +175,6 @@ export function createLocalAgentTaskExecutor(deps: LocalAgentTaskDeps): LocalAge
 
           const prompt = contextParts.join('\n\n');
 
-          // 3. Fork eligibility — 3-gate pattern (P8: fork runtime wiring).
-          //    In coordinator mode the feature gate always fails, so the
-          //    block-on-coordinator branch always runs. The full ladder is
-          //    preserved for parity and future multi-tier composition.
-          let forkContextPrefix: string | undefined;
-          let isForkPath = false;
-
-          if (!forkEnabled) {
-            deps.logger.debug('Fork blocked: feature disabled', {
-              isCoordinator, isNonInteractive,
-            });
-          } else if (isInForkChild(forkHistory)) {
-            deps.logger.debug('Fork blocked: already in fork child (depth limit)');
-          } else if (forkHistory.length === 0) {
-            deps.logger.debug('Fork skipped: no prior history to inherit');
-          } else {
-            isForkPath = !agent.subagentType
-              && compositeAgentRegistry.has(FORK_AGENT.agentType);
-
-            const forkedMessages = buildForkConversationMessages(forkHistory, prompt);
-            forkContextPrefix = serializeForkContext(forkedMessages);
-
-            deps.logger.info('Fork context applied', {
-              planId: plan.id,
-              agent: agent.type,
-              forkHistoryLength: forkHistory.length,
-              prefixBytes: forkContextPrefix.length,
-              isForkPath,
-            });
-          }
-
           // 4. Emit thought activity before execution (FR-10A.02)
           const agentSessionIdForThought = typeof intakeEvent.sourceMetadata.agentSessionId === 'string'
             ? intakeEvent.sourceMetadata.agentSessionId as string
@@ -275,18 +205,7 @@ export function createLocalAgentTaskExecutor(deps: LocalAgentTaskDeps): LocalAge
               planId: plan.id,
               workItemId: plan.workItemId,
               taskId,
-              // FR-P8-006: Signal forced-async dispatch when fork is enabled
-              ...(forkEnabled && deps.taskRegistry && { forceAsync: true }),
-              // P8: Fork agent properties — when isForkPath, FORK_AGENT
-              // definition applies (model: 'inherit' = parent model reuse,
-              // maxTurns: 200). Downstream executors use these for dispatch.
-              ...(isForkPath && {
-                forkAgent: true,
-                forkModel: FORK_AGENT.model,
-                forkMaxTurns: FORK_AGENT.maxTurns,
-              }),
             },
-            forkContextPrefix,
           });
 
           if (execResult.status === 'failed') {
@@ -366,10 +285,6 @@ export function createLocalAgentTaskExecutor(deps: LocalAgentTaskDeps): LocalAge
               });
             }
           }
-
-          // Record this agent's prompt/response in fork history so future
-          // multi-tier composition can inherit context (P5 fork cache sharing).
-          recordForkHistory(forkHistory, prompt, execResult.output ?? '');
 
           // 9. Post PR/issue comment with work summary
           if (deps.githubClient && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {

@@ -18,7 +18,7 @@ import { startTriageEngine } from './triage/triage-engine';
 import { startExecutionEngine } from './execution/orchestrator/execution-engine';
 import { startReviewPipeline } from './review/review-pipeline';
 import type { ReviewGate } from './review/review-gate';
-import type { LocalAgentTaskExecutor } from './tasks/local-agent';
+import type { CoordinatorDispatcher } from './execution/coordinator-dispatcher';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import type { GitHubClient } from './integration/github-client';
 import type { LinearClient } from './integration/linear/linear-client';
@@ -36,7 +36,7 @@ export interface PipelineDeps {
    * AgentPrompted handlers in the main-thread execution engine
    * (Option C step 2, PR A).
    */
-  localAgentTask: LocalAgentTaskExecutor;
+  localAgentTask: CoordinatorDispatcher;
   workflowConfig: WorkflowConfig;
   githubClient?: GitHubClient;
   linearClient?: LinearClient;

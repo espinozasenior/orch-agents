@@ -16,7 +16,7 @@ import type { EventBus } from '../../src/shared/event-bus';
 import type { DomainEventType } from '../../src/shared/event-types';
 import { createLogger } from '../../src/shared/logger';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
-import type { LocalAgentTaskExecutor, ExecutionResult } from '../../src/tasks/local-agent';
+import type { CoordinatorDispatcher as LocalAgentTaskExecutor, ExecutionResult } from '../../src/execution/coordinator-dispatcher';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
