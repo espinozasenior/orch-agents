@@ -78,6 +78,26 @@ export const DEFAULT_ENV_ALLOWLIST: readonly string[] = [
 export const SECRET_KEY_PATTERN = /TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL/i;
 
 /**
+ * GitHub Actions / CI keys that must always be scrubbed regardless of
+ * whether they match `SECRET_KEY_PATTERN`. These carry runtime tokens or
+ * endpoints that can be used to mint OIDC tokens.
+ */
+export const EXPLICIT_SCRUB_KEYS = new Set([
+  'ACTIONS_RUNTIME_TOKEN',
+  'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+  'ACTIONS_ID_TOKEN_REQUEST_URL',
+  'OTEL_EXPORTER_OTLP_HEADERS',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+]);
+
+/**
+ * GitHub Actions auto-creates `INPUT_<KEY>` for every workflow input —
+ * these can contain secrets injected by callers. Any key starting with
+ * this prefix is unconditionally stripped.
+ */
+const INPUT_PREFIX = 'INPUT_';
+
+/**
  * Build the subprocess env: parent allowlist merged with payload overrides,
  * minus any key matching the secret pattern.
  *
@@ -107,7 +127,11 @@ export function buildEnv(
     }
   }
   for (const key of Object.keys(merged)) {
-    if (SECRET_KEY_PATTERN.test(key)) {
+    if (
+      SECRET_KEY_PATTERN.test(key) ||
+      key.startsWith(INPUT_PREFIX) ||
+      EXPLICIT_SCRUB_KEYS.has(key)
+    ) {
       delete merged[key];
     }
   }

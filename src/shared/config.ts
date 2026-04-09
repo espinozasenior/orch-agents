@@ -96,6 +96,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   const linearEnabled = env.LINEAR_ENABLED === 'true';
   const linearWebhookSecret = env.LINEAR_WEBHOOK_SECRET ?? '';
+  if (isProduction && linearEnabled && !linearWebhookSecret) {
+    throw new Error('LINEAR_WEBHOOK_SECRET is required when LINEAR_ENABLED=true in production');
+  }
   const linearApiKey = env.LINEAR_API_KEY ?? '';
   const linearTeamId = env.LINEAR_TEAM_ID ?? '';
   const linearPollIntervalMs = parsePollInterval(env.LINEAR_POLL_INTERVAL_MS);
