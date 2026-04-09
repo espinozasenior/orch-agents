@@ -27,6 +27,25 @@ import type {
 } from '../src/execution/coordinator-dispatcher';
 import type { WorkflowConfig } from '../src/integration/linear/workflow-parser';
 import type { LinearClient } from '../src/integration/linear/linear-client';
+import type { SkillResolver, ResolvedSkill } from '../src/intake/skill-resolver';
+
+// P20: stub resolver that returns a constant skill regardless of inputs.
+function makeStubSkillResolver(body = 'STUB SKILL BODY'): SkillResolver {
+  const skill: ResolvedSkill = {
+    path: '/abs/SKILL.md',
+    body,
+    frontmatter: {
+      name: 'stub', type: null, description: null, color: null,
+      capabilities: [], version: null, contextFetchers: [],
+      whenToUse: null, allowedTools: [],
+    },
+  };
+  return {
+    resolvePath: () => ({ relPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' }),
+    resolveByPath: () => skill,
+    resolveSkillForEvent: () => skill,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,8 +56,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'intake-001',
     timestamp: '2026-03-12T00:00:00Z',
     source: 'github',
-    sourceMetadata: { template: 'github-ops' },
-    intent: 'review-pr',
+    sourceMetadata: { template: 'github-ops', intent: 'review-pr', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
     entities: { repo: 'test/repo', branch: 'main' },
     rawText: 'Test task',
     ...overrides,
@@ -157,6 +175,7 @@ describe('Execution Engine', () => {
         eventBus, logger,
         localAgentTask,
         workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver(),
       });
 
       const workCompleted: { workItemId: string; planId: string; phaseCount: number }[] = [];
@@ -189,12 +208,13 @@ describe('Execution Engine', () => {
         eventBus, logger,
         localAgentTask,
         workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver(),
       });
 
       eventBus.publish(createDomainEvent('IntakeCompleted', {
         intakeEvent: makeIntakeEvent({
           // tdd-workflow used to fan out to coder + tester; now ignored.
-          sourceMetadata: { template: 'tdd-workflow' },
+          sourceMetadata: { template: 'tdd-workflow', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
         }),
       }));
 
@@ -221,10 +241,11 @@ describe('Execution Engine', () => {
         eventBus, logger,
         localAgentTask,
         workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver(),
       });
 
       eventBus.publish(createDomainEvent('IntakeCompleted', {
-        intakeEvent: makeIntakeEvent({ sourceMetadata: {} }),
+        intakeEvent: makeIntakeEvent({ sourceMetadata: { skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' } }),
       }));
 
       await new Promise((r) => setTimeout(r, 100));
@@ -245,6 +266,7 @@ describe('Execution Engine', () => {
         eventBus, logger,
         localAgentTask: makeFailTask(),
         workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver(),
       });
 
       const failures: { workItemId: string; failureReason: string }[] = [];
@@ -277,6 +299,7 @@ describe('Execution Engine', () => {
         eventBus, logger,
         localAgentTask: throwingTask,
         workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver(),
       });
 
       const failures: { workItemId: string; failureReason: string }[] = [];
@@ -305,6 +328,7 @@ describe('Execution Engine', () => {
         eventBus, logger,
         localAgentTask: makeSuccessTask(),
         workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver(),
       });
 
       const correlationIds: string[] = [];
@@ -389,6 +413,7 @@ describe('Execution Engine', () => {
         logger,
         localAgentTask: blockingTask,
         workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver(),
       });
 
       eventBus.publish(createDomainEvent('IntakeCompleted', {
@@ -457,6 +482,106 @@ describe('Execution Engine', () => {
       await new Promise((r) => setTimeout(r, 50));
 
       assert.equal(executeCalls, 0);
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // P20: skill resolution + context fetching for github IntakeCompleted
+  // -------------------------------------------------------------------------
+
+  describe('P20 skill resolution', () => {
+    it('composes skill body + trigger context into rawText', async () => {
+      const eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+      const localAgentTask = makeSuccessTask();
+      const unsub = startExecutionEngine({
+        eventBus, logger,
+        localAgentTask,
+        workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver('# GitHub Ops\n\nReview the PR.'),
+      });
+
+      const dispatched: Array<{ rawText?: string }> = [];
+      const wrap = localAgentTask.execute.bind(localAgentTask);
+      localAgentTask.execute = async (plan, intake) => {
+        dispatched.push({ rawText: intake.rawText });
+        return wrap(plan, intake);
+      };
+
+      eventBus.publish(createDomainEvent('IntakeCompleted', {
+        intakeEvent: makeIntakeEvent(),
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(dispatched.length, 1);
+      assert.match(dispatched[0].rawText!, /# GitHub Ops/);
+      assert.match(dispatched[0].rawText!, /## Trigger Context/);
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+
+    it('skips dispatch and warns when skillPath is missing', async () => {
+      const eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+      let executed = false;
+      const localAgentTask: LocalAgentTaskExecutor = {
+        async execute() {
+          executed = true;
+          return { status: 'completed', agentResults: [], totalDuration: 0 };
+        },
+      };
+      const unsub = startExecutionEngine({
+        eventBus, logger,
+        localAgentTask,
+        workflowConfig: makeWorkflowConfig(),
+        skillResolver: makeStubSkillResolver(),
+      });
+
+      eventBus.publish(createDomainEvent('IntakeCompleted', {
+        intakeEvent: makeIntakeEvent({
+          sourceMetadata: { template: 'github-ops' },
+        }),
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(executed, false);
+
+      unsub();
+      eventBus.removeAllListeners();
+    });
+
+    it('skips dispatch when skill file cannot be resolved', async () => {
+      const eventBus = createEventBus();
+      const logger = createLogger({ level: 'error' });
+      let executed = false;
+      const localAgentTask: LocalAgentTaskExecutor = {
+        async execute() {
+          executed = true;
+          return { status: 'completed', agentResults: [], totalDuration: 0 };
+        },
+      };
+      const nullResolver: SkillResolver = {
+        resolvePath: () => null,
+        resolveByPath: () => null,
+        resolveSkillForEvent: () => null,
+      };
+      const unsub = startExecutionEngine({
+        eventBus, logger,
+        localAgentTask,
+        workflowConfig: makeWorkflowConfig(),
+        skillResolver: nullResolver,
+      });
+
+      eventBus.publish(createDomainEvent('IntakeCompleted', {
+        intakeEvent: makeIntakeEvent(),
+      }));
+      await new Promise((r) => setTimeout(r, 50));
+
+      assert.equal(executed, false);
 
       unsub();
       eventBus.removeAllListeners();

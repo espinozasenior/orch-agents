@@ -160,7 +160,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
 
           // If this is a comment/follow-up, label it clearly so the coordinator
           // knows this is a question about the issue, not a new task
-          if (intakeEvent.intent === ('custom:linear-prompted' as string) && issueDesc) {
+          if (intakeEvent.sourceMetadata.intent === 'custom:linear-prompted' && issueDesc) {
             contextParts.push(
               '## User Comment (follow-up on the issue above)',
               issueDesc,
@@ -176,9 +176,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
           const prompt = contextParts.join('\n\n');
 
           // 4. Emit thought activity before execution (FR-10A.02)
-          const agentSessionIdForThought = typeof intakeEvent.sourceMetadata.agentSessionId === 'string'
-            ? intakeEvent.sourceMetadata.agentSessionId as string
-            : undefined;
+          const agentSessionIdForThought = intakeEvent.sourceMetadata.agentSessionId;
           await emitThought(
             agentSessionIdForThought,
             'Working on your request...',
@@ -323,11 +321,9 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             }));
           }
 
-          if (deps.linearClient && typeof intakeEvent.sourceMetadata.linearIssueId === 'string') {
-            const linearIssueId = intakeEvent.sourceMetadata.linearIssueId as string;
-            const agentSessionId = typeof intakeEvent.sourceMetadata.agentSessionId === 'string'
-              ? intakeEvent.sourceMetadata.agentSessionId as string
-              : undefined;
+          if (deps.linearClient && intakeEvent.sourceMetadata.linearIssueId) {
+            const linearIssueId = intakeEvent.sourceMetadata.linearIssueId;
+            const agentSessionId = intakeEvent.sourceMetadata.agentSessionId;
             const linearSummary = formatLinearAgentSummary({
               agentType: agent.type,
               durationMs: Date.now() - agentStart,

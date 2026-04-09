@@ -242,7 +242,7 @@ describe('GitHub API Integration', { skip: !GITHUB_TOKEN ? SKIP_REASON : false }
       // Normalize it
       const intakeEvent = normalizeGitHubEventFromWorkflow(parsed, workflowConfig);
       assert.ok(intakeEvent, 'Should produce an IntakeEvent (not null)');
-      assert.equal(intakeEvent!.intent, 'validate-main');
+      assert.equal(intakeEvent!.sourceMetadata.ruleKey, 'push.default_branch');
       assert.equal(intakeEvent!.source, 'github');
       assert.ok(intakeEvent!.sourceMetadata, 'Should have sourceMetadata');
       assert.ok(intakeEvent!.entities, 'Should have entities');

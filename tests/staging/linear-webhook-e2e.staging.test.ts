@@ -479,8 +479,8 @@ describe('Staging: Phase 7D — AgentSessionEvent pipeline behavior', () => {
         agentSessionId: sessionPayload.agentSession.id,
         linearIssueId: sessionPayload.agentSession.issue.id,
         linearIdentifier: sessionPayload.agentSession.issue.identifier,
+        intent: 'custom:linear-agent-session',
       },
-      intent: 'custom:linear-agent-session' as IntakeEvent['intent'],
       entities: {
         requirementId: sessionPayload.agentSession.issue.identifier,
         labels: [],
@@ -495,7 +495,7 @@ describe('Staging: Phase 7D — AgentSessionEvent pipeline behavior', () => {
     const payload = captured.payload as { intakeEvent: IntakeEvent };
     assert.equal(payload.intakeEvent.source, 'linear');
     assert.equal(payload.intakeEvent.sourceMetadata.agentSessionId, 'session-abc');
-    assert.equal(payload.intakeEvent.intent, 'custom:linear-agent-session');
+    assert.equal(payload.intakeEvent.sourceMetadata.intent, 'custom:linear-agent-session');
   });
 
   it('prompted action → publishes AgentPrompted event on bus', () => {

@@ -1,5 +1,14 @@
 # GAP-15: Unified WORKFLOW.md for GitHub + Linear Routing
 
+> **SUPERSEDED by P20** (2026-04-08). The skill-based event routing implemented
+> in `docs/sparc/P20-skill-based-event-routing-spec.md` and shipped in PR #18
+> replaces this gap entirely. `config/github-routing.json` and the
+> `deriveIntent` / `templateToSeverity` / `matchGitHubEventRule` /
+> `matchesCondition` functions referenced below have all been deleted.
+> Routing now lives in `WORKFLOW.md` `github.events` as relative paths to
+> `.claude/skills/**/SKILL.md` files; behavior lives in the skill bodies.
+> Kept for historical context.
+
 | Field | Value |
 |-------|-------|
 | **Gap ID** | GAP-15 |
@@ -8,9 +17,10 @@
 | **Complexity** | Medium (45%) |
 | **Methodology** | SPARC (Specification, Pseudocode, Architecture, Refinement, Completion) |
 | **Date** | 2026-03-26 |
-| **Status** | Draft |
+| **Status** | Superseded by P20 (2026-04-08) |
 | **Depends On** | GAP-14 (Linear Integration), existing GitHubNormalizer, WorkflowConfig parser |
 | **Replaces** | `config/github-routing.json` (14-rule JSON routing table) |
+| **Superseded By** | `docs/sparc/P20-skill-based-event-routing-spec.md` |
 
 ---
 

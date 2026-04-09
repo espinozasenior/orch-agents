@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { WorkflowPlan } from '../../types';
+import type { IntakeEvent, WorkflowPlan } from '../../types';
 import { createTask, TaskType } from '../task/index';
 import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
@@ -26,6 +26,8 @@ import type { LinearClient } from '../../integration/linear/linear-client';
 import type { CancellationController } from '../runtime/cancellation-controller';
 import { formatAgentComment, getBotName } from '../../shared/agent-identity';
 import { buildWorkpadComment, postOrUpdateWorkpad } from '../../integration/linear/workpad-reporter';
+import { createSkillResolver, type SkillResolver } from '../../intake/skill-resolver';
+import { fetchContextForSkill } from '../../intake/context-fetchers';
 
 // ---------------------------------------------------------------------------
 // Execution Engine
@@ -46,6 +48,10 @@ export interface ExecutionEngineDeps {
   linearClient?: LinearClient;
   cancellationController?: CancellationController;
   linearExecutionMode?: 'generic' | 'symphony';
+  /** P20: skill resolver for IntakeCompleted dispatch (defaults to filesystem-backed). */
+  skillResolver?: SkillResolver;
+  /** P20: repository root used to resolve relative skill paths from WORKFLOW.md. */
+  repoRoot?: string;
 }
 
 /**
@@ -55,6 +61,8 @@ export interface ExecutionEngineDeps {
  */
 export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
   const { eventBus, logger, localAgentTask, workflowConfig } = deps;
+  const skillResolver = deps.skillResolver ?? createSkillResolver();
+  const repoRoot = deps.repoRoot ?? process.cwd();
   const tracker = createWorkTracker();
   const unsubscribers: Array<() => void> = [];
 
@@ -96,7 +104,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     // backward compat (and still used by the worker-thread path) but are
     // no longer consulted here. The template metadata field is preserved
     // on the plan purely for downstream observability.
-    const templateName = (intakeEvent.sourceMetadata?.template as string) ?? 'coordinator';
+    const templateName = intakeEvent.sourceMetadata?.template ?? 'coordinator';
 
     const task = createTask(TaskType.local_agent);
     const planId = task.id;
@@ -126,7 +134,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     );
 
     if (deps.linearClient && intakeEvent.sourceMetadata?.linearIssueId) {
-      const issueId = intakeEvent.sourceMetadata.linearIssueId as string;
+      const issueId = intakeEvent.sourceMetadata.linearIssueId;
       await moveLinearIssueToInProgress(deps.linearClient, issueId, logger);
       await postOrUpdateWorkpad(
         deps.linearClient,
@@ -158,8 +166,52 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       ).catch((err: unknown) => logger.warn('AIG instant feedback failed', { error: String(err) }));
     }
 
+    // P20: resolve the skill, fetch context in parallel, compose enriched intake.
+    let enrichedIntake = intakeEvent;
+    if (intakeEvent.source === 'github') {
+      const skillStart = Date.now();
+      const { skillPath, ruleKey, parsed: parsedGh } = intakeEvent.sourceMetadata ?? {};
+
+      if (!skillPath) {
+        logger.warn('IntakeCompleted has no skillPath — skipping dispatch', {
+          intakeId: intakeEvent.id,
+          ruleKey,
+        });
+        tracker.complete(planId);
+        return;
+      }
+
+      const skill = skillResolver.resolveByPath(skillPath, repoRoot);
+      if (!skill) {
+        logger.warn('Skill file missing or unparseable — skipping dispatch', {
+          intakeId: intakeEvent.id,
+          skillPath,
+          ruleKey,
+        });
+        tracker.complete(planId);
+        return;
+      }
+
+      let fetchedContext = '';
+      if (parsedGh && deps.githubClient) {
+        fetchedContext = await fetchContextForSkill(skill, parsedGh, deps.githubClient, logger);
+      }
+
+      const composedRawText = `${skill.body}\n\n## Trigger Context\n\n${fetchedContext}`;
+      enrichedIntake = { ...intakeEvent, rawText: composedRawText };
+
+      logger.info('Resolved skill for IntakeCompleted', {
+        skillPath,
+        ruleKey,
+        contextFetchers: skill.frontmatter.contextFetchers,
+        bytesInBody: skill.body.length,
+        bytesInContext: fetchedContext.length,
+        durationMs: Date.now() - skillStart,
+      });
+    }
+
     try {
-      const result = await localAgentTask.execute(plan, intakeEvent);
+      const result = await localAgentTask.execute(plan, enrichedIntake);
 
       tracker.complete(planId);
 
@@ -285,8 +337,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       id: randomUUID(),
       timestamp: new Date().toISOString(),
       source: 'linear' as const,
-      sourceMetadata: { agentSessionId, linearIssueId: issueId },
-      intent: 'custom:linear-prompted' as const,
+      sourceMetadata: { agentSessionId, linearIssueId: issueId, intent: 'custom:linear-prompted' },
       entities: { requirementId: issueId, labels: [] as string[] },
       rawText: rawTextParts.join('\n'),
     };
@@ -341,7 +392,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
   };
 }
 
-function getExecutionKey(intakeEvent: { source: string; id: string; sourceMetadata?: Record<string, unknown> }): string {
+function getExecutionKey(intakeEvent: IntakeEvent): string {
   if (intakeEvent.source === 'linear' && typeof intakeEvent.sourceMetadata?.linearIssueId === 'string') {
     return `linear:${intakeEvent.sourceMetadata.linearIssueId}`;
   }

@@ -175,7 +175,7 @@ describe('linearWebhookHandler (integration)', () => {
 
     assert.ok(capturedEvent);
     assert.equal(capturedEvent!.payload.intakeEvent.source, 'linear');
-    assert.equal(capturedEvent!.payload.intakeEvent.intent, 'custom:linear-todo');
+    assert.equal(capturedEvent!.payload.intakeEvent.sourceMetadata.intent, 'custom:linear-todo');
   });
 
   it('should hand off normalized Linear intake to Symphony when configured', async () => {
@@ -650,7 +650,7 @@ describe('linearWebhookHandler (integration)', () => {
     assert.equal(response.statusCode, 202);
     assert.ok(capturedEvent);
     assert.equal(capturedEvent!.payload.intakeEvent.source, 'linear');
-    assert.equal(capturedEvent!.payload.intakeEvent.intent, 'custom:linear-todo');
+    assert.equal(capturedEvent!.payload.intakeEvent.sourceMetadata.intent, 'custom:linear-todo');
   });
 
   // 7D: Thought activity failure does NOT block AgentPrompted dispatch

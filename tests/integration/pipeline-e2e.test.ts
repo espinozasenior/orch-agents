@@ -18,6 +18,22 @@ import { createLogger } from '../../src/shared/logger';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
 import type { CoordinatorDispatcher as LocalAgentTaskExecutor, ExecutionResult } from '../../src/execution/coordinator-dispatcher';
 import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
+import type { SkillResolver, ResolvedSkill } from '../../src/intake/skill-resolver';
+
+const STUB_SKILL: ResolvedSkill = {
+  path: '/abs/SKILL.md',
+  body: 'stub body',
+  frontmatter: {
+    name: 'stub', type: null, description: null, color: null,
+    capabilities: [], version: null, contextFetchers: [],
+    whenToUse: null, allowedTools: [],
+  },
+};
+const STUB_RESOLVER: SkillResolver = {
+  resolvePath: () => ({ relPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' }),
+  resolveByPath: () => STUB_SKILL,
+  resolveSkillForEvent: () => STUB_SKILL,
+};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -46,8 +62,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'intake-e2e-001',
     timestamp: new Date().toISOString(),
     source: 'github',
-    sourceMetadata: { template: 'quick-fix' },
-    intent: 'validate-branch',
+    sourceMetadata: { template: 'quick-fix', intent: 'validate-branch', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
     entities: {
       repo: 'test-org/test-repo',
       branch: 'feature/e2e',
@@ -143,6 +158,7 @@ describe('Pipeline E2E', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     // Set up event-driven waits before publishing
@@ -181,6 +197,7 @@ describe('Pipeline E2E', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     const reviewPromise = waitForEvent(eventBus, 'ReviewCompleted');
@@ -209,6 +226,7 @@ describe('Pipeline E2E', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
 
     // Wait for 2 WorkCompleted events
@@ -237,6 +255,7 @@ describe('Pipeline E2E', () => {
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
+      skillResolver: STUB_RESOLVER,
     });
     handle.shutdown();
 
@@ -277,8 +296,8 @@ describe('Pipeline E2E', () => {
       sourceMetadata: {
         template: 'quick-fix',
         linearIssueId: 'issue-linear-001',
+        intent: 'custom:linear-todo',
       },
-      intent: 'custom:linear-todo',
     });
 
     eventBus.publish(createDomainEvent('IntakeCompleted', { intakeEvent }, 'linear-pipeline-corr-001'));

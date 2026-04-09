@@ -42,6 +42,14 @@ export interface GitHubClient {
     verdict: 'APPROVE' | 'REQUEST_CHANGES',
     body: string,
   ): Promise<void>;
+  /** P20: Read PR view (`gh pr view`). */
+  prView(repoFullName: string, prNumber: number): Promise<string>;
+  /** P20: Read PR diff (`gh pr diff`). */
+  prDiff(repoFullName: string, prNumber: number): Promise<string>;
+  /** P20: Read issue view (`gh issue view`). */
+  issueView(repoFullName: string, issueNumber: number): Promise<string>;
+  /** P20: Read PR checks (`gh pr checks`). */
+  prChecks(repoFullName: string, prNumber: number): Promise<string>;
 }
 
 export interface PushOpts {
@@ -79,12 +87,20 @@ function validateRepo(repo: string): void {
   }
 }
 
-function validatePRNumber(prNumber: number): void {
-  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+function validatePositiveInt(label: string, value: number): void {
+  if (!Number.isInteger(value) || value <= 0) {
     throw new ExecutionError(
-      `Invalid PR number ${prNumber}. Must be a positive integer.`,
+      `Invalid ${label} ${value}. Must be a positive integer.`,
     );
   }
+}
+
+function validatePRNumber(prNumber: number): void {
+  validatePositiveInt('PR number', prNumber);
+}
+
+function validateIssueNumber(issueNumber: number): void {
+  validatePositiveInt('issue number', issueNumber);
 }
 
 function validateBody(body: string): void {
@@ -220,6 +236,48 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
         flag,
         '--body', body,
       ]);
+    },
+
+    // P20: Read methods used by context-fetchers.
+
+    async prView(repoFullName, prNumber) {
+      validateRepo(repoFullName);
+      validatePRNumber(prNumber);
+      const { stdout } = await run('gh', [
+        'pr', 'view', String(prNumber),
+        '--repo', repoFullName,
+      ]);
+      return stdout;
+    },
+
+    async prDiff(repoFullName, prNumber) {
+      validateRepo(repoFullName);
+      validatePRNumber(prNumber);
+      const { stdout } = await run('gh', [
+        'pr', 'diff', String(prNumber),
+        '--repo', repoFullName,
+      ]);
+      return stdout;
+    },
+
+    async issueView(repoFullName, issueNumber) {
+      validateRepo(repoFullName);
+      validateIssueNumber(issueNumber);
+      const { stdout } = await run('gh', [
+        'issue', 'view', String(issueNumber),
+        '--repo', repoFullName,
+      ]);
+      return stdout;
+    },
+
+    async prChecks(repoFullName, prNumber) {
+      validateRepo(repoFullName);
+      validatePRNumber(prNumber);
+      const { stdout } = await run('gh', [
+        'pr', 'checks', String(prNumber),
+        '--repo', repoFullName,
+      ]);
+      return stdout;
     },
   };
 }

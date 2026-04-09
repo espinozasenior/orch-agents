@@ -232,7 +232,8 @@ export async function webhookRouter(
         log.info('Webhook processed', {
           eventType,
           deliveryId,
-          intent: intakeEvent.intent,
+          ruleKey: intakeEvent.sourceMetadata.ruleKey,
+          skillPath: intakeEvent.sourceMetadata.skillPath,
           repo: parsed.repoFullName,
         });
 

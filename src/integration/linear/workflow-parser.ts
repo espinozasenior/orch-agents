@@ -281,10 +281,9 @@ function buildWorkspaceConfig(workspace: Record<string, unknown>): WorkspaceConf
 
 function buildGitHubConfig(github: unknown): WorkflowConfig['github'] | undefined {
   const record = asOptionalRecord(github);
-  const events = asOptionalRecord(record?.events);
-  if (!events) {
-    return undefined;
-  }
+  if (!record) return undefined;
+  const events = asOptionalRecord(record.events);
+  if (!events) return undefined;
 
   const normalized: Record<string, string> = {};
   for (const [key, value] of Object.entries(events)) {
@@ -293,7 +292,8 @@ function buildGitHubConfig(github: unknown): WorkflowConfig['github'] | undefine
     }
   }
 
-  return Object.keys(normalized).length > 0 ? { events: normalized } : undefined;
+  if (Object.keys(normalized).length === 0) return undefined;
+  return { events: normalized };
 }
 
 function readTemplatesOptional(value: unknown): Record<string, string[]> {

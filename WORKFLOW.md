@@ -5,20 +5,21 @@
 # 4-phase workflow (Research → Synthesis → Implementation → Verification).
 
 github:
+  # P20: values are relative paths to skill files. Behavior lives in the
+  # SKILL.md body; context fetchers live in its frontmatter. Add a new route
+  # by editing this map — no TypeScript changes required. Events without an
+  # explicit entry here are silently skipped at the normalizer (no IntakeEvent,
+  # no worktree, no coordinator cycle). Explicit-only routing — no default
+  # catch-all by design.
   events:
-    pull_request.opened: github-ops
-    pull_request.synchronize: github-ops
-    pull_request.closed.merged: release-pipeline
-    pull_request.ready_for_review: github-ops
-    push.default_branch: cicd-pipeline
-    issues.opened: github-ops
-    issues.labeled.bug: tdd-workflow
-    issues.labeled.enhancement: feature-build
-    issues.labeled.security: security-audit
-    issue_comment.mentions_bot: quick-fix
-    workflow_run.failure: quick-fix
-    release.published: release-pipeline
-    deployment_status.failure: quick-fix
+    pull_request.opened: .claude/skills/github-ops/SKILL.md
+    pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+    pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+    # Operator-only edit: route newly opened issues to the existing
+    # github-deep-research skill (already on disk under .claude/skills/).
+    # Demonstrates the "no new files, just a WORKFLOW.md entry" extension
+    # story — adding a route for a different event type is a one-line edit.
+    issues.opened: .claude/skills/github-deep-research/SKILL.md
 
 tracker:
   kind: linear

@@ -23,7 +23,6 @@ describe('EventBus', () => {
           timestamp: new Date().toISOString(),
           source: 'github' as const,
           sourceMetadata: {},
-          intent: 'review-pr' as const,
           entities: { repo: 'test/repo' },
         },
       });
@@ -50,7 +49,6 @@ describe('EventBus', () => {
           timestamp: new Date().toISOString(),
           source: 'github' as const,
           sourceMetadata: {},
-          intent: 'review-pr' as const,
           entities: {},
         },
       });

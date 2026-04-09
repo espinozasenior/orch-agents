@@ -271,7 +271,7 @@ export async function linearWebhookHandler(
 
             log.info('Linear webhook processed', {
               deliveryId,
-              intent: intakeEvent.intent,
+              intent: intakeEvent.sourceMetadata.intent,
               issueId: payload.data.id,
               identifier: payload.data.identifier,
             });
