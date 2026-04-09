@@ -15,6 +15,11 @@ github:
     pull_request.opened: .claude/skills/github-ops/SKILL.md
     pull_request.synchronize: .claude/skills/github-ops/SKILL.md
     pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+    # Operator-only edit: route newly opened issues to the existing
+    # github-deep-research skill (already on disk under .claude/skills/).
+    # Demonstrates the "no new files, just a WORKFLOW.md entry" extension
+    # story — adding a route for a different event type is a one-line edit.
+    issues.opened: .claude/skills/github-deep-research/SKILL.md
 
 tracker:
   kind: linear
