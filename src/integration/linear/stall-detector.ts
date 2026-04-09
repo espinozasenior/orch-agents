@@ -10,6 +10,7 @@ import type { EventBus } from '../../shared/event-bus';
 import { createDomainEvent } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
 import { formatDuration } from '../../shared/format';
+import { workItemId as wId } from '../../shared/branded-types';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -99,7 +100,7 @@ export function createStallDetector(deps: StallDetectorDeps): StallDetector {
 
         eventBus.publish(
           createDomainEvent('WorkPaused', {
-            workItemId: planId,
+            workItemId: wId(planId),
             pauseReason: `Agent ${agentRole} stalled for ${formatDuration(elapsed)}`,
             resumable: true,
           }),

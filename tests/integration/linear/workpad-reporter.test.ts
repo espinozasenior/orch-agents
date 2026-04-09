@@ -15,6 +15,7 @@ import {
 import type { WorkpadState } from '../../../src/integration/linear/types';
 import type { LinearClient } from '../../../src/integration/linear/linear-client';
 import { createEventBus, createDomainEvent, type EventBus } from '../../../src/shared/event-bus';
+import { linearIssueId } from '../../../src/shared/branded-types';
 import { createLogger } from '../../../src/shared/logger';
 
 // ---------------------------------------------------------------------------
@@ -215,7 +216,7 @@ describe('WorkpadReporter', () => {
           id: 'intake-1',
           timestamp: new Date().toISOString(),
           source: 'linear' as const,
-          sourceMetadata: { linearIssueId: 'issue-lin-1', intent: 'custom:linear-todo' },
+          sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-lin-1'), intent: 'custom:linear-todo' },
           entities: {},
         },
       }));
@@ -304,7 +305,7 @@ describe('WorkpadReporter', () => {
           id: 'intake-1',
           timestamp: new Date().toISOString(),
           source: 'linear' as const,
-          sourceMetadata: { linearIssueId: 'issue-lin-1', intent: 'custom:linear-todo' },
+          sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-lin-1'), intent: 'custom:linear-todo' },
           entities: {},
         },
       }));
@@ -505,7 +506,7 @@ describe('WorkpadReporter', () => {
           id: 'intake-1',
           timestamp: new Date().toISOString(),
           source: 'linear' as const,
-          sourceMetadata: { linearIssueId: 'issue-lin-1', intent: 'custom:linear-todo' },
+          sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-lin-1'), intent: 'custom:linear-todo' },
           entities: {},
         },
       }));
@@ -563,7 +564,7 @@ describe('WorkpadReporter', () => {
           id: 'intake-1',
           timestamp: new Date().toISOString(),
           source: 'linear' as const,
-          sourceMetadata: { linearIssueId: 'issue-lin-1', intent: 'custom:linear-todo' },
+          sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-lin-1'), intent: 'custom:linear-todo' },
           entities: {},
         },
       }));

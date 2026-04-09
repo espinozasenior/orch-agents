@@ -13,6 +13,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { EventBus } from '../shared/event-bus';
 import { createDomainEvent } from '../shared/event-bus';
+import { workItemId as wId } from '../shared/branded-types';
+import { isGitHubMeta } from '../types';
 import type { AppConfig } from '../shared/config';
 import type { Logger } from '../shared/logger';
 import { verifySignature } from './signature-verifier';
@@ -21,6 +23,7 @@ import { parseGitHubEvent } from './event-parser';
 import { normalizeGitHubEventFromWorkflow } from '../intake/github-workflow-normalizer';
 import type { WorkflowConfig } from '../integration/linear/workflow-parser';
 import { ValidationError } from '../shared/errors';
+import { sanitizeDeep } from '../shared/input-sanitizer';
 import { handleWebhookError } from '../shared/webhook-error-handler';
 import { getBotName, getBotMarker } from '../shared/agent-identity';
 import type { OrchestratorSnapshot } from '../execution/orchestrator/symphony-orchestrator';
@@ -138,8 +141,8 @@ export async function webhookRouter(
         // Step 1: Verify signature
         verifySignature(rawBody, signature ?? '', config.webhookSecret);
 
-        // Step 2: Parse event
-        const payload = request.body as Record<string, unknown>;
+        // Step 2: Parse event (sanitize untrusted webhook payload first)
+        const payload = sanitizeDeep(request.body) as Record<string, unknown>;
         const parsed = parseGitHubEvent(eventType, deliveryId, payload);
 
         // Skip push events from agent branches (prevents feedback loop)
@@ -188,14 +191,14 @@ export async function webhookRouter(
           const isMentionCommand = mentionStop.test(parsed.commentBody);
 
           if (isDirectCommand || isMentionCommand) {
-            const workItemId = `pr-${parsed.prNumber ?? parsed.issueNumber}`;
+            const cancelWorkItemId = wId(`pr-${parsed.prNumber ?? parsed.issueNumber}`);
             const cancelEvent = createDomainEvent('WorkCancelled', {
-              workItemId,
+              workItemId: cancelWorkItemId,
               cancellationReason: `User requested stop via comment: "${parsed.commentBody.slice(0, 100)}"`,
             }, deliveryId);
             eventBus.publish(cancelEvent);
 
-            log.info('Stop command detected', { sender: parsed.sender, deliveryId, workItemId });
+            log.info('Stop command detected', { sender: parsed.sender, deliveryId, workItemId: cancelWorkItemId });
             return reply.status(202).send({ id: deliveryId, status: 'cancelling' });
           }
         }
@@ -229,11 +232,12 @@ export async function webhookRouter(
         );
         eventBus.publish(domainEvent);
 
+        const meta = intakeEvent.sourceMetadata;
         log.info('Webhook processed', {
           eventType,
           deliveryId,
-          ruleKey: intakeEvent.sourceMetadata.ruleKey,
-          skillPath: intakeEvent.sourceMetadata.skillPath,
+          ruleKey: isGitHubMeta(meta) ? meta.ruleKey : undefined,
+          skillPath: isGitHubMeta(meta) ? meta.skillPath : undefined,
           repo: parsed.repoFullName,
         });
 

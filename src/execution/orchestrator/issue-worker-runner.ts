@@ -4,6 +4,7 @@ import type { LinearClient, LinearIssueResponse } from '../../integration/linear
 import type { AgentPlanStep } from '../../integration/linear/types';
 import { createTask, TaskType, TaskStatus } from '../task';
 import type { TaskRegistry } from '../task';
+import { planId as pId, workItemId as wId, linearIssueId as lId } from '../../shared/branded-types';
 
 // ---------------------------------------------------------------------------
 // Phase 7F: Plan step definitions
@@ -90,8 +91,8 @@ export async function runIssueWorkerLifecycle(
   // observability and parity with the main-thread engine (PR A).
   const templateName = 'coordinator';
   const plan: WorkflowPlan = {
-    id: sanitizePlanId(deps.issue.id),
-    workItemId: deps.issue.identifier,
+    id: pId(sanitizePlanId(deps.issue.id)),
+    workItemId: wId(deps.issue.identifier),
     template: templateName,
     promptTemplate: deps.workflowConfig.promptTemplate,
     maxAgents: deps.workflowConfig.agent.maxConcurrentAgents,
@@ -478,7 +479,8 @@ export function buildIntakeEvent(params: {
     timestamp: new Date().toISOString(),
     source: 'linear',
     sourceMetadata: {
-      linearIssueId: issue.id,
+      source: 'linear',
+      linearIssueId: lId(issue.id),
       linearIdentifier: issue.identifier,
       linearTitle: issue.title,
       linearState: issue.state.name,

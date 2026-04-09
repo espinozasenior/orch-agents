@@ -6,6 +6,14 @@
  */
 
 import type { ParsedGitHubEvent } from './webhook-gateway/event-parser';
+import type {
+  PlanId,
+  WorkItemId,
+  ExecId,
+  LinearIssueId,
+  AgentSessionId,
+  PhaseId,
+} from './shared/branded-types';
 
 // ---------------------------------------------------------------------------
 // SPARC Phase
@@ -22,54 +30,91 @@ export type SPARCPhase =
 // Intake -> Triage
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Source-specific metadata — discriminated union
+// ---------------------------------------------------------------------------
+
 /**
- * Source-specific metadata stamped onto IntakeEvent by the normalizers.
- *
- * Closed shape — every field is explicitly declared. New fields require a
- * type update so the typed reads at the call sites stay honest. The previous
- * `Record<string, unknown>` index signature was removed because it let the
- * P20 typed fields (`skillPath`, `ruleKey`, `parsed`) be silently overridden
- * by anything, defeating the purpose of typing them at all.
- *
- * Naming convention: GitHub-source fields are grouped first, Linear-source
- * fields second, P20 routing fields last. All are optional because a single
- * IntakeEvent only ever populates one source's slice.
+ * GitHub-source metadata, stamped by the GitHub normalizers.
  */
-export interface IntakeSourceMetadata {
-  // ── GitHub source ───────────────────────────────────────────────────────
-  eventType?: string;
+export interface GitHubSourceMetadata {
+  readonly source: 'github';
+  eventType: string;
   action?: string | null;
-  deliveryId?: string;
+  deliveryId: string;
   repoFullName?: string;
   sender?: string;
   configSource?: 'workflow-md';
-
-  // ── Linear source ───────────────────────────────────────────────────────
-  linearIssueId?: string;
-  linearIdentifier?: string;
-  linearTitle?: string;
-  linearState?: string;
-  linearTeamId?: string;
-  linearTeamKey?: string;
-  linearUrl?: string;
-  agentSessionId?: string;
-  attempt?: number;
-  template?: string;
-  /** Snapshot of Linear issue fields at intake time (free-form). */
-  previousState?: Record<string, unknown>;
-  /** Free-form intent string used by the Linear path for log/dispatch hints. */
-  intent?: string;
-
-  // ── Staging / smoke-test runs ───────────────────────────────────────────
-  stagingRunId?: string;
-
-  // ── P20 routing (github only) ───────────────────────────────────────────
   /** Relative path to the resolved skill file, stamped by the normalizer. */
   skillPath?: string;
   /** Resolved WORKFLOW.md rule key, e.g. "pull_request.opened". */
   ruleKey?: string;
   /** Full ParsedGitHubEvent for downstream context-fetchers. */
   parsed?: ParsedGitHubEvent;
+}
+
+/**
+ * Linear-source metadata, stamped by the Linear normalizers.
+ */
+export interface LinearSourceMetadata {
+  readonly source: 'linear';
+  linearIssueId: LinearIssueId;
+  linearIdentifier?: string;
+  linearTitle?: string;
+  linearState?: string;
+  linearTeamId?: string;
+  linearTeamKey?: string;
+  linearUrl?: string;
+  agentSessionId?: AgentSessionId;
+  attempt?: number;
+  template?: string;
+  /** Snapshot of Linear issue fields at intake time (free-form). */
+  previousState?: Record<string, unknown>;
+  /** Free-form intent string used by the Linear path for log/dispatch hints. */
+  intent?: string;
+}
+
+/**
+ * Staging / smoke-test run metadata.
+ */
+export interface StagingSourceMetadata {
+  readonly source: 'staging';
+  stagingRunId: string;
+}
+
+/**
+ * System-originated or client-originated events with no source-specific metadata.
+ */
+export interface SystemSourceMetadata {
+  readonly source: 'system' | 'client' | 'schedule';
+}
+
+/**
+ * Discriminated union of all source metadata variants.
+ *
+ * Narrows on the `source` discriminant field — each variant only contains
+ * the fields relevant to that source, making impossible states unrepresentable.
+ */
+export type IntakeSourceMetadata =
+  | GitHubSourceMetadata
+  | LinearSourceMetadata
+  | StagingSourceMetadata
+  | SystemSourceMetadata;
+
+// ---------------------------------------------------------------------------
+// Type guards for narrowing IntakeSourceMetadata
+// ---------------------------------------------------------------------------
+
+export function isGitHubMeta(meta: IntakeSourceMetadata): meta is GitHubSourceMetadata {
+  return meta.source === 'github';
+}
+
+export function isLinearMeta(meta: IntakeSourceMetadata): meta is LinearSourceMetadata {
+  return meta.source === 'linear';
+}
+
+export function isStagingMeta(meta: IntakeSourceMetadata): meta is StagingSourceMetadata {
+  return meta.source === 'staging';
 }
 
 export interface IntakeEvent {
@@ -107,8 +152,8 @@ export interface TriageResult {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowPlan {
-  id: string;
-  workItemId: string;
+  id: PlanId;
+  workItemId: WorkItemId;
   template: string;
   promptTemplate?: string;
   agentTeam: PlannedAgent[];
@@ -122,8 +167,8 @@ export interface WorkflowPlan {
 // ---------------------------------------------------------------------------
 
 export interface PhaseResult {
-  phaseId: string;
-  planId: string;
+  phaseId: PhaseId;
+  planId: PlanId;
   phaseType: SPARCPhase;
   status: 'completed' | 'failed' | 'skipped';
   artifacts: Artifact[];
@@ -167,7 +212,7 @@ export interface PlannedAgent {
 
 export interface Artifact {
   id: string;
-  phaseId: string;
+  phaseId: PhaseId;
   type: string;
   url: string;
   metadata: Record<string, unknown>;
@@ -186,7 +231,7 @@ export interface Finding {
 // ---------------------------------------------------------------------------
 
 export interface WorktreeHandle {
-  planId: string;
+  planId: PlanId;
   path: string;
   branch: string;
   baseBranch: string;
@@ -213,8 +258,8 @@ export interface ApplyResult {
 export type AgentExecStatus = 'spawned' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
 
 export interface AgentExecState {
-  execId: string;
-  planId: string;
+  execId: ExecId;
+  planId: PlanId;
   agentRole: string;
   agentType: string;
   phaseType: SPARCPhase;
@@ -248,7 +293,7 @@ export interface ContinuationState {
 // ---------------------------------------------------------------------------
 
 export interface DeploymentResult {
-  workflowPlanId: string;
+  workflowPlanId: PlanId;
   status: 'success' | 'failed' | 'rolled-back';
   environment: string;
   healthChecks: {

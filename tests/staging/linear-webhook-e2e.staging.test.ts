@@ -27,6 +27,7 @@ import { parsePromptContext } from '../../src/integration/linear/prompt-context-
 import { createEventLogCollector } from '../../src/staging/event-log-collector';
 import type { LinearWebhookPayload } from '../../src/integration/linear/types';
 import type { IntakeEvent } from '../../src/types';
+import { linearIssueId, agentSessionId } from '../../src/shared/branded-types';
 
 // ---------------------------------------------------------------------------
 // Fixtures: Real Linear webhook payloads
@@ -476,8 +477,9 @@ describe('Staging: Phase 7D — AgentSessionEvent pipeline behavior', () => {
       timestamp: new Date().toISOString(),
       source: 'linear',
       sourceMetadata: {
-        agentSessionId: sessionPayload.agentSession.id,
-        linearIssueId: sessionPayload.agentSession.issue.id,
+        source: 'linear' as const,
+        agentSessionId: agentSessionId(sessionPayload.agentSession.id),
+        linearIssueId: linearIssueId(sessionPayload.agentSession.issue.id),
         linearIdentifier: sessionPayload.agentSession.issue.identifier,
         intent: 'custom:linear-agent-session',
       },

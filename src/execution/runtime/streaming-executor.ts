@@ -21,6 +21,7 @@ import type { Logger } from '../../shared/logger';
 import { createAgentSandbox, type AgentSandbox } from './agent-sandbox';
 import { buildSafeEnv } from '../../shared/safe-env';
 import { extractJson } from './task-executor';
+import { execId as toExecId, planId as toPlanId } from '../../shared/branded-types';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -63,8 +64,8 @@ export function createStreamingTaskExecutor(opts: StreamingTaskExecutorOpts): Ta
     async execute(request: TaskExecutionRequest): Promise<TaskExecutionResult> {
       const startTime = Date.now();
       const timeout = request.timeout || defaultTimeout;
-      const execId = randomUUID();
-      const planId = (request.metadata?.planId as string) ?? 'unknown';
+      const execId = toExecId(randomUUID());
+      const planId = toPlanId((request.metadata?.planId as string) ?? 'unknown');
       let sandbox: AgentSandbox | undefined;
 
       // Spawn in agent tracker

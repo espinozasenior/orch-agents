@@ -14,6 +14,7 @@ import {
   type CoordinatorDispatcher,
 } from '../../src/execution/coordinator-dispatcher';
 import type { WorkflowPlan, IntakeEvent, WorktreeHandle } from '../../src/types';
+import { planId, workItemId, linearIssueId, agentSessionId } from '../../src/shared/branded-types';
 import type { InteractiveTaskExecutor, InteractiveExecutionRequest } from '../../src/execution/runtime/interactive-executor';
 import type { TaskExecutionResult } from '../../src/execution/runtime/task-executor';
 import type { WorktreeManager } from '../../src/execution/workspace/worktree-manager';
@@ -32,7 +33,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'intake-1',
     timestamp: new Date().toISOString(),
     source: 'linear',
-    sourceMetadata: { linearIssueId: 'issue-1', agentSessionId: 'session-1', intent: 'custom:linear-prompted' },
+    sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-1'), agentSessionId: agentSessionId('session-1'), intent: 'custom:linear-prompted' },
     entities: { requirementId: 'ENG-1', branch: 'main' },
     rawText: 'Investigate the regression in src/foo.ts',
     ...overrides,
@@ -41,8 +42,8 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
 
 function makeCoordinatorPlan(overrides: Partial<WorkflowPlan> = {}): WorkflowPlan {
   return {
-    id: 'plan-coord-1',
-    workItemId: 'work-1',
+    id: planId('plan-coord-1'),
+    workItemId: workItemId('work-1'),
     template: 'coordinator',
     methodology: 'coordinator',
     agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2, required: true }],
@@ -51,11 +52,11 @@ function makeCoordinatorPlan(overrides: Partial<WorkflowPlan> = {}): WorkflowPla
   };
 }
 
-function makeHandle(planId: string = 'plan-coord-1'): WorktreeHandle {
+function makeHandle(id: string = 'plan-coord-1'): WorktreeHandle {
   return {
-    planId,
-    path: `/tmp/orch-agents/${planId}`,
-    branch: `agent/${planId}/coordinator`,
+    planId: planId(id),
+    path: `/tmp/orch-agents/${id}`,
+    branch: `agent/${id}/coordinator`,
     baseBranch: 'main',
     status: 'active',
   };
@@ -165,7 +166,7 @@ describe('CoordinatorDispatcher', () => {
     executor = buildExecutor();
     await executor.execute(
       makeCoordinatorPlan(),
-      makeIntakeEvent({ sourceMetadata: { linearIssueId: 'issue-1', agentSessionId: 'session-1', intent: 'custom:linear-prompted' }, rawText: 'Why is the test failing?' }),
+      makeIntakeEvent({ sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-1'), agentSessionId: agentSessionId('session-1'), intent: 'custom:linear-prompted' }, rawText: 'Why is the test failing?' }),
     );
 
     const req = (mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.calls[0]
@@ -178,7 +179,7 @@ describe('CoordinatorDispatcher', () => {
     executor = buildExecutor();
     await executor.execute(
       makeCoordinatorPlan(),
-      makeIntakeEvent({ sourceMetadata: { linearIssueId: 'issue-1', intent: 'review-pr' }, rawText: 'Review PR #42' }),
+      makeIntakeEvent({ sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-1'), intent: 'review-pr' }, rawText: 'Review PR #42' }),
     );
 
     const req = (mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.calls[0]
@@ -192,7 +193,7 @@ describe('CoordinatorDispatcher', () => {
     executor = buildExecutor();
     await executor.execute(
       makeCoordinatorPlan(),
-      makeIntakeEvent({ sourceMetadata: { linearIssueId: 'issue-1', intent: 'review-pr' }, rawText: '' }),
+      makeIntakeEvent({ sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-1'), intent: 'review-pr' }, rawText: '' }),
     );
 
     const req = (mocks.interactiveExecutor.execute as ReturnType<typeof mock.fn>).mock.calls[0]

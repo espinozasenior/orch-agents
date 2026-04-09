@@ -16,6 +16,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { IntakeEvent, WorkflowPlan } from '../src/types';
+import { linearIssueId } from '../src/shared/branded-types';
 import { createEventBus, createDomainEvent } from '../src/shared/event-bus';
 import { createLogger } from '../src/shared/logger';
 import {
@@ -56,7 +57,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'intake-001',
     timestamp: '2026-03-12T00:00:00Z',
     source: 'github',
-    sourceMetadata: { template: 'github-ops', intent: 'review-pr', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
+    sourceMetadata: { source: 'github' as const, eventType: 'pull_request', deliveryId: 'test-delivery', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
     entities: { repo: 'test/repo', branch: 'main' },
     rawText: 'Test task',
     ...overrides,
@@ -213,8 +214,9 @@ describe('Execution Engine', () => {
 
       eventBus.publish(createDomainEvent('IntakeCompleted', {
         intakeEvent: makeIntakeEvent({
+          source: 'linear',
           // tdd-workflow used to fan out to coder + tester; now ignored.
-          sourceMetadata: { template: 'tdd-workflow', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
+          sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-tdd-1'), template: 'tdd-workflow' },
         }),
       }));
 
@@ -245,7 +247,7 @@ describe('Execution Engine', () => {
       });
 
       eventBus.publish(createDomainEvent('IntakeCompleted', {
-        intakeEvent: makeIntakeEvent({ sourceMetadata: { skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' } }),
+        intakeEvent: makeIntakeEvent({ sourceMetadata: { source: 'github' as const, eventType: 'pull_request', deliveryId: 'test-delivery', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' } }),
       }));
 
       await new Promise((r) => setTimeout(r, 100));
@@ -366,8 +368,9 @@ describe('Execution Engine', () => {
         intakeEvent: makeIntakeEvent({
           source: 'linear',
           sourceMetadata: {
+            source: 'linear' as const,
             template: 'quick-fix',
-            linearIssueId: 'issue-linear-1',
+            linearIssueId: linearIssueId('issue-linear-1'),
           },
         }),
       }));
@@ -421,8 +424,9 @@ describe('Execution Engine', () => {
           id: 'intake-linear-1',
           source: 'linear',
           sourceMetadata: {
+            source: 'linear' as const,
             template: 'quick-fix',
-            linearIssueId: 'issue-linear-stable-1',
+            linearIssueId: linearIssueId('issue-linear-stable-1'),
           },
         }),
       }));
@@ -432,8 +436,9 @@ describe('Execution Engine', () => {
           id: 'intake-linear-2',
           source: 'linear',
           sourceMetadata: {
+            source: 'linear' as const,
             template: 'quick-fix',
-            linearIssueId: 'issue-linear-stable-1',
+            linearIssueId: linearIssueId('issue-linear-stable-1'),
           },
         }),
       }));
@@ -473,8 +478,9 @@ describe('Execution Engine', () => {
           id: 'linear-intake-skip-1',
           source: 'linear',
           sourceMetadata: {
+            source: 'linear' as const,
             template: 'quick-fix',
-            linearIssueId: 'issue-linear-skip-1',
+            linearIssueId: linearIssueId('issue-linear-skip-1'),
           },
         }),
       }));
@@ -543,7 +549,7 @@ describe('Execution Engine', () => {
 
       eventBus.publish(createDomainEvent('IntakeCompleted', {
         intakeEvent: makeIntakeEvent({
-          sourceMetadata: { template: 'github-ops' },
+          sourceMetadata: { source: 'github' as const, eventType: 'pull_request', deliveryId: 'test-delivery' },
         }),
       }));
       await new Promise((r) => setTimeout(r, 50));

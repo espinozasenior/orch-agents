@@ -96,6 +96,7 @@ export function normalizeGitHubEventFromWorkflow(
     timestamp: new Date().toISOString(),
     source: 'github',
     sourceMetadata: {
+      source: 'github',
       eventType: parsed.eventType,
       action: parsed.action,
       deliveryId: parsed.deliveryId,

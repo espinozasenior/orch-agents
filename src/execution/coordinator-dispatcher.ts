@@ -22,6 +22,9 @@
 
 import { randomUUID } from 'node:crypto';
 import type { WorkflowPlan, IntakeEvent, Finding } from '../types';
+import { isLinearMeta } from '../types';
+import { phaseId } from '../shared/branded-types';
+import type { PlanId } from '../shared/branded-types';
 import type { InteractiveTaskExecutor } from './runtime/interactive-executor';
 import type { WorktreeManager } from './workspace/worktree-manager';
 import type { ArtifactApplier } from './workspace/artifact-applier';
@@ -52,6 +55,8 @@ export interface CoordinatorDispatcherDeps {
   agentTimeoutMs?: number;
   /** P6: Optional TaskRegistry for task backbone wiring. */
   taskRegistry?: TaskRegistry;
+  /** MCP server descriptors passed through to coordinator prompt context. */
+  mcpClients?: Array<{ name: string }>;
 }
 
 export interface CoordinatorDispatcher {
@@ -94,12 +99,12 @@ export interface AgentResult {
 // ---------------------------------------------------------------------------
 
 export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): CoordinatorDispatcher {
-  function emitPhaseCompleted(planId: string, status: 'completed' | 'failed', agentStart: number): void {
+  function emitPhaseCompleted(pId: PlanId, status: 'completed' | 'failed', agentStart: number): void {
     if (!deps.eventBus) return;
     deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
       phaseResult: {
-        phaseId: randomUUID(),
-        planId,
+        phaseId: phaseId(randomUUID()),
+        planId: pId,
         phaseType: 'refinement' as const,
         status,
         artifacts: [],
@@ -148,7 +153,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
 
           // 2. Build coordinator prompt: system prompt + worker tools + Linear context
           const coordinatorPrompt = getCoordinatorSystemPrompt();
-          const { workerToolsContext: workerContext } = getCoordinatorUserContext([]);
+          const { workerToolsContext: workerContext } = getCoordinatorUserContext(deps.mcpClients ?? []);
           const issueRef = intakeEvent.entities.requirementId ?? '';
           const issueDesc = intakeEvent.rawText ?? '';
 
@@ -160,7 +165,8 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
 
           // If this is a comment/follow-up, label it clearly so the coordinator
           // knows this is a question about the issue, not a new task
-          if (intakeEvent.sourceMetadata.intent === 'custom:linear-prompted' && issueDesc) {
+          const meta = intakeEvent.sourceMetadata;
+          if (isLinearMeta(meta) && meta.intent === 'custom:linear-prompted' && issueDesc) {
             contextParts.push(
               '## User Comment (follow-up on the issue above)',
               issueDesc,
@@ -176,7 +182,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
           const prompt = contextParts.join('\n\n');
 
           // 4. Emit thought activity before execution (FR-10A.02)
-          const agentSessionIdForThought = intakeEvent.sourceMetadata.agentSessionId;
+          const agentSessionIdForThought = isLinearMeta(meta) ? meta.agentSessionId : undefined;
           await emitThought(
             agentSessionIdForThought,
             'Working on your request...',
@@ -321,9 +327,10 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             }));
           }
 
-          if (deps.linearClient && intakeEvent.sourceMetadata.linearIssueId) {
-            const linearIssueId = intakeEvent.sourceMetadata.linearIssueId;
-            const agentSessionId = intakeEvent.sourceMetadata.agentSessionId;
+          const responseMeta = intakeEvent.sourceMetadata;
+          if (deps.linearClient && isLinearMeta(responseMeta) && responseMeta.linearIssueId) {
+            const linearIssueId = responseMeta.linearIssueId;
+            const agentSessionId = responseMeta.agentSessionId;
             const linearSummary = formatLinearAgentSummary({
               agentType: agent.type,
               durationMs: Date.now() - agentStart,
