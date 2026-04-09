@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { WorkflowPlan } from '../../types';
+import type { IntakeEvent, WorkflowPlan } from '../../types';
 import { createTask, TaskType } from '../task/index';
 import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
@@ -104,7 +104,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     // backward compat (and still used by the worker-thread path) but are
     // no longer consulted here. The template metadata field is preserved
     // on the plan purely for downstream observability.
-    const templateName = (intakeEvent.sourceMetadata?.template as string) ?? 'coordinator';
+    const templateName = intakeEvent.sourceMetadata?.template ?? 'coordinator';
 
     const task = createTask(TaskType.local_agent);
     const planId = task.id;
@@ -134,7 +134,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     );
 
     if (deps.linearClient && intakeEvent.sourceMetadata?.linearIssueId) {
-      const issueId = intakeEvent.sourceMetadata.linearIssueId as string;
+      const issueId = intakeEvent.sourceMetadata.linearIssueId;
       await moveLinearIssueToInProgress(deps.linearClient, issueId, logger);
       await postOrUpdateWorkpad(
         deps.linearClient,
@@ -392,7 +392,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
   };
 }
 
-function getExecutionKey(intakeEvent: { source: string; id: string; sourceMetadata?: Record<string, unknown> }): string {
+function getExecutionKey(intakeEvent: IntakeEvent): string {
   if (intakeEvent.source === 'linear' && typeof intakeEvent.sourceMetadata?.linearIssueId === 'string') {
     return `linear:${intakeEvent.sourceMetadata.linearIssueId}`;
   }

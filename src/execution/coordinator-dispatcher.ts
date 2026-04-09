@@ -176,9 +176,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
           const prompt = contextParts.join('\n\n');
 
           // 4. Emit thought activity before execution (FR-10A.02)
-          const agentSessionIdForThought = typeof intakeEvent.sourceMetadata.agentSessionId === 'string'
-            ? intakeEvent.sourceMetadata.agentSessionId as string
-            : undefined;
+          const agentSessionIdForThought = intakeEvent.sourceMetadata.agentSessionId;
           await emitThought(
             agentSessionIdForThought,
             'Working on your request...',
@@ -323,11 +321,9 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             }));
           }
 
-          if (deps.linearClient && typeof intakeEvent.sourceMetadata.linearIssueId === 'string') {
-            const linearIssueId = intakeEvent.sourceMetadata.linearIssueId as string;
-            const agentSessionId = typeof intakeEvent.sourceMetadata.agentSessionId === 'string'
-              ? intakeEvent.sourceMetadata.agentSessionId as string
-              : undefined;
+          if (deps.linearClient && intakeEvent.sourceMetadata.linearIssueId) {
+            const linearIssueId = intakeEvent.sourceMetadata.linearIssueId;
+            const agentSessionId = intakeEvent.sourceMetadata.agentSessionId;
             const linearSummary = formatLinearAgentSummary({
               agentType: agent.type,
               durationMs: Date.now() - agentStart,

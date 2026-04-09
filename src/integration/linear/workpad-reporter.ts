@@ -205,7 +205,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
         eventBus.subscribe('IntakeCompleted', (event) => {
           const intake = event.payload.intakeEvent;
           if (intake.source === 'linear') {
-            const issueId = intake.sourceMetadata.linearIssueId as string;
+            const issueId = intake.sourceMetadata.linearIssueId;
             if (issueId) {
               // We'll map this when PlanCreated arrives
               // Store temporarily by intake event id
@@ -220,7 +220,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
           const plan = event.payload.workflowPlan;
           const intake = event.payload.intakeEvent;
           if (intake?.source === 'linear') {
-            const issueId = intake.sourceMetadata.linearIssueId as string;
+            const issueId = intake.sourceMetadata.linearIssueId;
             if (issueId) {
               planToIssue.set(plan.id, issueId);
             }

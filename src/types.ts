@@ -23,13 +23,52 @@ export type SPARCPhase =
 // ---------------------------------------------------------------------------
 
 /**
- * P20: routing metadata stamped onto IntakeEvent.sourceMetadata. The
- * normalizer fills `skillPath` + `ruleKey` + `parsed`; the execution-engine
- * reads them on the IntakeCompleted handler.
+ * Source-specific metadata stamped onto IntakeEvent by the normalizers.
+ *
+ * Closed shape — every field is explicitly declared. New fields require a
+ * type update so the typed reads at the call sites stay honest. The previous
+ * `Record<string, unknown>` index signature was removed because it let the
+ * P20 typed fields (`skillPath`, `ruleKey`, `parsed`) be silently overridden
+ * by anything, defeating the purpose of typing them at all.
+ *
+ * Naming convention: GitHub-source fields are grouped first, Linear-source
+ * fields second, P20 routing fields last. All are optional because a single
+ * IntakeEvent only ever populates one source's slice.
  */
-export interface IntakeSourceMetadata extends Record<string, unknown> {
+export interface IntakeSourceMetadata {
+  // ── GitHub source ───────────────────────────────────────────────────────
+  eventType?: string;
+  action?: string | null;
+  deliveryId?: string;
+  repoFullName?: string;
+  sender?: string;
+  configSource?: 'workflow-md';
+
+  // ── Linear source ───────────────────────────────────────────────────────
+  linearIssueId?: string;
+  linearIdentifier?: string;
+  linearTitle?: string;
+  linearState?: string;
+  linearTeamId?: string;
+  linearTeamKey?: string;
+  linearUrl?: string;
+  agentSessionId?: string;
+  attempt?: number;
+  template?: string;
+  /** Snapshot of Linear issue fields at intake time (free-form). */
+  previousState?: Record<string, unknown>;
+  /** Free-form intent string used by the Linear path for log/dispatch hints. */
+  intent?: string;
+
+  // ── Staging / smoke-test runs ───────────────────────────────────────────
+  stagingRunId?: string;
+
+  // ── P20 routing (github only) ───────────────────────────────────────────
+  /** Relative path to the resolved skill file, stamped by the normalizer. */
   skillPath?: string;
+  /** Resolved WORKFLOW.md rule key, e.g. "pull_request.opened". */
   ruleKey?: string;
+  /** Full ParsedGitHubEvent for downstream context-fetchers. */
   parsed?: ParsedGitHubEvent;
 }
 
