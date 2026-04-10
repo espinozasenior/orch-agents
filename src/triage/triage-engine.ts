@@ -12,6 +12,7 @@ import type { IntakeEvent, TriageResult } from '../types';
 import type { EventBus } from '../shared/event-bus';
 import type { Logger } from '../shared/logger';
 import { createDomainEvent } from '../shared/event-bus';
+import { workItemId as wId } from '../shared/branded-types';
 import { TriageError } from '../shared/errors';
 
 // ---------------------------------------------------------------------------
@@ -30,7 +31,7 @@ import { TriageError } from '../shared/errors';
  * Also respects severity from the intake event and skipTriage flag.
  */
 export function triageEvent(event: IntakeEvent): TriageResult {
-  const meta = event.sourceMetadata as Record<string, unknown>;
+  const meta = event.sourceMetadata as unknown as Record<string, unknown>;
 
   if (meta.skipTriage === true) {
     return {
@@ -102,7 +103,7 @@ export function startTriageEngine(deps: TriageEngineDeps): () => void {
 
   return eventBus.subscribe('IntakeCompleted', (event) => {
     const intakeEvent = event.payload.intakeEvent;
-    logger.info('Triaging intake event', { eventId: intakeEvent.id, ruleKey: intakeEvent.sourceMetadata.ruleKey });
+    logger.info('Triaging intake event', { eventId: intakeEvent.id, ruleKey: intakeEvent.sourceMetadata.source === 'github' ? intakeEvent.sourceMetadata.ruleKey : undefined });
 
     try {
       const triageResult = triageEvent(intakeEvent);
@@ -127,7 +128,7 @@ export function startTriageEngine(deps: TriageEngineDeps): () => void {
 
       eventBus.publish(
         createDomainEvent('WorkFailed', {
-          workItemId: intakeEvent.id,
+          workItemId: wId(intakeEvent.id),
           failureReason: triageErr.message,
           retryCount: 0,
         }, event.correlationId),

@@ -12,6 +12,7 @@ import type { LinearClient } from './linear-client';
 import type { GitHubClient } from '../github-client';
 import { getBotMarker } from '../../shared/agent-identity';
 import type { Logger } from '../../shared/logger';
+import { redactSecrets } from '../../shared/errors';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -49,10 +50,12 @@ export async function postAgentResponse(
   githubClient: ActivityGitHubClient | undefined,
   context: ResponseContext,
 ): Promise<void> {
+  const safeBody = redactSecrets(body);
+
   if (source === 'linear' && agentSessionId && linearClient) {
     await linearClient.createAgentActivity(agentSessionId, {
       type: 'response',
-      body,
+      body: safeBody,
     });
     return;
   }
@@ -61,14 +64,14 @@ export async function postAgentResponse(
     await githubClient.postPRComment(
       context.repo,
       context.prNumber,
-      body + '\n' + getBotMarker(),
+      safeBody + '\n' + getBotMarker(),
     );
     return;
   }
 
   // Fallback: Linear state-change trigger without a session, or unknown source
   if (linearClient && context.issueId) {
-    await linearClient.createComment(context.issueId, body + '\n' + getBotMarker());
+    await linearClient.createComment(context.issueId, safeBody + '\n' + getBotMarker());
   }
 }
 
@@ -89,7 +92,7 @@ export async function emitThought(
   try {
     await linearClient.createAgentActivity(agentSessionId, {
       type: 'thought',
-      body: message,
+      body: redactSecrets(message),
     });
   } catch (err) {
     logger?.warn('Failed to emit thought activity', {

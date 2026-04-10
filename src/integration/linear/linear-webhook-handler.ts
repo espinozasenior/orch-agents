@@ -23,6 +23,8 @@ import { verifySignature } from '../../webhook-gateway/signature-verifier';
 import { normalizeLinearEvent } from './linear-normalizer';
 import { parsePromptContext } from './prompt-context-parser';
 import type { LinearWebhookPayload } from './types';
+import { agentSessionId as asId, workItemId as wId } from '../../shared/branded-types';
+import { sanitizeDeep } from '../../shared/input-sanitizer';
 import { handleWebhookError } from '../../shared/webhook-error-handler';
 import type { IntakeEvent } from '../../types';
 import type { LinearClient } from './linear-client';
@@ -148,7 +150,7 @@ export async function linearWebhookHandler(
       const body = commentBody || promptContext.issue.description || payload.agentSession.issue.title || '';
 
       eventBus.publish(createDomainEvent('AgentPrompted', {
-        agentSessionId: sessionId,
+        agentSessionId: asId(sessionId),
         issueId,
         body,
       }));
@@ -164,7 +166,7 @@ export async function linearWebhookHandler(
       if (signal === 'stop') {
         // Publish WorkCancelled
         eventBus.publish(createDomainEvent('WorkCancelled', {
-          workItemId: `linear-session-${sessionId}`,
+          workItemId: wId(`linear-session-${sessionId}`),
           cancellationReason: 'User sent stop signal via Linear',
         }));
 
@@ -189,7 +191,7 @@ export async function linearWebhookHandler(
 
       // Normal follow-up prompt
       eventBus.publish(createDomainEvent('AgentPrompted', {
-        agentSessionId: sessionId,
+        agentSessionId: asId(sessionId),
         issueId,
         body,
       }));
@@ -232,8 +234,8 @@ export async function linearWebhookHandler(
         // Step 1: Verify signature (using shared verifier with no prefix for Linear)
         verifySignature(rawBody, signature ?? '', config.linearWebhookSecret, { prefix: '' });
 
-        // Step 2: Parse payload
-        const payload = request.body as LinearWebhookPayload;
+        // Step 2: Parse payload (sanitize untrusted webhook payload first)
+        const payload = sanitizeDeep(request.body) as LinearWebhookPayload;
 
         // Route by payload.type
         switch (payload.type) {
@@ -271,7 +273,7 @@ export async function linearWebhookHandler(
 
             log.info('Linear webhook processed', {
               deliveryId,
-              intent: intakeEvent.sourceMetadata.intent,
+              intent: intakeEvent.sourceMetadata.source === 'linear' ? intakeEvent.sourceMetadata.intent : undefined,
               issueId: payload.data.id,
               identifier: payload.data.identifier,
             });

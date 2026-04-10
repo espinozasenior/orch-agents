@@ -62,7 +62,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'intake-interactive-001',
     timestamp: new Date().toISOString(),
     source: 'github',
-    sourceMetadata: { template: 'github-ops', intent: 'review-pr', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
+    sourceMetadata: { source: 'github' as const, eventType: 'pull_request', deliveryId: 'interactive-delivery', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
     entities: {
       repo: 'test-org/test-repo',
       branch: 'feature/fix-auth',

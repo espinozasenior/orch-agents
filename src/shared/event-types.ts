@@ -19,6 +19,13 @@ import type {
   Artifact,
   Finding,
 } from '../types';
+import type {
+  PlanId,
+  WorkItemId,
+  ExecId,
+  AgentSessionId,
+  PhaseId,
+} from './branded-types';
 
 // ---------------------------------------------------------------------------
 // Base event envelope
@@ -68,7 +75,7 @@ export type PlanCreatedEvent = DomainEvent<
 
 export type PhaseStartedEvent = DomainEvent<
   'PhaseStarted',
-  { planId: string; phaseType: SPARCPhase; agents: string[] }
+  { planId: PlanId; phaseType: SPARCPhase; agents: string[] }
 >;
 
 export type PhaseCompletedEvent = DomainEvent<
@@ -107,17 +114,17 @@ export type ClientNotifiedEvent = DomainEvent<
 
 export type PhaseRetriedEvent = DomainEvent<
   'PhaseRetried',
-  { phaseId: string; retryCount: number; feedback: string }
+  { phaseId: PhaseId; retryCount: number; feedback: string }
 >;
 
 export type WorkFailedEvent = DomainEvent<
   'WorkFailed',
-  { workItemId: string; failureReason: string; retryCount: number }
+  { workItemId: WorkItemId; failureReason: string; retryCount: number }
 >;
 
 export type WorkCancelledEvent = DomainEvent<
   'WorkCancelled',
-  { workItemId: string; cancellationReason: string }
+  { workItemId: WorkItemId; cancellationReason: string }
 >;
 
 export type SwarmInitializedEvent = DomainEvent<
@@ -127,12 +134,12 @@ export type SwarmInitializedEvent = DomainEvent<
 
 export type WorkPausedEvent = DomainEvent<
   'WorkPaused',
-  { workItemId: string; pauseReason: string; resumable: boolean }
+  { workItemId: WorkItemId; pauseReason: string; resumable: boolean }
 >;
 
 export type WorkCompletedEvent = DomainEvent<
   'WorkCompleted',
-  { workItemId: string; planId: string; phaseCount: number; totalDuration: number }
+  { workItemId: WorkItemId; planId: PlanId; phaseCount: number; totalDuration: number }
 >;
 
 // ---------------------------------------------------------------------------
@@ -141,32 +148,32 @@ export type WorkCompletedEvent = DomainEvent<
 
 export type ArtifactsAppliedEvent = DomainEvent<
   'ArtifactsApplied',
-  { planId: string; commitSha: string; branch: string; changedFiles: string[] }
+  { planId: PlanId; commitSha: string; branch: string; changedFiles: string[] }
 >;
 
 export type ReviewRequestedEvent = DomainEvent<
   'ReviewRequested',
-  { planId: string; commitSha: string; branch: string; artifacts: Artifact[]; attempt: number }
+  { planId: PlanId; commitSha: string; branch: string; artifacts: Artifact[]; attempt: number }
 >;
 
 export type ReviewRejectedEvent = DomainEvent<
   'ReviewRejected',
-  { planId: string; findings: Finding[]; feedback: string; attempt: number }
+  { planId: PlanId; findings: Finding[]; feedback: string; attempt: number }
 >;
 
 export type FixRequestedEvent = DomainEvent<
   'FixRequested',
-  { planId: string; feedback: string; findings: Finding[]; attempt: number }
+  { planId: PlanId; feedback: string; findings: Finding[]; attempt: number }
 >;
 
 export type CommitCreatedEvent = DomainEvent<
   'CommitCreated',
-  { planId: string; sha: string; branch: string; files: string[]; message: string }
+  { planId: PlanId; sha: string; branch: string; files: string[]; message: string }
 >;
 
 export type RollbackTriggeredEvent = DomainEvent<
   'RollbackTriggered',
-  { planId: string; reason: string; worktreePath: string }
+  { planId: PlanId; reason: string; worktreePath: string }
 >;
 
 // ---------------------------------------------------------------------------
@@ -175,27 +182,27 @@ export type RollbackTriggeredEvent = DomainEvent<
 
 export type AgentSpawnedEvent = DomainEvent<
   'AgentSpawned',
-  { execId: string; planId: string; agentRole: string; agentType: string; phaseType: SPARCPhase }
+  { execId: ExecId; planId: PlanId; agentRole: string; agentType: string; phaseType: SPARCPhase }
 >;
 
 export type AgentChunkEvent = DomainEvent<
   'AgentChunk',
-  { execId: string; planId: string; agentRole: string; chunk: string; timestamp: string }
+  { execId: ExecId; planId: PlanId; agentRole: string; chunk: string; timestamp: string }
 >;
 
 export type AgentCompletedEvent = DomainEvent<
   'AgentCompleted',
-  { execId: string; planId: string; agentRole: string; duration: number; tokenUsage?: { input: number; output: number } }
+  { execId: ExecId; planId: PlanId; agentRole: string; duration: number; tokenUsage?: { input: number; output: number } }
 >;
 
 export type AgentFailedEvent = DomainEvent<
   'AgentFailed',
-  { execId: string; planId: string; agentRole: string; error: string; duration: number }
+  { execId: ExecId; planId: PlanId; agentRole: string; error: string; duration: number }
 >;
 
 export type AgentCancelledEvent = DomainEvent<
   'AgentCancelled',
-  { execId: string; planId: string; agentRole: string; duration: number }
+  { execId: ExecId; planId: PlanId; agentRole: string; duration: number }
 >;
 
 // ---------------------------------------------------------------------------
@@ -204,7 +211,7 @@ export type AgentCancelledEvent = DomainEvent<
 
 export type AgentPromptedEvent = DomainEvent<
   'AgentPrompted',
-  { agentSessionId: string; issueId: string; body: string }
+  { agentSessionId: AgentSessionId; issueId: string; body: string }
 >;
 
 // ---------------------------------------------------------------------------
@@ -213,7 +220,7 @@ export type AgentPromptedEvent = DomainEvent<
 
 export type CompactionTriggeredEvent = DomainEvent<
   'CompactionTriggered',
-  { tier: 'pipeline' | 'reactive'; tokensBefore: number; tokensAfter: number; execId: string }
+  { tier: 'pipeline' | 'reactive'; tokensBefore: number; tokensAfter: number; execId: ExecId }
 >;
 
 export type CompactionCompletedEvent = DomainEvent<
@@ -224,23 +231,23 @@ export type CompactionCompletedEvent = DomainEvent<
     tokensAfter: number;
     ratio: number;
     latencyMs: number;
-    execId: string;
+    execId: ExecId;
   }
 >;
 
 export type ContextPressureWarningEvent = DomainEvent<
   'ContextPressureWarning',
-  { currentTokens: number; threshold: number; percentLeft: number; recommended: 'snip' | 'compact' | 'block'; execId: string }
+  { currentTokens: number; threshold: number; percentLeft: number; recommended: 'snip' | 'compact' | 'block'; execId: ExecId }
 >;
 
 export type ContextPressureErrorEvent = DomainEvent<
   'ContextPressureError',
-  { currentTokens: number; threshold: number; percentLeft: number; execId: string }
+  { currentTokens: number; threshold: number; percentLeft: number; execId: ExecId }
 >;
 
 export type BudgetContinuationEvent = DomainEvent<
   'BudgetContinuation',
-  { pct: number; tokens: number; continuationCount: number; execId: string }
+  { pct: number; tokens: number; continuationCount: number; execId: ExecId }
 >;
 
 // ---------------------------------------------------------------------------

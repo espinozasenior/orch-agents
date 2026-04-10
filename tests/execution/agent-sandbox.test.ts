@@ -1,8 +1,8 @@
 /**
- * TDD: Tests for AgentSandbox — isolates spawned agent processes from project hooks.
+ * TDD: Tests for AgentSandbox — isolates spawned agent processes with security controls.
  *
- * Creates a clean temporary directory with no .claude/settings.json so that
- * spawned `claude --print -` processes do not inherit project hooks.
+ * Creates a clean temporary directory with a restrictive .claude/settings.json
+ * so that spawned `claude --print -` processes run under tight permissions.
  */
 
 import { describe, it } from 'node:test';
@@ -12,12 +12,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   createAgentSandbox,
+  cleanupStaleSandboxes,
   getActiveSandboxes,
   type AgentSandbox,
 } from '../../src/execution/runtime/agent-sandbox';
 
 // ---------------------------------------------------------------------------
-// Step 1: agent-sandbox.ts tests
+// Core sandbox tests
 // ---------------------------------------------------------------------------
 
 describe('AgentSandbox', () => {
@@ -34,14 +35,56 @@ describe('AgentSandbox', () => {
     }
   });
 
-  it('temporary directory contains no .claude subdirectory', () => {
+  it('writes restrictive .claude/settings.json into sandbox', () => {
     const sandbox = createAgentSandbox();
     try {
-      const claudeDir = path.join(sandbox.cwd, '.claude');
+      const settingsPath = path.join(sandbox.cwd, '.claude', 'settings.json');
+      assert.ok(fs.existsSync(settingsPath), '.claude/settings.json should exist');
+
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      assert.ok(settings.permissions, 'settings should have permissions');
+      assert.ok(Array.isArray(settings.permissions.allow), 'should have allow list');
+      assert.ok(Array.isArray(settings.permissions.deny), 'should have deny list');
       assert.ok(
-        !fs.existsSync(claudeDir),
-        'Sandbox should not contain a .claude directory',
+        settings.permissions.deny.some((d: string) => d.includes('curl')),
+        'deny list should block curl',
       );
+    } finally {
+      sandbox.cleanup();
+    }
+  });
+
+  it('writes security CLAUDE.md into sandbox', () => {
+    const sandbox = createAgentSandbox();
+    try {
+      const mdPath = path.join(sandbox.cwd, 'CLAUDE.md');
+      assert.ok(fs.existsSync(mdPath), 'CLAUDE.md should exist');
+
+      const content = fs.readFileSync(mdPath, 'utf-8');
+      assert.ok(content.includes('network commands'), 'CLAUDE.md should mention network');
+      assert.ok(content.includes('secrets'), 'CLAUDE.md should mention secrets');
+    } finally {
+      sandbox.cleanup();
+    }
+  });
+
+  it('networkRestricted defaults to true with proxy env vars', () => {
+    const sandbox = createAgentSandbox();
+    try {
+      assert.equal(sandbox.networkRestricted, true);
+      assert.equal(sandbox.env.no_proxy, '*');
+      assert.equal(sandbox.env.HTTP_PROXY, 'http://0.0.0.0:0');
+      assert.equal(sandbox.env.HTTPS_PROXY, 'http://0.0.0.0:0');
+    } finally {
+      sandbox.cleanup();
+    }
+  });
+
+  it('networkRestricted: false omits proxy env vars', () => {
+    const sandbox = createAgentSandbox({ networkRestricted: false });
+    try {
+      assert.equal(sandbox.networkRestricted, false);
+      assert.equal(Object.keys(sandbox.env).length, 0);
     } finally {
       sandbox.cleanup();
     }
@@ -82,7 +125,7 @@ describe('AgentSandbox', () => {
     }
   });
 
-  // Step 4: Process exit cleanup (defense-in-depth)
+  // Process exit cleanup (defense-in-depth)
   it('getActiveSandboxes() tracks created sandboxes', () => {
     const sandbox = createAgentSandbox();
     try {
@@ -100,5 +143,42 @@ describe('AgentSandbox', () => {
 
     const active = getActiveSandboxes();
     assert.ok(!active.has(dir), 'Active set should not contain cleaned-up sandbox');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stale sandbox cleanup tests
+// ---------------------------------------------------------------------------
+
+describe('cleanupStaleSandboxes', () => {
+  it('removes sandbox directories older than maxAgeMs', () => {
+    // Create a sandbox and artificially age it
+    const sandbox = createAgentSandbox();
+    const dir = sandbox.cwd;
+
+    // Set mtime to 2 hours ago
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(dir, twoHoursAgo, twoHoursAgo);
+
+    // Clean sandboxes older than 1 hour
+    cleanupStaleSandboxes(60 * 60 * 1000);
+
+    assert.ok(!fs.existsSync(dir), 'Stale sandbox should be removed');
+  });
+
+  it('preserves sandbox directories newer than maxAgeMs', () => {
+    const sandbox = createAgentSandbox();
+    try {
+      // Clean sandboxes older than 1 hour — this one is fresh
+      cleanupStaleSandboxes(60 * 60 * 1000);
+
+      assert.ok(fs.existsSync(sandbox.cwd), 'Fresh sandbox should be preserved');
+    } finally {
+      sandbox.cleanup();
+    }
+  });
+
+  it('does not throw when tmpdir has no matching directories', () => {
+    assert.doesNotThrow(() => cleanupStaleSandboxes(0));
   });
 });

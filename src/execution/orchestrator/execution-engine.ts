@@ -14,7 +14,13 @@
 
 import { randomUUID } from 'node:crypto';
 import type { IntakeEvent, WorkflowPlan } from '../../types';
+import { isLinearMeta, isGitHubMeta } from '../../types';
 import { createTask, TaskType } from '../task/index';
+import {
+  planId as toPlanId,
+  workItemId as toWorkItemId,
+  linearIssueId as toLinearIssueId,
+} from '../../shared/branded-types';
 import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
 import { createDomainEvent } from '../../shared/event-bus';
@@ -104,13 +110,14 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     // backward compat (and still used by the worker-thread path) but are
     // no longer consulted here. The template metadata field is preserved
     // on the plan purely for downstream observability.
-    const templateName = intakeEvent.sourceMetadata?.template ?? 'coordinator';
+    const meta = intakeEvent.sourceMetadata;
+    const templateName = (meta && isLinearMeta(meta) ? meta.template : undefined) ?? 'coordinator';
 
     const task = createTask(TaskType.local_agent);
-    const planId = task.id;
+    const taskPlanId = toPlanId(task.id);
     const plan: WorkflowPlan = {
-      id: planId,
-      workItemId: intakeEvent.id,
+      id: taskPlanId,
+      workItemId: toWorkItemId(intakeEvent.id),
       template: templateName,
       agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }],
       maxAgents: workflowConfig.agents.maxConcurrent,
@@ -118,13 +125,13 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     };
 
     logger.info('Executing work item (coordinator mode)', {
-      planId,
+      planId: taskPlanId,
       workItemId: executionKey,
       template: templateName,
       correlationId,
     });
 
-    tracker.start(planId, executionKey);
+    tracker.start(taskPlanId, executionKey);
 
     eventBus.publish(
       createDomainEvent('PlanCreated', {
@@ -133,14 +140,14 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       }, correlationId),
     );
 
-    if (deps.linearClient && intakeEvent.sourceMetadata?.linearIssueId) {
-      const issueId = intakeEvent.sourceMetadata.linearIssueId;
+    if (deps.linearClient && meta && isLinearMeta(meta) && meta.linearIssueId) {
+      const issueId = meta.linearIssueId;
       await moveLinearIssueToInProgress(deps.linearClient, issueId, logger);
       await postOrUpdateWorkpad(
         deps.linearClient,
         issueId,
         buildWorkpadComment({
-          planId,
+          planId: taskPlanId,
           linearIssueId: issueId,
           currentPhase: 'starting',
           status: 'active',
@@ -170,14 +177,17 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     let enrichedIntake = intakeEvent;
     if (intakeEvent.source === 'github') {
       const skillStart = Date.now();
-      const { skillPath, ruleKey, parsed: parsedGh } = intakeEvent.sourceMetadata ?? {};
+      const ghMeta = meta && isGitHubMeta(meta) ? meta : undefined;
+      const skillPath = ghMeta?.skillPath;
+      const ruleKey = ghMeta?.ruleKey;
+      const parsedGh = ghMeta?.parsed;
 
       if (!skillPath) {
         logger.warn('IntakeCompleted has no skillPath — skipping dispatch', {
           intakeId: intakeEvent.id,
           ruleKey,
         });
-        tracker.complete(planId);
+        tracker.complete(taskPlanId);
         return;
       }
 
@@ -188,7 +198,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           skillPath,
           ruleKey,
         });
-        tracker.complete(planId);
+        tracker.complete(taskPlanId);
         return;
       }
 
@@ -213,14 +223,14 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     try {
       const result = await localAgentTask.execute(plan, enrichedIntake);
 
-      tracker.complete(planId);
+      tracker.complete(taskPlanId);
 
       if (result.status === 'failed') {
-        const reason = `All agents failed for plan ${planId}`;
-        tracker.fail(planId, reason);
+        const reason = `All agents failed for plan ${taskPlanId}`;
+        tracker.fail(taskPlanId, reason);
         eventBus.publish(
           createDomainEvent('WorkFailed', {
-            workItemId: executionKey,
+            workItemId: toWorkItemId(executionKey),
             failureReason: reason,
             retryCount: 0,
           }, correlationId),
@@ -230,21 +240,21 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
       eventBus.publish(
         createDomainEvent('WorkCompleted', {
-          workItemId: executionKey,
-          planId,
+          workItemId: toWorkItemId(executionKey),
+          planId: taskPlanId,
           phaseCount: result.agentResults.length,
           totalDuration: result.totalDuration,
         }, correlationId),
       );
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      tracker.fail(planId, reason);
+      tracker.fail(taskPlanId, reason);
 
-      logger.error('LocalAgentTask error (IntakeCompleted)', { planId, error: reason });
+      logger.error('LocalAgentTask error (IntakeCompleted)', { planId: taskPlanId, error: reason });
 
       eventBus.publish(
         createDomainEvent('WorkFailed', {
-          workItemId: executionKey,
+          workItemId: toWorkItemId(executionKey),
           failureReason: reason,
           retryCount: 0,
         }, correlationId),
@@ -275,10 +285,10 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 
     // 9F: Typed task ID — in_process_teammate for comment/prompt interactions
     const promptTask = createTask(TaskType.in_process_teammate);
-    const planId = promptTask.id;
+    const promptPlanId = toPlanId(promptTask.id);
     const plan: WorkflowPlan = {
-      id: planId,
-      workItemId: issueId,
+      id: promptPlanId,
+      workItemId: toWorkItemId(issueId),
       template: 'coordinator',
       agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }],
       maxAgents: workflowConfig.agents.maxConcurrent,
@@ -337,17 +347,17 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       id: randomUUID(),
       timestamp: new Date().toISOString(),
       source: 'linear' as const,
-      sourceMetadata: { agentSessionId, linearIssueId: issueId, intent: 'custom:linear-prompted' },
+      sourceMetadata: { source: 'linear' as const, agentSessionId, linearIssueId: toLinearIssueId(issueId), intent: 'custom:linear-prompted' },
       entities: { requirementId: issueId, labels: [] as string[] },
       rawText: rawTextParts.join('\n'),
     };
 
     logger.info('AgentPrompted → coordinator execution', {
-      planId, issueId, correlationId,
+      planId: promptPlanId, issueId, correlationId,
       bodyPreview: body.slice(0, 100),
     });
 
-    tracker.start(planId, executionKey);
+    tracker.start(promptPlanId, executionKey);
 
     try {
       // CC-aligned dispatch: AgentPrompted runs in coordinator mode via
@@ -355,29 +365,29 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       // routes through LocalAgentTask — the engine no longer dispatches via
       // the legacy SimpleExecutor path.
       const result = await localAgentTask.execute(plan, intakeEvent);
-      tracker.complete(planId);
+      tracker.complete(promptPlanId);
 
       if (result.status === 'failed') {
-        tracker.fail(planId, 'Coordinator session failed');
+        tracker.fail(promptPlanId, 'Coordinator session failed');
         eventBus.publish(createDomainEvent('WorkFailed', {
-          workItemId: executionKey,
+          workItemId: toWorkItemId(executionKey),
           failureReason: 'Coordinator session failed',
           retryCount: 0,
         }, correlationId));
       } else {
         eventBus.publish(createDomainEvent('WorkCompleted', {
-          workItemId: executionKey,
-          planId,
+          workItemId: toWorkItemId(executionKey),
+          planId: promptPlanId,
           phaseCount: 1,
           totalDuration: result.totalDuration,
         }, correlationId));
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      tracker.fail(planId, reason);
-      logger.error('AgentPrompted coordinator error', { planId, error: reason });
+      tracker.fail(promptPlanId, reason);
+      logger.error('AgentPrompted coordinator error', { planId: promptPlanId, error: reason });
       eventBus.publish(createDomainEvent('WorkFailed', {
-        workItemId: executionKey,
+        workItemId: toWorkItemId(executionKey),
         failureReason: reason,
         retryCount: 0,
       }, correlationId));
@@ -393,8 +403,9 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
 }
 
 function getExecutionKey(intakeEvent: IntakeEvent): string {
-  if (intakeEvent.source === 'linear' && typeof intakeEvent.sourceMetadata?.linearIssueId === 'string') {
-    return `linear:${intakeEvent.sourceMetadata.linearIssueId}`;
+  const meta = intakeEvent.sourceMetadata;
+  if (intakeEvent.source === 'linear' && meta && isLinearMeta(meta)) {
+    return `linear:${meta.linearIssueId}`;
   }
 
   return intakeEvent.id;

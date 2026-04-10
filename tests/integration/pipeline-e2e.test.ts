@@ -11,6 +11,7 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { IntakeEvent, ReviewVerdict } from '../../src/types';
+import { linearIssueId } from '../../src/shared/branded-types';
 import { createEventBus, createDomainEvent } from '../../src/shared/event-bus';
 import type { EventBus } from '../../src/shared/event-bus';
 import type { DomainEventType } from '../../src/shared/event-types';
@@ -62,7 +63,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'intake-e2e-001',
     timestamp: new Date().toISOString(),
     source: 'github',
-    sourceMetadata: { template: 'quick-fix', intent: 'validate-branch', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
+    sourceMetadata: { source: 'github' as const, eventType: 'push', deliveryId: 'e2e-delivery', skillPath: '.claude/skills/stub/SKILL.md', ruleKey: 'stub' },
     entities: {
       repo: 'test-org/test-repo',
       branch: 'feature/e2e',
@@ -294,8 +295,9 @@ describe('Pipeline E2E', () => {
       id: 'linear-pipeline-001',
       source: 'linear',
       sourceMetadata: {
+        source: 'linear' as const,
         template: 'quick-fix',
-        linearIssueId: 'issue-linear-001',
+        linearIssueId: linearIssueId('issue-linear-001'),
         intent: 'custom:linear-todo',
       },
     });

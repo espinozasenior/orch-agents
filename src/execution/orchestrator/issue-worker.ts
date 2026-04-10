@@ -21,6 +21,7 @@ import { createWorktreeManager } from '../workspace/worktree-manager';
 import { createArtifactApplier } from '../workspace/artifact-applier';
 import { createSdkExecutor } from '../runtime/sdk-executor';
 import { createEventBus, createDomainEvent } from '../../shared/event-bus';
+import { workItemId as wId, planId as pId } from '../../shared/branded-types';
 import { createGitHubClient } from '../../integration/github-client';
 import { createGitHubAppTokenProvider } from '../../integration/github-app-auth';
 import { buildWorkpadComment, syncPersistentWorkpadComment } from '../../integration/linear/workpad-reporter';
@@ -134,7 +135,7 @@ async function main(): Promise<void> {
         // P11: Publish WorkCancelled so sdk-executor aborts its in-flight
         // SDK call via AbortController, then exit after a short grace window.
         workerEventBus.publish(createDomainEvent('WorkCancelled', {
-          workItemId: workerWorkItemId,
+          workItemId: wId(workerWorkItemId),
           cancellationReason: typed.reason ?? 'stop_message',
         }));
         // Grace window lets the abort propagate and cleanup run before exit.
@@ -161,7 +162,7 @@ async function main(): Promise<void> {
       if (existsSync(workspacePath)) {
         logger.info('Reusing persistent issue workspace', { planId, path: workspacePath, repo: effectiveRepo });
         return {
-          planId,
+          planId: pId(planId),
           path: workspacePath,
           branch: `issue/${planId}`,
           baseBranch: effectiveBranch,

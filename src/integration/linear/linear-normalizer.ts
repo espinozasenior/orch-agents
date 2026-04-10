@@ -13,6 +13,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { IntakeEvent } from '../../types';
+import { linearIssueId } from '../../shared/branded-types';
 import { sanitize } from '../../shared/input-sanitizer';
 import type { LinearWebhookPayload } from './types';
 import type { WorkflowConfig } from './workflow-parser';
@@ -213,7 +214,8 @@ export function normalizeLinearEvent(
     timestamp: new Date().toISOString(),
     source: 'linear',
     sourceMetadata: {
-      linearIssueId: issue.id,
+      source: 'linear',
+      linearIssueId: linearIssueId(issue.id),
       linearTeamKey: issue.team?.key,
       linearIdentifier: issue.identifier,
       linearUrl: issue.url,

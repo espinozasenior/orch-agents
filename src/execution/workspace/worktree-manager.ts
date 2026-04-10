@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import type { WorktreeHandle } from '../../types';
 import type { Logger } from '../../shared/logger';
 import { ValidationError, ExecutionError } from '../../shared/errors';
+import { planId as pId } from '../../shared/branded-types';
 
 const execFile = promisify(execFileCb);
 
@@ -141,7 +142,7 @@ export function createWorktreeManager(deps: WorktreeManagerDeps = {}): WorktreeM
         if (existsSync(worktreePath)) {
           logger?.info('Worktree already exists, reusing', { planId, path: worktreePath, workBranch });
           return {
-            planId,
+            planId: pId(planId),
             path: worktreePath,
             branch: workBranch,
             baseBranch,
@@ -182,7 +183,7 @@ export function createWorktreeManager(deps: WorktreeManagerDeps = {}): WorktreeM
       }
 
       const handle: WorktreeHandle = {
-        planId,
+        planId: pId(planId),
         path: worktreePath,
         branch: workBranch,
         baseBranch,

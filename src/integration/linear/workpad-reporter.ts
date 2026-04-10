@@ -12,6 +12,7 @@
 import type { EventBus } from '../../shared/event-bus';
 import type { Logger } from '../../shared/logger';
 import { formatDuration } from '../../shared/format';
+import { redactSecrets } from '../../shared/errors';
 import type { LinearClient } from './linear-client';
 import type { AgentActivityContent, AgentActivityOptions, WorkpadState } from './types';
 import { getBotMarker, getBotName } from '../../shared/agent-identity';
@@ -204,7 +205,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
       unsubscribers.push(
         eventBus.subscribe('IntakeCompleted', (event) => {
           const intake = event.payload.intakeEvent;
-          if (intake.source === 'linear') {
+          if (intake.source === 'linear' && intake.sourceMetadata.source === 'linear') {
             const issueId = intake.sourceMetadata.linearIssueId;
             if (issueId) {
               // We'll map this when PlanCreated arrives
@@ -219,7 +220,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
         eventBus.subscribe('PlanCreated', (event) => {
           const plan = event.payload.workflowPlan;
           const intake = event.payload.intakeEvent;
-          if (intake?.source === 'linear') {
+          if (intake?.source === 'linear' && intake.sourceMetadata.source === 'linear') {
             const issueId = intake.sourceMetadata.linearIssueId;
             if (issueId) {
               planToIssue.set(plan.id, issueId);
@@ -357,7 +358,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
           });
           void emitActivity({
             type: 'error',
-            body: `Work failed: ${failureReason}`,
+            body: `Work failed: ${redactSecrets(failureReason)}`,
           });
         }),
       );

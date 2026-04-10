@@ -16,7 +16,10 @@ import { createArtifactApplier } from './execution/workspace/artifact-applier';
 import { createReviewGate, createStubDiffReviewer, createCliTestRunner, createPatternSecurityScanner } from './review/review-gate';
 import { createClaudeDiffReviewer } from './review/claude-diff-reviewer';
 import { createGitHubClient } from './integration/github-client';
-import { isAbsolute as pathIsAbsolute } from 'node:path';
+import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { cleanupAllSandboxes, cleanupStaleSandboxes } from './execution/runtime/agent-sandbox';
 import { createCoordinatorDispatcher, type CoordinatorDispatcher } from './execution/coordinator-dispatcher';
 import type { WorkflowConfig } from './integration/linear/workflow-parser';
 import { resolve as pathResolve } from 'node:path';
@@ -30,10 +33,54 @@ import { createWorkpadReporter, type WorkpadReporter } from './integration/linea
 import { createWorkflowConfigStore } from './integration/linear/workflow-config-store';
 import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 
+/**
+ * Prune stale git worktrees whose directories no longer exist on disk.
+ * Runs `git worktree list --porcelain` and invokes `git worktree prune`
+ * when orphaned entries are found.
+ */
+function cleanupStaleWorktrees(logger: ReturnType<typeof createLogger>): void {
+  try {
+    const raw = execSync('git worktree list --porcelain', { encoding: 'utf-8' });
+    const worktreeBasePath = process.env.WORKTREE_BASE_PATH ?? '/tmp/orch-agents';
+    const staleEntries: string[] = [];
+
+    for (const block of raw.split('\n\n')) {
+      const worktreeLine = block.split('\n').find((l) => l.startsWith('worktree '));
+      if (!worktreeLine) continue;
+      const wtPath = worktreeLine.slice('worktree '.length);
+
+      // Skip the main working tree (bare flag absent and no "branch" means main)
+      if (block.includes('bare') || !block.includes('branch ')) continue;
+
+      // Only consider worktrees under /tmp/ or the configured base path
+      const isTmpWorktree = wtPath.startsWith('/tmp/') || wtPath.startsWith(worktreeBasePath);
+      if (!isTmpWorktree) continue;
+
+      if (!existsSync(wtPath)) {
+        staleEntries.push(wtPath);
+      }
+    }
+
+    if (staleEntries.length > 0) {
+      execSync('git worktree prune', { encoding: 'utf-8' });
+      logger.info('Pruned stale git worktrees', { count: staleEntries.length, paths: staleEntries });
+    }
+  } catch (err) {
+    // Non-fatal — log and continue
+    logger.warn('Failed to clean up stale worktrees', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger({ level: config.logLevel, name: 'orch-agents' });
   const eventBus = createEventBus(logger);
+
+  // Clean up stale resources from previous runs
+  cleanupStaleWorktrees(logger);
+  cleanupStaleSandboxes(24 * 60 * 60 * 1000); // Remove sandbox dirs older than 24 hours
 
   logger.info('Starting Orch-Agents', {
     port: config.port,
@@ -160,6 +207,27 @@ async function main(): Promise<void> {
     linearAuthStrategy = { mode: 'apiKey', apiKey: linearApiKey };
   }
 
+  // Load MCP server names from .mcp.json (if present) so the coordinator
+  // prompt can inform agents about available MCP tools.
+  const mcpClients: Array<{ name: string }> = [];
+  const mcpJsonPath = pathJoin(process.cwd(), '.mcp.json');
+  if (existsSync(mcpJsonPath)) {
+    try {
+      const mcpJson = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'));
+      const servers = mcpJson.mcpServers ?? mcpJson;
+      for (const name of Object.keys(servers)) {
+        mcpClients.push({ name });
+      }
+      logger.info('MCP server names loaded from .mcp.json', {
+        servers: mcpClients.map((c) => c.name),
+      });
+    } catch (err) {
+      logger.warn('Failed to parse .mcp.json — MCP context will be empty', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
   const useInteractiveAgents = process.env.ENABLE_INTERACTIVE_AGENTS === 'true';
 
@@ -203,6 +271,7 @@ async function main(): Promise<void> {
       contextWindowTokens: parseInt(process.env.CONTEXT_WINDOW_TOKENS ?? '200000', 10),
       tokenBudget: process.env.TOKEN_BUDGET ? parseInt(process.env.TOKEN_BUDGET, 10) : undefined,
       enableCompaction: process.env.ENABLE_COMPACTION !== 'false',
+      mcpClients,
     });
     const artifactApplier = createArtifactApplier({ logger: execLogger });
     const linearClient = linearAuthStrategy
@@ -256,6 +325,7 @@ async function main(): Promise<void> {
       logger: execLogger,
       eventBus,
       agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
+      mcpClients,
     });
 
     logger.info('Interactive agent execution enabled', {
@@ -273,6 +343,7 @@ async function main(): Promise<void> {
       const symphonyCoordinatorSession = createCoordinatorSession({
         baseExecutor: interactiveExecutor,
         logger: execLogger,
+        mcpClients,
       });
 
       symphonyOrchestrator = createSymphonyOrchestrator({
@@ -379,7 +450,7 @@ async function main(): Promise<void> {
   });
 
   try {
-    const host = process.env.BIND_HOST ?? '0.0.0.0';
+    const host = process.env.BIND_HOST ?? '127.0.0.1';
     await server.listen({ port: config.port, host });
     logger.info('Server listening', { port: config.port });
   } catch (err) {
@@ -390,15 +461,54 @@ async function main(): Promise<void> {
   }
 
   // Graceful shutdown
+  let shuttingDown = false;
+  const shutdownTimeoutMs = parseInt(process.env.SHUTDOWN_TIMEOUT_MS ?? '10000', 10);
+
   const shutdown = async (signal: string) => {
-    logger.info('Shutting down', { signal });
-    await symphonyOrchestrator?.stop();
-    workflowConfigStore.stop();
-    workpadReporter?.stop();
-    pipeline.shutdown();
-    eventBus.removeAllListeners();
-    await server.close();
-    process.exit(0);
+    if (shuttingDown) {
+      logger.warn('Shutdown already in progress, ignoring duplicate signal', { signal });
+      return;
+    }
+    shuttingDown = true;
+    logger.info('Shutdown initiated', { signal, timeoutMs: shutdownTimeoutMs });
+
+    // Force exit if graceful shutdown takes too long
+    const forceExitTimer = setTimeout(() => {
+      logger.error('Graceful shutdown timed out — forcing exit', { timeoutMs: shutdownTimeoutMs });
+      process.exit(1);
+    }, shutdownTimeoutMs);
+    forceExitTimer.unref();
+
+    try {
+      logger.info('Shutdown step: stopping symphony orchestrator');
+      await symphonyOrchestrator?.stop();
+
+      logger.info('Shutdown step: stopping workflow config store');
+      workflowConfigStore.stop();
+
+      logger.info('Shutdown step: stopping workpad reporter');
+      workpadReporter?.stop();
+
+      logger.info('Shutdown step: shutting down pipeline');
+      pipeline.shutdown();
+
+      logger.info('Shutdown step: removing event listeners');
+      eventBus.removeAllListeners();
+
+      logger.info('Shutdown step: closing HTTP server');
+      await server.close();
+
+      logger.info('Shutdown step: cleaning up agent sandboxes');
+      cleanupAllSandboxes();
+
+      logger.info('Shutdown complete', { signal });
+      process.exit(0);
+    } catch (err) {
+      logger.error('Error during shutdown', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      process.exit(1);
+    }
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
