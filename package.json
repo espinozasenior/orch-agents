@@ -3,7 +3,18 @@
   "version": "0.2.0",
   "description": "Autonomous Development Agency System - orchestrates AI agent swarms for software development workflows",
   "type": "commonjs",
-  "main": "dist/index.js",
+  "main": "dist/lib/index.js",
+  "types": "dist/lib/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/lib/index.d.ts", "default": "./dist/lib/index.js" },
+    "./compact": { "types": "./dist/services/compact/index.d.ts", "default": "./dist/services/compact/index.js" },
+    "./review": { "types": "./dist/review/review-gate.d.ts", "default": "./dist/review/review-gate.js" },
+    "./worktree": { "types": "./dist/execution/workspace/worktree-manager.d.ts", "default": "./dist/execution/workspace/worktree-manager.js" },
+    "./github-auth": { "types": "./dist/integration/github-app-auth.d.ts", "default": "./dist/integration/github-app-auth.js" },
+    "./errors": { "types": "./dist/shared/errors.d.ts", "default": "./dist/shared/errors.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist/", "README.md"],
   "scripts": {
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
