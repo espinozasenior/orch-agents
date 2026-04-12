@@ -515,4 +515,6 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-main();
+if (require.main === module) {
+  main();
+}
