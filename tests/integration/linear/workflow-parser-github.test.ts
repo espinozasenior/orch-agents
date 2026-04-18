@@ -1,14 +1,15 @@
 /**
- * Tests for WorkflowParser github.events section (GAP-15).
+ * Tests for WorkflowParser github.events per-repo section (GAP-15 / SPEC-001).
  *
- * Verifies that parseFlatYaml() supports 2-level nesting for the github.events
- * section and that buildConfig() correctly populates WorkflowConfig.github.events.
+ * Verifies that github.events inside each repo entry are correctly parsed
+ * and accessible via resolveRepoConfig().
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseWorkflowMdString,
+  resolveRepoConfig,
 } from '../../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
@@ -16,24 +17,6 @@ import {
 // ---------------------------------------------------------------------------
 
 const WORKFLOW_WITH_GITHUB = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-  tdd-workflow:
-    - .claude/agents/core/coder.md
-  feature-build:
-    - .claude/agents/core/coder.md
-  security-audit:
-    - .claude/agents/core/coder.md
-  sparc-full:
-    - .claude/agents/core/coder.md
-  github-ops:
-    - .claude/agents/core/coder.md
-  release-pipeline:
-    - .claude/agents/core/coder.md
-  cicd-pipeline:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
@@ -45,32 +28,30 @@ tracker:
     - completed
     - canceled
 
-github:
-  events:
-    pull_request.opened: github-ops
-    pull_request.synchronize: github-ops
-    pull_request.closed.merged: release-pipeline
-    pull_request.ready_for_review: github-ops
-    push.default_branch: cicd-pipeline
-    push.other: quick-fix
-    issues.opened: github-ops
-    issues.labeled.bug: tdd-workflow
-    issues.labeled.enhancement: feature-build
-    issues.labeled.security: security-audit
-    issue_comment.mentions_bot: quick-fix
-    pull_request_review.changes_requested: quick-fix
-    workflow_run.failure: quick-fix
-    release.published: release-pipeline
-    deployment_status.failure: quick-fix
+repos:
+  org/main-repo:
+    url: git@github.com:org/main-repo.git
+    default_branch: main
+    github:
+      events:
+        pull_request.opened: github-ops
+        pull_request.synchronize: github-ops
+        pull_request.closed.merged: release-pipeline
+        pull_request.ready_for_review: github-ops
+        push.default_branch: cicd-pipeline
+        push.other: quick-fix
+        issues.opened: github-ops
+        issues.labeled.bug: tdd-workflow
+        issues.labeled.enhancement: feature-build
+        issues.labeled.security: security-audit
+        issue_comment.mentions_bot: quick-fix
+        pull_request_review.changes_requested: quick-fix
+        workflow_run.failure: quick-fix
+        release.published: release-pipeline
+        deployment_status.failure: quick-fix
 
-agents:
-  max_concurrent: 8
-  routing:
-    bug: tdd-workflow
-    feature: feature-build
-    security: security-audit
-    refactor: sparc-full
-    default: quick-fix
+  org/secondary-repo:
+    url: git@github.com:org/secondary-repo.git
 
 polling:
   interval_ms: 30000
@@ -84,18 +65,14 @@ You are an agent.
 `;
 
 const WORKFLOW_WITHOUT_GITHUB = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 
 polling:
   enabled: false
@@ -129,31 +106,35 @@ describe('WorkflowParser github.events (GAP-15)', () => {
     }
   });
 
-  it('AC2: should parse github.events section into WorkflowConfig', () => {
+  it('AC2: should parse github.events section into per-repo config', () => {
     const config = parseWorkflowMdString(WORKFLOW_WITH_GITHUB);
+    const resolved = resolveRepoConfig(config, 'org/main-repo');
 
-    assert.ok(config.github, 'github section should be defined');
-    assert.ok(config.github.events, 'github.events should be defined');
+    assert.ok(resolved, 'resolved config should be defined');
+    assert.ok(resolved.github, 'github section should be defined');
+    assert.ok(resolved.github.events, 'github.events should be defined');
 
     // Verify all 15 rules are present
-    assert.equal(Object.keys(config.github.events).length, 15);
+    assert.equal(Object.keys(resolved.github.events).length, 15);
 
     // Spot check specific rules
-    assert.equal(config.github.events['pull_request.opened'], 'github-ops');
-    assert.equal(config.github.events['push.default_branch'], 'cicd-pipeline');
-    assert.equal(config.github.events['push.other'], 'quick-fix');
-    assert.equal(config.github.events['issues.labeled.bug'], 'tdd-workflow');
-    assert.equal(config.github.events['pull_request.closed.merged'], 'release-pipeline');
-    assert.equal(config.github.events['issue_comment.mentions_bot'], 'quick-fix');
-    assert.equal(config.github.events['workflow_run.failure'], 'quick-fix');
-    assert.equal(config.github.events['release.published'], 'release-pipeline');
-    assert.equal(config.github.events['deployment_status.failure'], 'quick-fix');
+    assert.equal(resolved.github.events['pull_request.opened'], 'github-ops');
+    assert.equal(resolved.github.events['push.default_branch'], 'cicd-pipeline');
+    assert.equal(resolved.github.events['push.other'], 'quick-fix');
+    assert.equal(resolved.github.events['issues.labeled.bug'], 'tdd-workflow');
+    assert.equal(resolved.github.events['pull_request.closed.merged'], 'release-pipeline');
+    assert.equal(resolved.github.events['issue_comment.mentions_bot'], 'quick-fix');
+    assert.equal(resolved.github.events['workflow_run.failure'], 'quick-fix');
+    assert.equal(resolved.github.events['release.published'], 'release-pipeline');
+    assert.equal(resolved.github.events['deployment_status.failure'], 'quick-fix');
   });
 
-  it('AC3: should return github as undefined when WORKFLOW.md has no github section', () => {
+  it('AC3: should return github as undefined when repo has no github section', () => {
     const config = parseWorkflowMdString(WORKFLOW_WITHOUT_GITHUB);
+    const resolved = resolveRepoConfig(config, 'org/my-repo');
 
-    assert.equal(config.github, undefined);
+    assert.ok(resolved);
+    assert.equal(resolved.github, undefined);
   });
 
   it('should preserve existing Linear config when github section is present', () => {
@@ -161,49 +142,45 @@ describe('WorkflowParser github.events (GAP-15)', () => {
 
     assert.equal(config.tracker.kind, 'linear');
     assert.equal(config.tracker.team, 'my-team');
-    assert.equal(config.agents.defaultTemplate, 'quick-fix');
-    assert.equal(config.agents.routing.bug, 'tdd-workflow');
     assert.equal(config.polling.intervalMs, 30000);
     assert.equal(config.stall.timeoutMs, 300000);
   });
 
   it('should handle empty github.events section gracefully', () => {
     const emptyEvents = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-github:
-  events:
-
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
+    github:
+      events:
 ---
 `;
     const config = parseWorkflowMdString(emptyEvents);
+    const resolved = resolveRepoConfig(config, 'org/my-repo');
 
+    assert.ok(resolved);
     // Empty events section -> github is undefined (no entries extracted)
-    assert.equal(config.github, undefined);
+    assert.equal(resolved.github, undefined);
   });
 
   it('should parse dotted keys in github.events as literal rule keys', () => {
     const config = parseWorkflowMdString(WORKFLOW_WITH_GITHUB);
+    const resolved = resolveRepoConfig(config, 'org/main-repo');
 
     // The key 'pull_request.closed.merged' should be stored as-is, not nested further
-    assert.ok(config.github);
-    assert.equal(config.github.events['pull_request.closed.merged'], 'release-pipeline');
+    assert.ok(resolved?.github);
+    assert.equal(resolved.github!.events['pull_request.closed.merged'], 'release-pipeline');
   });
 
-  it('should not break existing parser tests (backward compat)', () => {
-    const config = parseWorkflowMdString(WORKFLOW_WITHOUT_GITHUB);
+  it('repos without github.events do not inherit events from other repos', () => {
+    const config = parseWorkflowMdString(WORKFLOW_WITH_GITHUB);
+    const resolved = resolveRepoConfig(config, 'org/secondary-repo');
 
-    assert.equal(config.tracker.kind, 'linear');
-    assert.equal(config.agents.defaultTemplate, 'quick-fix');
-    assert.equal(config.github, undefined);
+    assert.ok(resolved);
+    assert.equal(resolved.github, undefined);
   });
 });

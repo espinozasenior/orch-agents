@@ -1,8 +1,8 @@
 /**
- * Phase 8: Multi-Repository Workspace Resolution — Staging Tests
+ * SPEC-001: Multi-Repository Resolution -- Staging Tests
  *
- * Validates FR-8.01 through FR-8.06 against the spec at
- * docs/sparc/phase-8-multi-repo-workspace.md
+ * Validates repo resolution by label, team, and fallback using
+ * the new repos: Record<string, RepoConfig> map format.
  */
 
 import { describe, it } from 'node:test';
@@ -13,18 +13,22 @@ import {
   getRepoClonePath,
   getIssueWorktreePath,
 } from '../../src/execution/orchestrator/repo-resolver';
-import type { WorkspaceConfig, RepoConfig } from '../../src/integration/linear/workflow-parser';
+import type { RepoConfig } from '../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-function makeWorkspace(repos: RepoConfig[], defaultRepo?: string): WorkspaceConfig {
-  return {
-    root: '/tmp/workspace',
-    defaultRepo,
-    repos,
-  };
+function makeReposMap(repos: Record<string, Partial<RepoConfig>>): Record<string, RepoConfig> {
+  const result: Record<string, RepoConfig> = {};
+  for (const [name, partial] of Object.entries(repos)) {
+    result[name] = {
+      url: partial.url ?? `https://github.com/${name}`,
+      defaultBranch: partial.defaultBranch ?? 'main',
+      ...partial,
+    };
+  }
+  return result;
 }
 
 function makeIssue(overrides: {
@@ -36,7 +40,6 @@ function makeIssue(overrides: {
     identifier: 'ENG-42',
     title: 'Fix bug',
     state: { id: 's1', name: 'In Progress', type: 'started' },
-    // repo-resolver expects GraphQL shape: labels.nodes[{name}]
     labels: { nodes: overrides.labels ?? [] },
     team: overrides.team ?? { id: 'team-1', key: 'ENG' },
     priority: 3,
@@ -47,33 +50,33 @@ function makeIssue(overrides: {
 // FR-8.01: Repo resolved by label match
 // ---------------------------------------------------------------------------
 
-describe('Phase 8 Staging: FR-8.01 — Label-based resolution', () => {
+describe('SPEC-001 Staging: Label-based resolution', () => {
   it('resolves repo when issue label matches repo.labels', async () => {
-    const workspace = makeWorkspace([
-      { name: 'frontend', url: 'https://github.com/org/frontend', labels: ['frontend', 'ui'] },
-      { name: 'backend', url: 'https://github.com/org/backend', labels: ['api', 'backend'] },
-    ]);
+    const repos = makeReposMap({
+      'org/frontend': { labels: ['frontend', 'ui'] },
+      'org/backend': { labels: ['api', 'backend'] },
+    });
 
     const issue = makeIssue({ labels: [{ id: 'l1', name: 'frontend' }] });
-    const result = await resolveRepoForIssue(issue as never, workspace);
+    const result = await resolveRepoForIssue(issue as never, repos);
 
     assert.equal(result.status, 'resolved');
     if (result.status === 'resolved') {
-      assert.equal(result.repo.name, 'frontend');
+      assert.equal(result.repo.name, 'org/frontend');
     }
   });
 
   it('label match is case-insensitive', async () => {
-    const workspace = makeWorkspace([
-      { name: 'api', url: 'https://github.com/org/api', labels: ['Backend'] },
-    ]);
+    const repos = makeReposMap({
+      'org/api': { labels: ['Backend'] },
+    });
 
     const issue = makeIssue({ labels: [{ id: 'l1', name: 'backend' }] });
-    const result = await resolveRepoForIssue(issue as never, workspace);
+    const result = await resolveRepoForIssue(issue as never, repos);
 
     assert.equal(result.status, 'resolved');
     if (result.status === 'resolved') {
-      assert.equal(result.repo.name, 'api');
+      assert.equal(result.repo.name, 'org/api');
     }
   });
 });
@@ -82,71 +85,65 @@ describe('Phase 8 Staging: FR-8.01 — Label-based resolution', () => {
 // FR-8.02: Repo resolved by team key match
 // ---------------------------------------------------------------------------
 
-describe('Phase 8 Staging: FR-8.02 — Team-based resolution', () => {
+describe('SPEC-001 Staging: Team-based resolution', () => {
   it('resolves repo when issue team.key matches repo.teams', async () => {
-    const workspace = makeWorkspace([
-      { name: 'platform', url: 'https://github.com/org/platform', teams: ['ENG', 'PLATFORM'] },
-    ]);
+    const repos = makeReposMap({
+      'org/platform': { teams: ['ENG', 'PLATFORM'] },
+    });
 
     const issue = makeIssue({ team: { id: 't1', key: 'ENG' } });
-    const result = await resolveRepoForIssue(issue as never, workspace);
+    const result = await resolveRepoForIssue(issue as never, repos);
 
     assert.equal(result.status, 'resolved');
     if (result.status === 'resolved') {
-      assert.equal(result.repo.name, 'platform');
+      assert.equal(result.repo.name, 'org/platform');
     }
   });
 
   it('label match takes priority over team match', async () => {
-    const workspace = makeWorkspace([
-      { name: 'by-label', url: 'https://github.com/org/by-label', labels: ['special'] },
-      { name: 'by-team', url: 'https://github.com/org/by-team', teams: ['ENG'] },
-    ]);
+    const repos = makeReposMap({
+      'org/by-label': { labels: ['special'] },
+      'org/by-team': { teams: ['ENG'] },
+    });
 
     const issue = makeIssue({
       labels: [{ id: 'l1', name: 'special' }],
       team: { id: 't1', key: 'ENG' },
     });
-    const result = await resolveRepoForIssue(issue as never, workspace);
+    const result = await resolveRepoForIssue(issue as never, repos);
 
     assert.equal(result.status, 'resolved');
     if (result.status === 'resolved') {
-      assert.equal(result.repo.name, 'by-label', 'Label match wins over team match');
+      assert.equal(result.repo.name, 'org/by-label', 'Label match wins over team match');
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// FR-8.04: Default repo fallback
+// FR-8.04: Fallback to first repo
 // ---------------------------------------------------------------------------
 
-describe('Phase 8 Staging: FR-8.04 — Default repo fallback', () => {
-  it('falls back to defaultRepo when no match found', async () => {
-    const workspace = makeWorkspace(
-      [{ name: 'main-app', url: 'https://github.com/org/main-app' }],
-      'main-app',
-    );
+describe('SPEC-001 Staging: First repo fallback', () => {
+  it('falls back to first repo when no match found', async () => {
+    const repos = makeReposMap({
+      'org/main-app': {},
+    });
 
     const issue = makeIssue(); // no labels, team doesn't match any repo.teams
-    const result = await resolveRepoForIssue(issue as never, workspace);
+    const result = await resolveRepoForIssue(issue as never, repos);
 
     assert.equal(result.status, 'resolved');
     if (result.status === 'resolved') {
-      assert.equal(result.repo.name, 'main-app');
+      assert.equal(result.repo.name, 'org/main-app');
     }
   });
 
-  it('throws when no match and no default (no silent failure)', async () => {
-    const workspace = makeWorkspace([
-      { name: 'unrelated', url: 'https://github.com/org/unrelated', labels: ['other'] },
-    ]);
-
+  it('throws when repos map is empty', async () => {
     const issue = makeIssue();
-    // Without Linear API client for suggestions, resolver throws
     await assert.rejects(
-      () => resolveRepoForIssue(issue as never, workspace),
-      /No repo resolved/,
-      'Throws when no repo can be resolved',
+      () => resolveRepoForIssue(issue as never, {}),
+      /repos is required/,
+      'Throws when repos map is empty',
     );
   });
 });
@@ -155,7 +152,7 @@ describe('Phase 8 Staging: FR-8.04 — Default repo fallback', () => {
 // FR-8.05: Path construction
 // ---------------------------------------------------------------------------
 
-describe('Phase 8 Staging: FR-8.05 — Path construction', () => {
+describe('SPEC-001 Staging: Path construction', () => {
   it('extractFullName parses GitHub URL', () => {
     assert.equal(extractFullName('https://github.com/org/repo'), 'org/repo');
     assert.equal(extractFullName('https://github.com/org/repo.git'), 'org/repo');

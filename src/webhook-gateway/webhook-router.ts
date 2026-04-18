@@ -22,6 +22,7 @@ import { createEventBuffer, type EventBuffer } from './event-buffer';
 import { parseGitHubEvent } from './event-parser';
 import { normalizeGitHubEventFromWorkflow } from '../intake/github-workflow-normalizer';
 import type { WorkflowConfig } from '../integration/linear/workflow-parser';
+import { resolveRepoConfig } from '../integration/linear/workflow-parser';
 import { ValidationError } from '../shared/errors';
 import { sanitizeDeep } from '../shared/input-sanitizer';
 import { handleWebhookError } from '../shared/webhook-error-handler';
@@ -43,6 +44,10 @@ export interface StatusSurfaceSnapshot {
     error?: string;
   };
   orchestrator?: OrchestratorSnapshot;
+  tunnel?: {
+    enabled: boolean;
+    url: string;
+  };
   links?: {
     dashboardUrl?: string;
     terminalSnapshotUrl?: string;
@@ -206,11 +211,21 @@ export async function webhookRouter(
         // Step 3: Deduplication and rate limiting
         buffer.check(deliveryId, parsed.repoFullName);
 
-        // Step 4: Normalize to IntakeEvent using WORKFLOW.md config
+        // Step 4: Resolve per-repo config from WORKFLOW.md repos: map
         if (!deps.workflowConfig) {
           throw new ValidationError('WorkflowConfig not loaded — WORKFLOW.md is required', {});
         }
-        const intakeEvent = normalizeGitHubEventFromWorkflow(parsed, deps.workflowConfig);
+        const repoConfig = resolveRepoConfig(deps.workflowConfig, parsed.repoFullName);
+        if (!repoConfig) {
+          log.info('Event from unconfigured repo, skipping', {
+            repo: parsed.repoFullName,
+            deliveryId,
+          });
+          return reply.status(202).send({ id: deliveryId, status: 'skipped' });
+        }
+
+        // Step 5: Normalize to IntakeEvent using per-repo config
+        const intakeEvent = normalizeGitHubEventFromWorkflow(parsed, repoConfig);
 
         if (!intakeEvent) {
           log.info('Event skipped (bot sender or no matching rule)', {
@@ -224,7 +239,7 @@ export async function webhookRouter(
           });
         }
 
-        // Step 5: Publish IntakeCompleted event
+        // Step 6: Publish IntakeCompleted event
         const domainEvent = createDomainEvent(
           'IntakeCompleted',
           { intakeEvent },
@@ -241,7 +256,7 @@ export async function webhookRouter(
           repo: parsed.repoFullName,
         });
 
-        // Step 6: Return 202 Accepted
+        // Step 7: Return 202 Accepted
         return reply.status(202).send({
           id: deliveryId,
           status: 'queued',
@@ -310,6 +325,7 @@ function projectStatusSurface(snapshot: StatusSurfaceSnapshot) {
 
   return {
     workflow: snapshot.workflow,
+    tunnel: snapshot.tunnel ?? null,
     summary: {
       activeIssueCount: orchestrator.running.length,
       retryCount: orchestrator.retries.length,

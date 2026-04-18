@@ -87,9 +87,9 @@ async function main(): Promise<void> {
       tokenStore,
       logger,
     });
-  } else if (data.workflowConfig.tracker.apiKey) {
+  } else if (data.workflowConfig.tracker?.apiKey) {
     linearClient = createLinearClient({
-      apiKey: data.workflowConfig.tracker.apiKey,
+      apiKey: data.workflowConfig.tracker?.apiKey,
       logger,
     });
   }

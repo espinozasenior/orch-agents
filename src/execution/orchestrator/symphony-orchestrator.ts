@@ -15,7 +15,7 @@ import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
 import type { TokenUsage } from '../../types';
 import { resolveRepoForIssue } from './repo-resolver';
-import type { RepoConfig } from '../../integration/linear/workflow-parser';
+import type { ResolvedRepo } from './repo-resolver';
 import { createTask, TaskType, TaskStatus, createTaskRegistry, createTaskOutputWriter } from '../task';
 import type { TaskRouter } from '../task';
 import { pollTasks } from '../task/taskPoller';
@@ -243,8 +243,8 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     try {
       const workflowConfig = getWorkflowConfig();
       candidates = await deps.linearClient.fetchIssuesByStates(
-        workflowConfig.tracker.team,
-        workflowConfig.tracker.activeStates,
+        workflowConfig.tracker?.team ?? '',
+        workflowConfig.tracker?.activeStates ?? [],
       );
     } catch (err) {
       logger.error('Failed to fetch Linear candidate issues', {
@@ -370,10 +370,10 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     if (!issue.id || !issue.identifier || !issue.title || !issue.state?.name) {
       return false;
     }
-    if (!workflowConfig.tracker.activeStates.includes(issue.state.name)) {
+    if (!(workflowConfig.tracker?.activeStates ?? []).includes(issue.state.name)) {
       return false;
     }
-    if (workflowConfig.tracker.terminalStates.includes(issue.state.name)) {
+    if ((workflowConfig.tracker?.terminalStates ?? []).includes(issue.state.name)) {
       return false;
     }
     if (isBlockedIssue(issue)) {
@@ -392,7 +392,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     issue: LinearIssueResponse,
     attempt: number,
     previousRuntime?: RetryEntry['runtime'],
-    resolvedRepo?: RepoConfig,
+    resolvedRepo?: ResolvedRepo,
   ): void {
     const workflowConfig = getWorkflowConfig();
     const workerPath = pathResolve(__dirname, 'issue-worker.js');
@@ -552,8 +552,8 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       try {
         const workflowConfig = getWorkflowConfig();
         const issues = await deps.linearClient.fetchIssuesByStates(
-          workflowConfig.tracker.team,
-          workflowConfig.tracker.activeStates,
+          workflowConfig.tracker?.team ?? '',
+          workflowConfig.tracker?.activeStates ?? [],
         );
         const issue = issues.find((candidate) => candidate.id === issueId);
         if (!issue) {
@@ -607,12 +607,12 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       }
 
       const workflowConfig = getWorkflowConfig();
-      if (workflowConfig.tracker.terminalStates.includes(issue.state)) {
+      if ((workflowConfig.tracker?.terminalStates ?? []).includes(issue.state)) {
         await terminateIssue(issue.id, true);
         continue;
       }
 
-      if (!workflowConfig.tracker.activeStates.includes(issue.state)) {
+      if (!(workflowConfig.tracker?.activeStates ?? []).includes(issue.state)) {
         await terminateIssue(issue.id, false);
       }
     }
@@ -704,8 +704,8 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
 
     try {
       const refreshed = await deps.linearClient.fetchIssuesByStates(
-        getWorkflowConfig().tracker.team,
-        getWorkflowConfig().tracker.activeStates,
+        getWorkflowConfig().tracker?.team ?? '',
+        getWorkflowConfig().tracker?.activeStates ?? [],
       );
       const activeIssue = refreshed.find((candidate) => candidate.id === issue.id);
 
@@ -753,7 +753,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       logger.warn('coordinatorEnqueue callback is missing; falling back to direct worker dispatch');
     }
 
-    for (const stateName of workflowConfig.tracker.activeStates) {
+    for (const stateName of workflowConfig.tracker?.activeStates ?? []) {
       const stateCandidates = sortForDispatch(
         unblocked.filter((issue) => issue.state.name === stateName),
       );
@@ -778,11 +778,11 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
           }
 
           // Fallback: direct dispatch (pre-P9 behavior)
-          let resolvedRepo: RepoConfig | undefined;
-          if (workflowConfig.workspace?.repos && workflowConfig.workspace.repos.length > 0) {
+          let resolvedRepo: ResolvedRepo | undefined;
+          if (Object.keys(workflowConfig.repos).length > 0) {
             try {
               const result = await resolveRepoForIssue(
-                issue, workflowConfig.workspace, deps.linearClient, undefined, logger,
+                issue, workflowConfig.repos, deps.linearClient, undefined, logger,
               );
               if (result.status === 'pending') {
                 logger.debug('Repo resolution pending for issue; skipping dispatch', {
@@ -813,7 +813,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
 
   function getPerStateLimit(stateName: string): number {
     const workflowConfig = getWorkflowConfig();
-    const firstActiveState = workflowConfig.tracker.activeStates[0];
+    const firstActiveState = (workflowConfig.tracker?.activeStates ?? [])[0];
     if (stateName === firstActiveState) {
       return workflowConfig.agent.maxConcurrentAgents;
     }
@@ -843,7 +843,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
 
       for (const issueId of entries) {
         const issueState = stateByIssueId.get(issueId);
-        if (issueState && getWorkflowConfig().tracker.activeStates.includes(issueState)) {
+        if (issueState && (getWorkflowConfig().tracker?.activeStates ?? []).includes(issueState)) {
           continue;
         }
         cleanupIssueWorkspace(issueId);

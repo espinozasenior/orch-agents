@@ -23,15 +23,11 @@ import type { WorkflowConfig } from './workflow-parser';
 // ---------------------------------------------------------------------------
 
 const DEFAULT_WORKFLOW_CONFIG: WorkflowConfig = {
-  templates: {
-    'tdd-workflow': ['coder', 'tester'],
-    'feature-build': ['architect', 'coder', 'reviewer'],
-    'github-ops': ['reviewer'],
-    'quick-fix': ['coder'],
-    'security-audit': ['security-architect'],
-    'cicd-pipeline': ['coder'],
-    'release-pipeline': ['coder'],
-    'sparc-full': ['architect', 'coder', 'reviewer', 'tester'],
+  repos: {},
+  defaults: {
+    agents: { maxConcurrent: 8 },
+    stall: { timeoutMs: 300_000 },
+    polling: { intervalMs: 30_000, enabled: false },
   },
   tracker: {
     kind: 'linear',
@@ -44,13 +40,6 @@ const DEFAULT_WORKFLOW_CONFIG: WorkflowConfig = {
   },
   agents: {
     maxConcurrent: 8,
-    routing: {
-      bug: 'tdd-workflow',
-      feature: 'feature-build',
-      security: 'security-audit',
-      refactor: 'sparc-full',
-    },
-    defaultTemplate: 'quick-fix',
   },
   agent: {
     maxConcurrentAgents: 8,
@@ -172,23 +161,19 @@ export function normalizeLinearEvent(
   const currentStateType = issue.state?.type?.toLowerCase();
   const currentStateName = issue.state?.name?.toLowerCase();
   if (currentStateType) {
-    if (wf.tracker.terminalTypes.includes(currentStateType as never)) {
+    if ((wf.tracker?.terminalTypes ?? []).includes(currentStateType as never)) {
       return null;
     }
   } else if (currentStateName) {
     // Fallback: match by name when type is unavailable
-    const terminalStates = wf.tracker.terminalStates.map((s) => s.toLowerCase());
+    const terminalStates = (wf.tracker?.terminalStates ?? []).map((s) => s.toLowerCase());
     if (terminalStates.includes(currentStateName)) {
       return null;
     }
   }
 
-  // Find template by label matching
-  const template = findTemplateByLabels(
-    issue.labels,
-    wf.agents.routing,
-    wf.agents.defaultTemplate,
-  );
+  // Categorize by label for observability metadata
+  const template = findTemplateByLabels(issue.labels);
 
   // Determine intent label (kept as a sourceMetadata string for observability)
   const intent = buildIntent(template, issue, fields);
@@ -197,12 +182,12 @@ export function normalizeLinearEvent(
   if (stateChanged) {
     if (currentStateType) {
       // Prefer type-based matching
-      if (!wf.tracker.activeTypes.includes(currentStateType as never)) {
+      if (!(wf.tracker?.activeTypes ?? []).includes(currentStateType as never)) {
         return null;
       }
     } else if (currentStateName) {
       // Fallback: match by name when type is unavailable
-      const activeStates = wf.tracker.activeStates.map((s) => s.toLowerCase());
+      const activeStates = (wf.tracker?.activeStates ?? []).map((s) => s.toLowerCase());
       if (!activeStates.includes(currentStateName)) {
         return null;
       }
@@ -241,17 +226,17 @@ export function normalizeLinearEvent(
 // Label-based routing
 // ---------------------------------------------------------------------------
 
+const KNOWN_CATEGORIES = new Set(['bug', 'feature', 'security', 'refactor']);
+
 function findTemplateByLabels(
   labels: LinearWebhookPayload['data']['labels'],
-  routing: Record<string, string>,
-  defaultTemplate: string,
 ): string {
-  if (!labels) return defaultTemplate;
+  if (!labels) return 'general';
   for (const label of labels) {
-    const match = routing[label.name.toLowerCase()];
-    if (match) return match;
+    const name = label.name.toLowerCase();
+    if (KNOWN_CATEGORIES.has(name)) return name;
   }
-  return defaultTemplate;
+  return 'general';
 }
 
 // ---------------------------------------------------------------------------
@@ -320,8 +305,8 @@ function deriveSeverity(
   issue: LinearWebhookPayload['data'],
   template: string,
 ): 'low' | 'medium' | 'high' | 'critical' {
-  // Security template is always critical
-  if (template === 'security-audit') return 'critical';
+  // Security category is always critical
+  if (template === 'security') return 'critical';
 
   // Map Linear priority to severity
   if (issue.priority <= 1) return 'critical';

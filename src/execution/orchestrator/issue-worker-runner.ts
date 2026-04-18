@@ -125,7 +125,7 @@ export async function runIssueWorkerLifecycle(
   let conversationHistoryInjected = false;
 
   try {
-    while (deps.workflowConfig.tracker.activeStates.includes(currentIssue.state.name)) {
+    while ((deps.workflowConfig.tracker?.activeStates ?? []).includes(currentIssue.state.name)) {
       workpadCommentId = await deps.updateWorkpad({
         issue: currentIssue,
         plan,
@@ -217,7 +217,7 @@ export async function runIssueWorkerLifecycle(
 
       await updateAgentPlan(3, 'inProgress');
 
-      if (deps.workflowConfig.tracker.terminalStates.includes(currentIssue.state.name)) {
+      if ((deps.workflowConfig.tracker?.terminalStates ?? []).includes(currentIssue.state.name)) {
 
         workpadCommentId = await deps.updateWorkpad({
           issue: currentIssue,
@@ -252,7 +252,7 @@ export async function runIssueWorkerLifecycle(
         };
       }
 
-      if (!deps.workflowConfig.tracker.activeStates.includes(currentIssue.state.name)) {
+      if (!(deps.workflowConfig.tracker?.activeStates ?? []).includes(currentIssue.state.name)) {
         workpadCommentId = await deps.updateWorkpad({
           issue: currentIssue,
           plan,

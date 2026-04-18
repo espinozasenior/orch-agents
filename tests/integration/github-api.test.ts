@@ -188,11 +188,10 @@ describe('GitHub API Integration', { skip: !GITHUB_TOKEN ? SKIP_REASON : false }
     it('can build a realistic IntakeEvent from live GitHub data', async () => {
       // Dynamically import the normalizer
       const { normalizeGitHubEventFromWorkflow } = await import('../../src/intake/github-workflow-normalizer');
-      const { parseWorkflowMdString } = await import('../../src/integration/linear/workflow-parser');
+      const { parseWorkflowMdString, resolveRepoConfig } = await import('../../src/integration/linear/workflow-parser');
       const { parseGitHubEvent } = await import('../../src/webhook-gateway/event-parser');
-      const workflowConfig = parseWorkflowMdString('---\ntemplates:\n  quick-fix:\n    - coder\n  cicd-pipeline:\n    - coder\ngithub:\n  events:\n    push.default_branch: cicd-pipeline\n    push.other: quick-fix\ntracker:\n  kind: linear\n  team: test\nagents:\n  routing:\n    default: quick-fix\npolling:\n  interval_ms: 30000\n  enabled: false\nstall:\n  timeout_ms: 300000\n---\nPrompt');
 
-      // Fetch a real repo
+      // Fetch a real repo first so we can include it in the config
       const { data: repos } = await githubApi('/user/repos?per_page=1&sort=pushed', token);
       const repo = (repos as Array<{
         full_name: string;
@@ -201,6 +200,25 @@ describe('GitHub API Integration', { skip: !GITHUB_TOKEN ? SKIP_REASON : false }
         owner: { login: string; id: number };
         id: number;
       }>)[0];
+
+      const workflowMd = [
+        '---',
+        'repos:',
+        `  ${repo.full_name}:`,
+        `    url: git@github.com:${repo.full_name}.git`,
+        `    default_branch: ${repo.default_branch}`,
+        '    github:',
+        '      events:',
+        '        push.default_branch: .claude/skills/cicd/SKILL.md',
+        '        push.other: .claude/skills/quick-fix/SKILL.md',
+        'tracker:',
+        '  kind: linear',
+        '  team: test',
+        '---',
+        'Prompt',
+      ].join('\n');
+      const rootConfig = parseWorkflowMdString(workflowMd);
+      const workflowConfig = resolveRepoConfig(rootConfig, repo.full_name)!;
 
       // Build a simulated push webhook payload from real data
       const { data: commits } = await githubApi(

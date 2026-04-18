@@ -1,40 +1,17 @@
 /**
- * Setup Wizard Types.
+ * Setup Types.
  *
- * Defines the configuration schema written to config/setup.json
- * and the UI abstractions for terminal interaction.
+ * Defines the terminal IO abstractions and repo setup options
+ * used by the setup CLI commands.
  */
 
 // ---------------------------------------------------------------------------
-// Setup config (persisted to config/setup.json)
+// Repo setup options
 // ---------------------------------------------------------------------------
 
-export interface SetupConfig {
-  version: 1;
-  createdAt: string;
-  preset: PresetKey;
-  activeAgents: AgentToggle[];
-  githubEvents: EventToggle[];
-  topology: TopologyChoice;
-  consensus: ConsensusChoice;
-  swarmStrategy: StrategyChoice;
-  maxAgents: number;
-}
-
-export type PresetKey = 'minimal' | 'standard' | 'full-sparc' | 'custom';
-export type TopologyChoice = 'mesh' | 'hierarchical' | 'hierarchical-mesh' | 'ring' | 'star' | 'adaptive';
-export type ConsensusChoice = 'raft' | 'pbft' | 'none';
-export type StrategyChoice = 'specialized' | 'balanced' | 'minimal';
-
-export interface AgentToggle {
-  type: string;
-  enabled: boolean;
-}
-
-export interface EventToggle {
-  id: string;          // e.g. "push:default_branch" or "pull_request:opened"
-  label: string;       // human-readable display
-  enabled: boolean;
+export interface RepoSetupOptions {
+  repoFullName: string;
+  serverUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,14 +40,4 @@ export interface SelectItem<T = string> {
   label: string;
   description?: string;
   selected: boolean;
-}
-
-export interface PromptDescriptor {
-  type: 'single-select' | 'multi-select' | 'numeric';
-  title: string;
-  hint?: string;
-  items?: SelectItem[];
-  min?: number;
-  max?: number;
-  defaultValue?: number;
 }

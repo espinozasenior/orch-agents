@@ -1,7 +1,7 @@
 /**
  * Tests for LinearNormalizer -- London School TDD with WorkflowConfig.
  *
- * Covers: AC3, AC4, AC12 (bot loop prevention), label-based routing.
+ * Covers: AC3, AC4, AC12 (bot loop prevention), label-based categorization.
  */
 
 import { describe, it, beforeEach } from 'node:test';
@@ -16,10 +16,16 @@ import type { LinearWebhookPayload } from '../../../src/integration/linear/types
 import type { WorkflowConfig } from '../../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
-// Test workflow config (mirrors the old routing rules behavior)
+// Test workflow config (multi-repo schema)
 // ---------------------------------------------------------------------------
 
 const TEST_WORKFLOW_CONFIG: WorkflowConfig = {
+  repos: {},
+  defaults: {
+    agents: { maxConcurrent: 8 },
+    stall: { timeoutMs: 300_000 },
+    polling: { intervalMs: 30_000, enabled: false },
+  },
   tracker: {
     kind: 'linear',
     apiKey: '',
@@ -31,16 +37,26 @@ const TEST_WORKFLOW_CONFIG: WorkflowConfig = {
   },
   agents: {
     maxConcurrent: 8,
-    routing: {
-      bug: 'tdd-workflow',
-      feature: 'feature-build',
-      security: 'security-audit',
-      refactor: 'sparc-full',
-    },
-    defaultTemplate: 'quick-fix',
+  },
+  agent: {
+    maxConcurrentAgents: 8,
+    maxRetryBackoffMs: 300_000,
+    maxTurns: 20,
   },
   polling: { intervalMs: 30_000, enabled: false },
   stall: { timeoutMs: 300_000 },
+  agentRunner: {
+    stallTimeoutMs: 300_000,
+    command: 'claude',
+    turnTimeoutMs: 3_600_000,
+  },
+  hooks: {
+    afterCreate: null,
+    beforeRun: null,
+    afterRun: null,
+    beforeRemove: null,
+    timeoutMs: 60_000,
+  },
   promptTemplate: '',
 };
 
@@ -96,7 +112,7 @@ describe('LinearNormalizer', () => {
     assert.ok(result);
     assert.equal(result.source, 'linear');
     assert.equal(result.sourceMetadata.intent, 'custom:linear-todo');
-    assert.equal(result.sourceMetadata.template, 'quick-fix');
+    assert.equal(result.sourceMetadata.template, 'general');
     assert.equal(result.sourceMetadata.linearIssueId, 'issue-abc');
     assert.equal(result.sourceMetadata.linearIdentifier, 'ENG-42');
   });
@@ -114,8 +130,8 @@ describe('LinearNormalizer', () => {
     assert.equal(result.entities.severity, 'high'); // priority 2
   });
 
-  // AC4: Label bug -> tdd-workflow template
-  it('should produce IntakeEvent with tdd-workflow for label bug (AC4)', () => {
+  // AC4: Label bug -> 'bug' category
+  it('should produce IntakeEvent with bug category for label bug (AC4)', () => {
     const payload = makeLinearPayload({}, {
       labels: [{ id: 'label-1', name: 'bug' }],
     });
@@ -125,10 +141,10 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-bug');
-    assert.equal(result.sourceMetadata.template, 'tdd-workflow');
+    assert.equal(result.sourceMetadata.template, 'bug');
   });
 
-  it('should produce IntakeEvent with feature-build for label feature', () => {
+  it('should produce IntakeEvent with feature category for label feature', () => {
     const payload = makeLinearPayload({}, {
       labels: [{ id: 'label-2', name: 'feature' }],
     });
@@ -138,10 +154,10 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-feature');
-    assert.equal(result.sourceMetadata.template, 'feature-build');
+    assert.equal(result.sourceMetadata.template, 'feature');
   });
 
-  it('should produce IntakeEvent with security-audit for label security', () => {
+  it('should produce IntakeEvent with security category for label security', () => {
     const payload = makeLinearPayload({}, {
       labels: [{ id: 'label-3', name: 'security' }],
     });
@@ -151,11 +167,11 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-security');
-    assert.equal(result.sourceMetadata.template, 'security-audit');
+    assert.equal(result.sourceMetadata.template, 'security');
     assert.equal(result.entities.severity, 'critical');
   });
 
-  it('should produce IntakeEvent with sparc-full for label refactor', () => {
+  it('should produce IntakeEvent with refactor category for label refactor', () => {
     const payload = makeLinearPayload({}, {
       labels: [{ id: 'label-4', name: 'refactor' }],
     });
@@ -165,7 +181,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-refactor');
-    assert.equal(result.sourceMetadata.template, 'sparc-full');
+    assert.equal(result.sourceMetadata.template, 'refactor');
   });
 
   it('should produce IntakeEvent for assignee change', () => {
@@ -178,7 +194,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-assigned');
-    assert.equal(result.sourceMetadata.template, 'quick-fix');
+    assert.equal(result.sourceMetadata.template, 'general');
   });
 
   it('should produce IntakeEvent for urgent priority change', () => {
@@ -204,7 +220,7 @@ describe('LinearNormalizer', () => {
 
     // Non-urgent priority change still routes through but with default template
     assert.ok(result);
-    assert.equal(result.sourceMetadata.template, 'quick-fix');
+    assert.equal(result.sourceMetadata.template, 'general');
   });
 
   // AC12: Bot loop prevention
@@ -349,7 +365,7 @@ describe('LinearNormalizer', () => {
     assert.ok(result);
     // First match: bug
     assert.equal(result.sourceMetadata.intent, 'custom:linear-bug');
-    assert.equal(result.sourceMetadata.template, 'tdd-workflow');
+    assert.equal(result.sourceMetadata.template, 'bug');
   });
 
   it('should include requirementId from issue identifier', () => {
@@ -376,7 +392,7 @@ describe('LinearNormalizer', () => {
     assert.equal(result.rawText, 'Detailed bug report here');
   });
 
-  it('should use default template when no labels match routing', () => {
+  it('should use general category when no labels match known categories', () => {
     const payload = makeLinearPayload({}, {
       labels: [{ id: 'label-x', name: 'unknown-label' }],
     });
@@ -385,6 +401,6 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.sourceMetadata.template, 'quick-fix');
+    assert.equal(result.sourceMetadata.template, 'general');
   });
 });
