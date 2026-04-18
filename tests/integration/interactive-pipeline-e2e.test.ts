@@ -51,7 +51,7 @@ function makeWorkflowConfig(): WorkflowConfig {
     },
     repos: {},
     defaults: {
-      agents: { maxConcurrent: 8, maxConcurrentPerOrg: 8 },
+      agents: { maxConcurrentPerOrg: 8 },
       stall: { timeoutMs: 300000 },
       polling: { intervalMs: 30000, enabled: false },
     },

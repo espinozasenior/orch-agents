@@ -6,7 +6,7 @@
  * Uses the `cloudflared` npm package which handles binary download.
  */
 
-import { Tunnel, type Connection } from 'cloudflared';
+import { Tunnel } from 'cloudflared';
 
 export interface TunnelManager {
   /** Start the tunnel. Returns the public URL. */
@@ -20,12 +20,54 @@ export interface TunnelManager {
 export function createTunnelManager(): TunnelManager {
   let publicUrl: string | null = null;
   let activeTunnel: Tunnel | null = null;
-  const connections: Connection[] = [];
+  let hasAttemptedRestart = false;
+
+  function attachCrashHandlers(t: Tunnel, localPort: number): void {
+    t.on('exit', (code, signal) => {
+      // Ignore clean exits triggered by stop()
+      if (!activeTunnel) return;
+
+      const deadUrl = publicUrl;
+      publicUrl = null;
+      activeTunnel = null;
+
+      console.error(
+        `[tunnel] cloudflared crashed (code=${code}, signal=${signal}), url=${deadUrl}`,
+      );
+
+      if (!hasAttemptedRestart) {
+        hasAttemptedRestart = true;
+        console.error('[tunnel] Attempting automatic restart in 5 seconds...');
+        setTimeout(() => {
+          const restart = Tunnel.quick(`http://127.0.0.1:${localPort}`);
+          activeTunnel = restart;
+
+          restart.on('url', (url: string) => {
+            publicUrl = url;
+            console.error(`[tunnel] Restarted successfully, new url=${url}`);
+          });
+
+          restart.on('error', (err: Error) => {
+            console.error('[tunnel] Restart failed:', err.message);
+            publicUrl = null;
+            activeTunnel = null;
+          });
+
+          attachCrashHandlers(restart, localPort);
+        }, 5_000);
+      }
+    });
+
+    t.on('error', (err: Error) => {
+      console.error('[tunnel] cloudflared runtime error:', err.message);
+    });
+  }
 
   return {
     async start(localPort: number): Promise<string> {
       const t = Tunnel.quick(`http://127.0.0.1:${localPort}`);
       activeTunnel = t;
+      hasAttemptedRestart = false;
 
       return new Promise<string>((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -35,11 +77,8 @@ export function createTunnelManager(): TunnelManager {
         t.on('url', (url: string) => {
           clearTimeout(timeout);
           publicUrl = url;
+          attachCrashHandlers(t, localPort);
           resolve(url);
-        });
-
-        t.on('connected', (conn: Connection) => {
-          connections.push(conn);
         });
 
         t.on('error', (err: Error) => {
@@ -51,10 +90,10 @@ export function createTunnelManager(): TunnelManager {
 
     stop(): void {
       if (activeTunnel) {
-        activeTunnel.stop();
+        const t = activeTunnel;
         activeTunnel = null;
         publicUrl = null;
-        connections.length = 0;
+        t.stop();
       }
     },
 

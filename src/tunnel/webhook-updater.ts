@@ -5,42 +5,110 @@
  * (e.g., after tunnel starts with a new public URL).
  */
 
+import { readFileSync } from 'node:fs';
 import type { RepoConfig } from '../config';
+import { validateRepoName } from '../config/workflow-config';
 import { createJWT } from '../integration/github-app-auth';
-
-// All GitHub event types we subscribe to
-const ALL_WEBHOOK_EVENTS = [
-  'pull_request',
-  'issues',
-  'issue_comment',
-  'push',
-  'pull_request_review',
-  'workflow_run',
-  'release',
-];
-
-async function githubFetch(
-  path: string,
-  token: string,
-  options?: RequestInit,
-): Promise<Response> {
-  const url = path.startsWith('https://') ? path : `https://api.github.com${path}`;
-  return fetch(url, {
-    ...options,
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...options?.headers,
-    },
-  });
-}
+import { ALL_WEBHOOK_EVENTS, githubFetch } from '../integration/github-api';
 
 interface WebhookUpdateResult {
   repo: string;
   action: 'updated' | 'created' | 'skipped';
   hookId?: number;
   error?: string;
+}
+
+const WEBHOOK_CONCURRENCY = 5;
+
+async function updateSingleRepoWebhook(
+  repoFullName: string,
+  fullWebhookUrl: string,
+  getToken: (repoFullName: string) => Promise<string>,
+  webhookSecret: string,
+): Promise<WebhookUpdateResult> {
+  validateRepoName(repoFullName);
+
+  // Resolve token for this repo's org/owner
+  const token = await getToken(repoFullName);
+
+  // List existing hooks
+  const hooksRes = await githubFetch(`/repos/${repoFullName}/hooks`, token);
+  if (!hooksRes.ok) {
+    const errBody = await hooksRes.text().catch(() => '');
+    return {
+      repo: repoFullName,
+      action: 'skipped',
+      error: `Failed to list hooks (${hooksRes.status}): ${errBody}`,
+    };
+  }
+
+  const hooks = (await hooksRes.json()) as Array<{
+    id: number;
+    config: { url?: string };
+  }>;
+
+  // Find existing hook that points to our webhook path
+  const existing = hooks.find(
+    (h) => h.config.url?.includes('/webhooks/github'),
+  );
+
+  if (existing) {
+    // Update existing hook with new URL
+    const patchRes = await githubFetch(
+      `/repos/${repoFullName}/hooks/${existing.id}`,
+      token,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          config: {
+            url: fullWebhookUrl,
+            content_type: 'json',
+            secret: webhookSecret,
+            insecure_ssl: '0',
+          },
+        }),
+      },
+    );
+
+    if (patchRes.ok) {
+      return { repo: repoFullName, action: 'updated', hookId: existing.id };
+    }
+    return {
+      repo: repoFullName,
+      action: 'skipped',
+      error: `Failed to update hook #${existing.id} (${patchRes.status})`,
+    };
+  }
+
+  // Create new hook
+  const createRes = await githubFetch(
+    `/repos/${repoFullName}/hooks`,
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'web',
+        active: true,
+        events: ALL_WEBHOOK_EVENTS,
+        config: {
+          url: fullWebhookUrl,
+          content_type: 'json',
+          secret: webhookSecret,
+          insecure_ssl: '0',
+        },
+      }),
+    },
+  );
+
+  if (createRes.ok) {
+    const created = (await createRes.json()) as { id: number };
+    return { repo: repoFullName, action: 'created', hookId: created.id };
+  }
+  return {
+    repo: repoFullName,
+    action: 'skipped',
+    error: `Failed to create hook (${createRes.status})`,
+  };
 }
 
 export async function updateRepoWebhooks(
@@ -51,99 +119,29 @@ export async function updateRepoWebhooks(
 ): Promise<WebhookUpdateResult[]> {
   const results: WebhookUpdateResult[] = [];
   const fullWebhookUrl = `${webhookUrl}/webhooks/github`;
+  const repoNames = Object.keys(repos);
 
-  for (const repoFullName of Object.keys(repos)) {
-    try {
-      // Resolve token for this repo's org/owner
-      const token = await getToken(repoFullName);
+  // Process repos in chunks of WEBHOOK_CONCURRENCY to avoid rate limiting
+  for (let i = 0; i < repoNames.length; i += WEBHOOK_CONCURRENCY) {
+    const chunk = repoNames.slice(i, i + WEBHOOK_CONCURRENCY);
+    const settled = await Promise.allSettled(
+      chunk.map((repoFullName) =>
+        updateSingleRepoWebhook(repoFullName, fullWebhookUrl, getToken, webhookSecret),
+      ),
+    );
 
-      // List existing hooks
-      const hooksRes = await githubFetch(`/repos/${repoFullName}/hooks`, token);
-      if (!hooksRes.ok) {
-        const errBody = await hooksRes.text().catch(() => '');
-        results.push({
-          repo: repoFullName,
-          action: 'skipped',
-          error: `Failed to list hooks (${hooksRes.status}): ${errBody}`,
-        });
-        continue;
-      }
-
-      const hooks = (await hooksRes.json()) as Array<{
-        id: number;
-        config: { url?: string };
-      }>;
-
-      // Find existing hook that points to our webhook path
-      const existing = hooks.find(
-        (h) => h.config.url?.includes('/webhooks/github'),
-      );
-
-      if (existing) {
-        // Update existing hook with new URL
-        const patchRes = await githubFetch(
-          `/repos/${repoFullName}/hooks/${existing.id}`,
-          token,
-          {
-            method: 'PATCH',
-            body: JSON.stringify({
-              config: {
-                url: fullWebhookUrl,
-                content_type: 'json',
-                secret: webhookSecret,
-                insecure_ssl: '0',
-              },
-            }),
-          },
-        );
-
-        if (patchRes.ok) {
-          results.push({ repo: repoFullName, action: 'updated', hookId: existing.id });
-        } else {
-          results.push({
-            repo: repoFullName,
-            action: 'skipped',
-            error: `Failed to update hook #${existing.id} (${patchRes.status})`,
-          });
-        }
+    for (let j = 0; j < settled.length; j++) {
+      const outcome = settled[j];
+      if (outcome.status === 'fulfilled') {
+        results.push(outcome.value);
       } else {
-        // Create new hook
-        const createRes = await githubFetch(
-          `/repos/${repoFullName}/hooks`,
-          token,
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              name: 'web',
-              active: true,
-              events: ALL_WEBHOOK_EVENTS,
-              config: {
-                url: fullWebhookUrl,
-                content_type: 'json',
-                secret: webhookSecret,
-                insecure_ssl: '0',
-              },
-            }),
-          },
-        );
-
-        if (createRes.ok) {
-          const created = (await createRes.json()) as { id: number };
-          results.push({ repo: repoFullName, action: 'created', hookId: created.id });
-        } else {
-          results.push({
-            repo: repoFullName,
-            action: 'skipped',
-            error: `Failed to create hook (${createRes.status})`,
-          });
-        }
+        const err = outcome.reason;
+        results.push({
+          repo: chunk[j],
+          action: 'skipped',
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-    } catch (err) {
-      results.push({
-        repo: repoFullName,
-        action: 'skipped',
-        error: err instanceof Error ? err.message : String(err),
-      });
     }
   }
 
@@ -162,7 +160,6 @@ export async function updateAppWebhook(
   webhookSecret: string,
 ): Promise<{ action: 'updated' | 'skipped'; error?: string }> {
   try {
-    const { readFileSync } = require('node:fs');
     const privateKey = readFileSync(privateKeyPath, 'utf-8');
     const jwt = createJWT(appId, privateKey);
 

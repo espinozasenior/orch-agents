@@ -9,7 +9,10 @@
  * 5. Default repo fallback
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileCb);
 import { existsSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
@@ -185,12 +188,12 @@ async function doCloneOrFetch(
 ): Promise<string> {
   if (existsSync(joinPath(clonePath, '.git'))) {
     logger?.info?.('Fetching latest for existing clone', { clonePath });
-    execFileSync('git', ['fetch', 'origin'], { cwd: clonePath, stdio: 'pipe' });
+    await execFile('git', ['fetch', 'origin'], { cwd: clonePath });
     return clonePath;
   }
 
   logger?.info?.('Cloning repository', { repoUrl, clonePath });
-  execFileSync('git', ['clone', repoUrl, clonePath], { stdio: 'pipe' });
+  await execFile('git', ['clone', repoUrl, clonePath]);
   return clonePath;
 }
 
