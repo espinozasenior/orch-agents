@@ -25,7 +25,7 @@ import type { WorkflowConfig } from './workflow-parser';
 const DEFAULT_WORKFLOW_CONFIG: WorkflowConfig = {
   repos: {},
   defaults: {
-    agents: { maxConcurrent: 8 },
+    agents: { maxConcurrent: 8, maxConcurrentPerOrg: 8 },
     stall: { timeoutMs: 300_000 },
     polling: { intervalMs: 30_000, enabled: false },
   },

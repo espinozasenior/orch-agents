@@ -72,6 +72,38 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
   const tracker = createWorkTracker();
   const unsubscribers: Array<() => void> = [];
 
+  // Per-org concurrency tracking: tracks active execution count per org owner
+  const activeByOrg = new Map<string, Set<string>>();
+
+  function orgFromRepo(repo: string | undefined): string {
+    return repo?.split('/')[0] ?? 'default';
+  }
+
+  function trackOrgStart(org: string, planId: string): void {
+    let orgSet = activeByOrg.get(org);
+    if (!orgSet) {
+      orgSet = new Set();
+      activeByOrg.set(org, orgSet);
+    }
+    orgSet.add(planId);
+  }
+
+  function trackOrgEnd(org: string, planId: string): void {
+    const orgSet = activeByOrg.get(org);
+    if (orgSet) {
+      orgSet.delete(planId);
+      if (orgSet.size === 0) {
+        activeByOrg.delete(org);
+      }
+    }
+  }
+
+  function isOrgAtCapacity(org: string): boolean {
+    const perOrgLimit = workflowConfig.defaults.agents.maxConcurrentPerOrg;
+    const orgSet = activeByOrg.get(org);
+    return (orgSet?.size ?? 0) >= perOrgLimit;
+  }
+
   // AIG: Subscribe to WorkCancelled events for stop command support
   unsubscribers.push(
     eventBus.subscribe('WorkCancelled', (cancelEvent) => {
@@ -105,6 +137,18 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       return;
     }
 
+    // Per-org concurrency gate
+    const intakeOrg = orgFromRepo(intakeEvent.entities.repo);
+    if (isOrgAtCapacity(intakeOrg)) {
+      logger.warn('Per-org concurrency limit reached; skipping dispatch', {
+        workItemId: executionKey,
+        org: intakeOrg,
+        activeCount: activeByOrg.get(intakeOrg)?.size ?? 0,
+        limit: workflowConfig.defaults.agents.maxConcurrentPerOrg,
+      });
+      return;
+    }
+
     // Option C step 2 (PR A): coordinator mode is the only mode for the
     // main-thread engine. Templates from WORKFLOW.md are still parsed for
     // backward compat (and still used by the worker-thread path) but are
@@ -132,6 +176,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     });
 
     tracker.start(taskPlanId, executionKey);
+    trackOrgStart(intakeOrg, taskPlanId);
 
     eventBus.publish(
       createDomainEvent('PlanCreated', {
@@ -188,6 +233,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           ruleKey,
         });
         tracker.complete(taskPlanId);
+        trackOrgEnd(intakeOrg, taskPlanId);
         return;
       }
 
@@ -199,6 +245,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           ruleKey,
         });
         tracker.complete(taskPlanId);
+        trackOrgEnd(intakeOrg, taskPlanId);
         return;
       }
 
@@ -224,6 +271,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       const result = await localAgentTask.execute(plan, enrichedIntake);
 
       tracker.complete(taskPlanId);
+      trackOrgEnd(intakeOrg, taskPlanId);
 
       if (result.status === 'failed') {
         const reason = `All agents failed for plan ${taskPlanId}`;
@@ -249,6 +297,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       tracker.fail(taskPlanId, reason);
+      trackOrgEnd(intakeOrg, taskPlanId);
 
       logger.error('LocalAgentTask error (IntakeCompleted)', { planId: taskPlanId, error: reason });
 
@@ -357,7 +406,19 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       bodyPreview: body.slice(0, 100),
     });
 
+    const promptOrg = orgFromRepo((intakeEvent.entities as { repo?: string }).repo);
+    if (isOrgAtCapacity(promptOrg)) {
+      logger.warn('Per-org concurrency limit reached for AgentPrompted; skipping', {
+        issueId,
+        org: promptOrg,
+        activeCount: activeByOrg.get(promptOrg)?.size ?? 0,
+        limit: workflowConfig.defaults.agents.maxConcurrentPerOrg,
+      });
+      return;
+    }
+
     tracker.start(promptPlanId, executionKey);
+    trackOrgStart(promptOrg, promptPlanId);
 
     try {
       // CC-aligned dispatch: AgentPrompted runs in coordinator mode via
@@ -366,6 +427,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       // the legacy SimpleExecutor path.
       const result = await localAgentTask.execute(plan, intakeEvent);
       tracker.complete(promptPlanId);
+      trackOrgEnd(promptOrg, promptPlanId);
 
       if (result.status === 'failed') {
         tracker.fail(promptPlanId, 'Coordinator session failed');
@@ -385,6 +447,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       tracker.fail(promptPlanId, reason);
+      trackOrgEnd(promptOrg, promptPlanId);
       logger.error('AgentPrompted coordinator error', { planId: promptPlanId, error: reason });
       eventBus.publish(createDomainEvent('WorkFailed', {
         workItemId: toWorkItemId(executionKey),

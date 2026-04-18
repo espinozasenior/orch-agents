@@ -49,10 +49,19 @@ function makeWorkflowConfig(): WorkflowConfig {
       'feature-build': ['.claude/agents/core/architect.md', '.claude/agents/core/coder.md', '.claude/agents/core/reviewer.md'],
       'security-audit': ['.claude/agents/v3/security-architect.md'],
     },
+    repos: {},
+    defaults: {
+      agents: { maxConcurrent: 8, maxConcurrentPerOrg: 8 },
+      stall: { timeoutMs: 300000 },
+      polling: { intervalMs: 30000, enabled: false },
+    },
     tracker: { kind: 'linear', apiKey: '', team: 'test', activeTypes: ['unstarted', 'started'], terminalTypes: ['completed', 'canceled'], activeStates: [], terminalStates: [] },
     agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },
+    agent: { maxConcurrentAgents: 8, maxRetryBackoffMs: 300000, maxTurns: 20 },
     polling: { intervalMs: 30000, enabled: false },
     stall: { timeoutMs: 300000 },
+    agentRunner: { stallTimeoutMs: 300000, command: 'claude', turnTimeoutMs: 3600000 },
+    hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 60000 },
     promptTemplate: '',
   };
 }

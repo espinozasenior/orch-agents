@@ -27,7 +27,7 @@ export interface WorkflowConfig {
     events: Record<string, string>;
   };
   defaults: {
-    agents: { maxConcurrent: number };
+    agents: { maxConcurrent: number; maxConcurrentPerOrg: number };
     stall: { timeoutMs: number };
     polling: { intervalMs: number; enabled: boolean };
   };
@@ -219,6 +219,11 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
     'defaults.agents.max_concurrent',
     8,
   );
+  const maxConcurrentPerOrg = readNumber(
+    defaultsAgents?.max_concurrent_per_org,
+    'defaults.agents.max_concurrent_per_org',
+    maxConcurrent,
+  );
   const stallTimeoutMs = readNumber(
     defaultsStall?.timeout_ms ?? agentRunner?.stall_timeout_ms ?? stall?.timeout_ms,
     'defaults.stall.timeout_ms',
@@ -237,7 +242,7 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
   return {
     repos,
     defaults: {
-      agents: { maxConcurrent },
+      agents: { maxConcurrent, maxConcurrentPerOrg },
       stall: { timeoutMs: stallTimeoutMs },
       polling: { intervalMs: pollingIntervalMs, enabled: pollingEnabled },
     },
