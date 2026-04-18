@@ -16,6 +16,7 @@ import { runRepoList } from './commands/repo-list';
 import { runRepoEdit } from './commands/repo-edit';
 import { runRepoRemove } from './commands/repo-remove';
 import { runLinearSetup } from './commands/linear';
+import { runSlackSetup } from './commands/slack';
 
 const program = new Command();
 
@@ -114,6 +115,20 @@ program
     const io = createTerminalIO();
     try {
       await runLinearSetup(io);
+    } finally {
+      io.close();
+    }
+  });
+
+// -- slack -------------------------------------------------------------------
+
+program
+  .command('slack')
+  .description('Configure Slack webhook notifications')
+  .action(async () => {
+    const io = createTerminalIO();
+    try {
+      await runSlackSetup(io);
     } finally {
       io.close();
     }

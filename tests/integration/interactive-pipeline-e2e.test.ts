@@ -184,7 +184,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -207,7 +207,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -228,7 +228,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -263,7 +263,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeRejectingExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -286,7 +286,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -318,7 +318,7 @@ describe('Artifact Execution Layer (interactive mode)', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),

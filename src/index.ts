@@ -435,8 +435,9 @@ async function main(): Promise<void> {
   // Assigned after server.listen() if ENABLE_TUNNEL is set.
   let tunnelManager: import('./tunnel/cloudflare-tunnel').TunnelManager | undefined;
 
-  const pipeline = startPipeline({
+  const pipeline = await startPipeline({
     eventBus, logger, reviewGate, localAgentTask, workflowConfig,
+    slackWebhookUrl: config.slackWebhookUrl,
     linearExecutionMode,
     githubClient: tokenProvider
       ? createGitHubClient({ logger, tokenProvider })

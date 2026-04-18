@@ -164,7 +164,7 @@ describe('Pipeline E2E', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -203,7 +203,7 @@ describe('Pipeline E2E', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -232,7 +232,7 @@ describe('Pipeline E2E', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -261,7 +261,7 @@ describe('Pipeline E2E', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus, logger,
       localAgentTask: makeStubExecutor(),
       workflowConfig: makeWorkflowConfig(),
@@ -288,7 +288,7 @@ describe('Pipeline E2E', () => {
     const eventBus = createEventBus();
     const logger = createLogger({ level: 'error' });
 
-    handle = startPipeline({
+    handle = await startPipeline({
       eventBus,
       logger,
       localAgentTask: makeStubExecutor(),

@@ -57,6 +57,8 @@ export interface AppConfig {
   readonly linearRedirectUri: string;
   /** Enable Cloudflare Quick Tunnel on server start (default false) */
   readonly enableTunnel: boolean;
+  /** Slack incoming webhook URL for agent result notifications (optional) */
+  readonly slackWebhookUrl?: string;
 }
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = [
@@ -114,6 +116,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const linearClientSecret = env.LINEAR_CLIENT_SECRET ?? '';
   const linearRedirectUri = env.LINEAR_REDIRECT_URI ?? '';
   const enableTunnel = env.ENABLE_TUNNEL === 'true';
+  const slackWebhookUrl = env.SLACK_WEBHOOK_URL || undefined;
 
   if (isProduction && linearAuthMode === 'oauth' && (!linearClientId || !linearClientSecret)) {
     throw new Error('LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET are required when LINEAR_AUTH_MODE=oauth');
@@ -144,6 +147,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     linearClientSecret,
     linearRedirectUri,
     enableTunnel,
+    slackWebhookUrl,
   });
 }
 
