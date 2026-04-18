@@ -139,7 +139,7 @@ export type WorkPausedEvent = DomainEvent<
 
 export type WorkCompletedEvent = DomainEvent<
   'WorkCompleted',
-  { workItemId: WorkItemId; planId: PlanId; phaseCount: number; totalDuration: number }
+  { workItemId: WorkItemId; planId: PlanId; phaseCount: number; totalDuration: number; output?: string }
 >;
 
 // ---------------------------------------------------------------------------

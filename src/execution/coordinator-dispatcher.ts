@@ -86,6 +86,7 @@ export interface AgentResult {
   commitSha?: string;
   findings: Finding[];
   duration: number;
+  output?: string;
   sessionId?: string;
   lastActivityAt?: string;
   continuationState?: import('./runtime/task-executor').TaskExecutionResult['continuationState'];
@@ -367,6 +368,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             commitSha: applyResult.commitSha,
             findings,
             duration: Date.now() - agentStart,
+            output: execResult.output,
             sessionId: execResult.sessionId,
             lastActivityAt: execResult.lastActivityAt,
             continuationState: execResult.continuationState,

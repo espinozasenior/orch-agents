@@ -277,12 +277,19 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
         return;
       }
 
+      const latestOutput = result.agentResults
+        .filter(r => r.output)
+        .map(r => r.output!)
+        .join('\n')
+        .slice(0, 4000);
+
       eventBus.publish(
         createDomainEvent('WorkCompleted', {
           workItemId: toWorkItemId(executionKey),
           planId: taskPlanId,
           phaseCount: result.agentResults.length,
           totalDuration: result.totalDuration,
+          output: latestOutput || undefined,
         }, correlationId),
       );
     } catch (err) {
@@ -426,11 +433,18 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           retryCount: 0,
         }, correlationId));
       } else {
+        const promptOutput = result.agentResults
+          .filter(r => r.output)
+          .map(r => r.output!)
+          .join('\n')
+          .slice(0, 4000);
+
         eventBus.publish(createDomainEvent('WorkCompleted', {
           workItemId: toWorkItemId(executionKey),
           planId: promptPlanId,
           phaseCount: 1,
           totalDuration: result.totalDuration,
+          output: promptOutput || undefined,
         }, correlationId));
       }
     } catch (err) {

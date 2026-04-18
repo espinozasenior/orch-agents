@@ -85,17 +85,21 @@ export function startSlackNotifier(deps: SlackNotifierDeps): () => void {
   });
 
   const unsubCompleted = eventBus.subscribe('WorkCompleted', (event) => {
-    const { planId, totalDuration, phaseCount } = event.payload;
+    const { planId, totalDuration, phaseCount, output } = event.payload;
     const ctx = planContext.get(planId);
     planContext.delete(planId);
     if (!ctx) return;
 
     const skillName = ctx.skillPath.split('/').slice(-2, -1)[0] || ctx.skillPath;
+    const outputPreview = output
+      ? `\n\n${output.slice(0, 1500)}${output.length > 1500 ? '\n_(truncated)_' : ''}`
+      : '';
     const text = [
       `*Agent completed* on \`${ctx.repoFullName}\``,
       `Event: ${ctx.eventType} | Skill: ${skillName}`,
       `Duration: ${(totalDuration / 1000).toFixed(1)}s | Phases: ${phaseCount}`,
-    ].join('\n');
+      outputPreview,
+    ].filter(Boolean).join('\n');
 
     sendSlackMessage(webhookUrl, text, log);
   });
