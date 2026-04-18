@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from 'node:fs';
+import { watch, readFileSync, type FSWatcher } from 'node:fs';
 import type { Logger } from '../../shared/logger';
 import { parseWorkflowMd, type WorkflowConfig } from './workflow-parser';
 
@@ -31,6 +31,7 @@ export function createWorkflowConfigStore(deps: WorkflowConfigStoreDeps): Workfl
   let snapshot: WorkflowConfigSnapshot = loadSnapshot(deps.filePath);
   let lastKnownGoodConfig: WorkflowConfig | undefined = snapshot.config;
   let lastKnownGoodLoadedAt: string | undefined = snapshot.loadedAt;
+  let lastFileHash: string | undefined;
 
   function loadSnapshot(filePath: string): WorkflowConfigSnapshot {
     try {
@@ -73,7 +74,7 @@ export function createWorkflowConfigStore(deps: WorkflowConfigStoreDeps): Workfl
         reason,
         path: deps.filePath,
         loadedAt: nextSnapshot.loadedAt,
-        templates: Object.keys(nextSnapshot.config?.templates ?? {}),
+        repos: Object.keys(nextSnapshot.config?.repos ?? {}),
       });
     } else {
       logger.warn('WORKFLOW.md reload failed; keeping last-known-good config', {
@@ -86,6 +87,16 @@ export function createWorkflowConfigStore(deps: WorkflowConfigStoreDeps): Workfl
     return snapshot;
   }
 
+  function computeFileHash(): string | undefined {
+    try {
+      const content = readFileSync(deps.filePath, 'utf-8');
+      // Simple hash: length + first/last 200 chars. Fast, sufficient for change detection.
+      return `${content.length}:${content.slice(0, 200)}:${content.slice(-200)}`;
+    } catch {
+      return undefined;
+    }
+  }
+
   function scheduleReload(): void {
     if (reloadTimer) {
       clearTimeout(reloadTimer);
@@ -93,8 +104,14 @@ export function createWorkflowConfigStore(deps: WorkflowConfigStoreDeps): Workfl
 
     reloadTimer = setTimeout(() => {
       reloadTimer = undefined;
+      // Skip reload if file content hasn't changed
+      const currentHash = computeFileHash();
+      if (currentHash && currentHash === lastFileHash) {
+        return;
+      }
+      lastFileHash = currentHash;
       applyReload('watch');
-    }, 50);
+    }, 2000);
 
     if (reloadTimer.unref) {
       reloadTimer.unref();
@@ -104,6 +121,7 @@ export function createWorkflowConfigStore(deps: WorkflowConfigStoreDeps): Workfl
   return {
     start(): void {
       snapshot = applyReload('startup');
+      lastFileHash = computeFileHash();
       if (!deps.watchFile) {
         return;
       }

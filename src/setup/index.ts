@@ -1,11 +1,16 @@
 /**
  * Setup module public API.
  *
- * Entry point for the interactive setup wizard and config merge utilities.
+ * Entry point for the setup CLI commands and workflow editor.
  */
 
-export { runWizard } from './wizard';
 export { createTerminalIO } from './renderer';
-export { loadSetup, saveSetup, validateSetupConfig, applyAgentOverrides, applyEventOverrides, applyTopologyOverrides, formatSummary, getSetupPath } from './config-writer';
-export { getPresetDefs, applyPreset, buildAgentToggles, buildEventToggles, getAgentTypes } from './presets';
-export type { SetupConfig, AgentToggle, EventToggle, TerminalIO, PresetKey } from './types';
+export { createWorkflowEditor } from './workflow-editor';
+export { readEnvFile, writeEnvFile } from './env-writer';
+export { runGitHubSetup } from './commands/github';
+export { runRepoAdd } from './commands/repo-add';
+export { runRepoList } from './commands/repo-list';
+export { runRepoEdit } from './commands/repo-edit';
+export { runRepoRemove } from './commands/repo-remove';
+export { runLinearSetup } from './commands/linear';
+export type { TerminalIO, SelectItem, RepoSetupOptions } from './types';

@@ -88,7 +88,7 @@ async function main(): Promise<void> {
     logLevel: config.logLevel,
   });
 
-  // Load WORKFLOW.md — the single source of truth for templates and routing.
+  // Load WORKFLOW.md — the single source of truth for per-repo routing.
   // Fail hard at startup if missing or invalid.
   const workflowMdPath = process.env.WORKFLOW_MD_PATH
     ?? pathResolve(process.cwd(), 'WORKFLOW.md');
@@ -109,6 +109,20 @@ async function main(): Promise<void> {
     });
     process.exit(1);
   }
+
+  // Validate at least one repo is configured
+  const repoNames = Object.keys(workflowConfig.repos);
+  if (repoNames.length === 0) {
+    logger.fatal('No repos configured in WORKFLOW.md — at least one repo is required');
+    process.exit(1);
+  }
+  logger.info('Configured repos', {
+    count: repoNames.length,
+    repos: repoNames.map(name => ({
+      name,
+      events: Object.keys(workflowConfig.repos[name].github?.events ?? {}).length,
+    })),
+  });
 
   // GitHub App authentication — prefer over PAT for bot identity
   let tokenProvider: GitHubTokenProvider | undefined;
@@ -148,7 +162,7 @@ async function main(): Promise<void> {
 
   // API key is always available for data queries (fetchIssues, etc.)
   // OAuth is layered on top for agent-specific mutations (activities, sessions)
-  const linearApiKey = workflowConfig.tracker.apiKey ?? config.linearApiKey;
+  const linearApiKey = workflowConfig.tracker?.apiKey ?? config.linearApiKey;
 
   if (config.linearAuthMode === 'oauth') {
     if (!config.linearClientId || !config.linearClientSecret) {
@@ -410,6 +424,10 @@ async function main(): Promise<void> {
     logger.info('Running in stub mode (ENABLE_INTERACTIVE_AGENTS not set)');
   }
 
+  // Declared early so the status snapshot closure can reference it.
+  // Assigned after server.listen() if ENABLE_TUNNEL is set.
+  let tunnelManager: import('./tunnel/cloudflare-tunnel').TunnelManager | undefined;
+
   const pipeline = startPipeline({
     eventBus, logger, reviewGate, localAgentTask, workflowConfig,
     linearExecutionMode,
@@ -431,6 +449,11 @@ async function main(): Promise<void> {
     getStatusSnapshot: (): StatusSurfaceSnapshot => ({
       workflow: workflowConfigStore.getSnapshot(),
       orchestrator: symphonyOrchestrator?.getSnapshot(),
+      tunnel: tunnelManager?.getUrl()
+        ? { enabled: true, url: tunnelManager.getUrl()! }
+        : config.enableTunnel
+          ? { enabled: true, url: '' }
+          : undefined,
       links: {
         ...(process.env.OPERATOR_DASHBOARD_URL ? { dashboardUrl: process.env.OPERATOR_DASHBOARD_URL } : {}),
         ...(process.env.TERMINAL_SNAPSHOT_URL ? { terminalSnapshotUrl: process.env.TERMINAL_SNAPSHOT_URL } : {}),
@@ -460,6 +483,52 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // -- Cloudflare Quick Tunnel (opt-in) ----------------------------------------
+  if (config.enableTunnel) {
+    const { createTunnelManager } = await import('./tunnel/cloudflare-tunnel');
+    const { updateRepoWebhooks, updateAppWebhook } = await import('./tunnel/webhook-updater');
+
+    tunnelManager = createTunnelManager();
+    try {
+      const tunnelUrl = await tunnelManager.start(config.port);
+      logger.info('Cloudflare tunnel started', { url: tunnelUrl });
+
+      // Make available to repo-add command
+      process.env.WEBHOOK_URL = tunnelUrl;
+
+      // Update GitHub App webhook URL (app-level, uses JWT)
+      if (config.githubAppId && config.githubAppPrivateKeyPath && config.webhookSecret) {
+        const appResult = await updateAppWebhook(
+          tunnelUrl,
+          config.githubAppId,
+          config.githubAppPrivateKeyPath,
+          config.webhookSecret,
+        );
+        logger.info('GitHub App webhook update', { action: appResult.action, error: appResult.error });
+      }
+
+      // Update all configured repo webhooks with the new URL
+      if (tokenProvider && config.webhookSecret) {
+        const results = await updateRepoWebhooks(
+          workflowConfig.repos,
+          tunnelUrl,
+          (repo) => tokenProvider!.getTokenForRepo(repo),
+          config.webhookSecret,
+        );
+        for (const r of results) {
+          logger.info('Webhook update', { repo: r.repo, action: r.action, hookId: r.hookId, error: r.error });
+        }
+      } else {
+        logger.warn('Skipping webhook update — no GitHub App configured or GITHUB_WEBHOOK_SECRET not set');
+      }
+    } catch (err) {
+      logger.error('Failed to start Cloudflare tunnel', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Non-fatal: server still runs, just no tunnel
+    }
+  }
+
   // Graceful shutdown
   let shuttingDown = false;
   const shutdownTimeoutMs = parseInt(process.env.SHUTDOWN_TIMEOUT_MS ?? '10000', 10);
@@ -480,6 +549,9 @@ async function main(): Promise<void> {
     forceExitTimer.unref();
 
     try {
+      logger.info('Shutdown step: stopping tunnel');
+      tunnelManager?.stop();
+
       logger.info('Shutdown step: stopping symphony orchestrator');
       await symphonyOrchestrator?.stop();
 

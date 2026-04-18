@@ -15,38 +15,43 @@ import type { OrchestratorSnapshot } from '../../src/execution/orchestrator/symp
 
 function makeTestWorkflowConfig(): WorkflowConfig {
   return {
-    templates: {
-      'github-ops': ['reviewer'],
-      'tdd-workflow': ['coder', 'tester'],
-      'quick-fix': ['coder'],
-      'cicd-pipeline': ['coder'],
-      'release-pipeline': ['coder'],
-      'security-audit': ['security-architect'],
-      'feature-build': ['architect', 'coder', 'reviewer'],
-    },
-    github: {
-      events: {
-        'pull_request.opened': 'github-ops',
-        'pull_request.synchronize': 'github-ops',
-        'pull_request.closed.merged': 'release-pipeline',
-        'pull_request.ready_for_review': 'github-ops',
-        'push.default_branch': 'cicd-pipeline',
-        'push.other': 'quick-fix',
-        'issues.opened': 'github-ops',
-        'issues.labeled.bug': 'tdd-workflow',
-        'issues.labeled.enhancement': 'feature-build',
-        'issues.labeled.security': 'security-audit',
-        'issue_comment.mentions_bot': 'quick-fix',
-        'pull_request_review.changes_requested': 'quick-fix',
-        'workflow_run.failure': 'quick-fix',
-        'release.published': 'release-pipeline',
-        'deployment_status.failure': 'quick-fix',
+    repos: {
+      'acme/webapp': {
+        url: 'git@github.com:acme/webapp.git',
+        defaultBranch: 'main',
+        github: {
+          events: {
+            'pull_request.opened': '.claude/skills/github-ops/SKILL.md',
+            'pull_request.synchronize': '.claude/skills/github-ops/SKILL.md',
+            'pull_request.closed.merged': '.claude/skills/release/SKILL.md',
+            'pull_request.ready_for_review': '.claude/skills/github-ops/SKILL.md',
+            'push.default_branch': '.claude/skills/cicd/SKILL.md',
+            'push.other': '.claude/skills/quick-fix/SKILL.md',
+            'issues.opened': '.claude/skills/github-ops/SKILL.md',
+            'issues.labeled.bug': '.claude/skills/tdd/SKILL.md',
+            'issues.labeled.enhancement': '.claude/skills/feature/SKILL.md',
+            'issues.labeled.security': '.claude/skills/security/SKILL.md',
+            'issue_comment.mentions_bot': '.claude/skills/quick-fix/SKILL.md',
+            'pull_request_review.changes_requested': '.claude/skills/quick-fix/SKILL.md',
+            'workflow_run.failure': '.claude/skills/quick-fix/SKILL.md',
+            'release.published': '.claude/skills/release/SKILL.md',
+            'deployment_status.failure': '.claude/skills/quick-fix/SKILL.md',
+          },
+        },
       },
     },
+    defaults: {
+      agents: { maxConcurrent: 8 },
+      stall: { timeoutMs: 300000 },
+      polling: { intervalMs: 30000, enabled: false },
+    },
     tracker: { kind: 'linear', apiKey: '', team: 'test', activeTypes: ['unstarted', 'started'], terminalTypes: ['completed', 'canceled'], activeStates: [], terminalStates: [] },
-    agents: { maxConcurrent: 8, routing: { bug: 'tdd-workflow' }, defaultTemplate: 'quick-fix' },
+    agents: { maxConcurrent: 8 },
+    agent: { maxConcurrentAgents: 8, maxRetryBackoffMs: 300000, maxTurns: 20 },
     polling: { intervalMs: 30000, enabled: false },
     stall: { timeoutMs: 300000 },
+    agentRunner: { stallTimeoutMs: 300000, command: 'claude', turnTimeoutMs: 3600000 },
+    hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 60000 },
     promptTemplate: '',
   };
 }
@@ -78,6 +83,9 @@ function makePayload(overrides: Record<string, unknown> = {}): Record<string, un
     ...overrides,
   };
 }
+
+/** Repo full_name used in test payloads must exist in the workflowConfig.repos map. */
+const TEST_REPO = 'acme/webapp';
 
 describe('webhookRouter (integration)', () => {
   let server: FastifyInstance;

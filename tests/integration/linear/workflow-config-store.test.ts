@@ -19,17 +19,14 @@ function makeLogger(): Logger {
 }
 
 const VALID_WORKFLOW = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
+repos:
+  test-org/test-repo:
+    url: git@github.com:test-org/test-repo.git
+    default_branch: main
 
 tracker:
   kind: linear
   team: my-team
-
-agents:
-  routing:
-    default: quick-fix
 ---
 Issue {{ issue.identifier }}
 `;
@@ -59,7 +56,8 @@ describe('workflow-config-store', () => {
 
     const snapshot = store.getSnapshot();
     assert.equal(snapshot.valid, true);
-    assert.equal(snapshot.config?.agents.defaultTemplate, 'quick-fix');
+    assert.equal(snapshot.config?.tracker.team, 'my-team');
+    assert.ok(snapshot.config?.repos['test-org/test-repo']);
     store.stop();
   });
 
@@ -77,8 +75,8 @@ describe('workflow-config-store', () => {
 
     assert.equal(snapshot.valid, true);
     assert.match(snapshot.error ?? '', /unsupported placeholders/);
-    assert.equal(snapshot.config?.agents.defaultTemplate, 'quick-fix');
-    assert.equal(store.requireConfig().agents.defaultTemplate, 'quick-fix');
+    assert.equal(snapshot.config?.tracker.team, 'my-team');
+    assert.equal(store.requireConfig().tracker.team, 'my-team');
     store.stop();
   });
 });

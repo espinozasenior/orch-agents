@@ -64,8 +64,16 @@ function makeLogger(): Logger {
 
 function makeWorkflowConfig(): WorkflowConfig {
   return {
-    templates: {
-      'quick-fix': ['.claude/agents/core/coder.md'],
+    repos: {
+      'test-org/test-repo': {
+        url: 'git@github.com:test-org/test-repo.git',
+        defaultBranch: 'main',
+      },
+    },
+    defaults: {
+      agents: { maxConcurrent: 1 },
+      stall: { timeoutMs: 300000 },
+      polling: { intervalMs: 1000, enabled: true },
     },
     tracker: {
       kind: 'linear',
@@ -73,11 +81,11 @@ function makeWorkflowConfig(): WorkflowConfig {
       team: 'team-1',
       activeStates: ['Todo', 'In Progress'],
       terminalStates: ['Done'],
+      activeTypes: ['unstarted', 'started'],
+      terminalTypes: ['completed', 'canceled'],
     },
     agents: {
       maxConcurrent: 1,
-      routing: { default: 'quick-fix' },
-      defaultTemplate: 'quick-fix',
     },
     agent: {
       maxConcurrentAgents: 1,

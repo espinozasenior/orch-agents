@@ -2,7 +2,7 @@
  * Tests for WorkflowParser -- WORKFLOW.md parsing into WorkflowConfig.
  *
  * Covers: frontmatter extraction, nested YAML parsing, env var resolution,
- * validation of required fields, default values.
+ * validation of required fields, default values, repos map parsing.
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
@@ -10,7 +10,8 @@ import assert from 'node:assert/strict';
 import {
   parseWorkflowMdString,
   WorkflowParseError,
-  __resetTemplatesDeprecationWarning,
+  resolveRepoConfig,
+  getRepoNames,
 } from '../../../src/integration/linear/workflow-parser';
 
 // ---------------------------------------------------------------------------
@@ -18,17 +19,14 @@ import {
 // ---------------------------------------------------------------------------
 
 const VALID_WORKFLOW = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-  tdd-workflow:
-    - .claude/agents/core/coder.md
-  feature-build:
-    - .claude/agents/core/coder.md
-  security-audit:
-    - .claude/agents/core/coder.md
-  sparc-full:
-    - .claude/agents/core/coder.md
+defaults:
+  agents:
+    max_concurrent: 8
+  stall:
+    timeout_ms: 300000
+  polling:
+    interval_ms: 30000
+    enabled: false
 
 tracker:
   kind: linear
@@ -41,21 +39,26 @@ tracker:
     - completed
     - canceled
 
-agents:
-  max_concurrent: 8
-  routing:
-    bug: tdd-workflow
-    feature: feature-build
-    security: security-audit
-    refactor: sparc-full
-    default: quick-fix
+repos:
+  somnio-projects/marketplace-monorepo:
+    url: git@github.com:somnio-projects/marketplace-monorepo.git
+    default_branch: main
+    teams: [AUT]
+    labels: [marketplace-monorepo, backend, infra]
+    github:
+      events:
+        pull_request.opened: .claude/skills/github-ops/SKILL.md
+        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+    tracker:
+      team: AUT
 
-polling:
-  interval_ms: 30000
-  enabled: false
-
-stall:
-  timeout_ms: 300000
+  espinozasenior/orch-agents:
+    url: git@github.com:espinozasenior/orch-agents.git
+    default_branch: main
+    labels: [agent, orchestrator, bot]
+    github:
+      events:
+        pull_request.opened: .claude/skills/review/SKILL.md
 ---
 
 You are an autonomous development agent working on {{ issue.identifier }}.
@@ -96,7 +99,7 @@ describe('WorkflowParser', () => {
     assert.equal(config.tracker.team, 'my-team');
     assert.deepEqual(config.tracker.activeTypes, ['unstarted', 'started']);
     assert.deepEqual(config.tracker.terminalTypes, ['completed', 'canceled']);
-    // No active_states/terminal_states in YAML → defaults from source
+    // No active_states/terminal_states in YAML -> defaults from source
     assert.deepEqual(config.tracker.activeStates, ['Todo', 'In Progress']);
     assert.deepEqual(config.tracker.terminalStates, ['Done', 'Cancelled']);
   });
@@ -105,11 +108,15 @@ describe('WorkflowParser', () => {
     const config = parseWorkflowMdString(VALID_WORKFLOW);
 
     assert.equal(config.agents.maxConcurrent, 8);
-    assert.equal(config.agents.routing.bug, 'tdd-workflow');
-    assert.equal(config.agents.routing.feature, 'feature-build');
-    assert.equal(config.agents.routing.security, 'security-audit');
-    assert.equal(config.agents.routing.refactor, 'sparc-full');
-    assert.equal(config.agents.defaultTemplate, 'quick-fix');
+  });
+
+  it('should parse defaults section correctly', () => {
+    const config = parseWorkflowMdString(VALID_WORKFLOW);
+
+    assert.equal(config.defaults.agents.maxConcurrent, 8);
+    assert.equal(config.defaults.stall.timeoutMs, 300000);
+    assert.equal(config.defaults.polling.intervalMs, 30000);
+    assert.equal(config.defaults.polling.enabled, false);
   });
 
   it('should parse polling section correctly', () => {
@@ -144,13 +151,9 @@ tracker:
   kind: linear
   team: my-team
 
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 
 agent:
   max_concurrent_agents: 3
@@ -181,25 +184,15 @@ Prompt here.
     assert.equal(config.hooks.timeoutMs, 4500);
   });
 
-  it('should parse workspace settings and multiline hooks with a real YAML path', () => {
+  it('should parse multiline hooks', () => {
     const workflow = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
-
-workspace:
-  root: /tmp/orch-agents
-  repos:
-    - name: orch-agents
-      url: git@github.com:org/orch-agents.git
+repos:
+  org/orch-agents:
+    url: git@github.com:org/orch-agents.git
 
 hooks:
   before_run: |
@@ -211,8 +204,6 @@ Prompt here.
 
     const config = parseWorkflowMdString(workflow);
 
-    assert.equal(config.workspace?.root, '/tmp/orch-agents');
-    assert.ok(config.workspace?.repos.length === 1);
     assert.equal(config.hooks.beforeRun, 'echo before\necho after\n');
   });
 
@@ -239,7 +230,7 @@ Prompt here.
     process.env.ANTHROPIC_API_KEY = 'another-secret';
     const config = parseWorkflowMdString(VALID_WORKFLOW);
 
-    // $LINEAR_API_KEY is blocked → resolves to empty string
+    // $LINEAR_API_KEY is blocked -> resolves to empty string
     assert.equal(config.tracker.apiKey, '');
     delete process.env.ANTHROPIC_API_KEY;
   });
@@ -251,19 +242,15 @@ Prompt here.
     assert.equal(config.tracker.apiKey, '');
   });
 
-  it('should use defaults for optional polling fields', () => {
+  it('should use defaults for optional fields', () => {
     const minimal = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 
 Prompt here.
@@ -284,17 +271,13 @@ Prompt here.
 
   it('should use default active/terminal types when not specified', () => {
     const minimal = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 `;
     const config = parseWorkflowMdString(minimal);
@@ -309,10 +292,6 @@ agents:
 
   it('should still parse legacy active_states/terminal_states for backward compat', () => {
     const legacy = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
@@ -323,9 +302,9 @@ tracker:
     - Done
     - Cancelled
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 `;
     const config = parseWorkflowMdString(legacy);
@@ -353,17 +332,13 @@ agents:
 
   it('should throw when tracker.kind is not linear', () => {
     const bad = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: jira
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 `;
     assert.throws(
@@ -372,91 +347,46 @@ agents:
     );
   });
 
-  it('should throw when tracker.team is missing', () => {
-    const bad = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
+  it('should default tracker.team to empty string when missing', () => {
+    const input = `---
 tracker:
   kind: linear
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 `;
-    assert.throws(
-      () => parseWorkflowMdString(bad),
-      (err: Error) => err instanceof WorkflowParseError && err.message.includes('tracker.team'),
-    );
-  });
-
-  it('falls back to coordinator when agents.routing.default is missing (Option C step 2b)', () => {
-    const config = parseWorkflowMdString(`---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
-tracker:
-  kind: linear
-  team: my-team
-
-agents:
-  routing:
-    bug: quick-fix
----
-`);
-    assert.equal(config.agents.defaultTemplate, 'coordinator');
-  });
-
-  it('parses successfully when templates: section is absent (Option C step 2b)', () => {
-    const config = parseWorkflowMdString(`---
-tracker:
-  kind: linear
-  team: my-team
----
-`);
-    assert.deepEqual(config.templates, {});
-    assert.equal(config.agents.defaultTemplate, 'coordinator');
-    assert.deepEqual(config.agents.routing, {});
+    const config = parseWorkflowMdString(input);
+    assert.equal(config.tracker?.team, '');
   });
 
   it('should handle quoted values', () => {
     const quoted = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: "linear"
   team: 'my-team'
 
-agents:
-  routing:
-    default: "quick-fix"
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 `;
     const config = parseWorkflowMdString(quoted);
 
     assert.equal(config.tracker.kind, 'linear');
     assert.equal(config.tracker.team, 'my-team');
-    assert.equal(config.agents.defaultTemplate, 'quick-fix');
   });
 
   it('should handle polling enabled=true', () => {
     const withPolling = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 
 polling:
   interval_ms: 60000
@@ -471,17 +401,13 @@ polling:
 
   it('should handle empty body after frontmatter', () => {
     const noBody = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 `;
     const config = parseWorkflowMdString(noBody);
@@ -489,220 +415,119 @@ agents:
     assert.equal(config.promptTemplate, '');
   });
 
-  it('warns but does not throw on unknown routed templates (Option C step 2b)', () => {
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (msg: string) => { warnings.push(msg); };
-    try {
-      const config = parseWorkflowMdString(`---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
+  // ---------------------------------------------------------------------------
+  // SPEC-001: repos map parsing
+  // ---------------------------------------------------------------------------
 
-tracker:
-  kind: linear
-  team: my-team
+  it('should parse repos map with all fields', () => {
+    const config = parseWorkflowMdString(VALID_WORKFLOW);
 
-agents:
-  routing:
-    default: quick-fix
-    bug: missing-template
----
-Prompt here.
-`);
-      assert.equal(config.agents.defaultTemplate, 'quick-fix');
-      assert.equal(config.agents.routing.bug, 'missing-template');
-      assert.ok(
-        warnings.some((w) => w.includes('missing-template')),
-        'expected warning about unknown template',
-      );
-    } finally {
-      console.warn = originalWarn;
-    }
+    const repoNames = getRepoNames(config);
+    assert.equal(repoNames.length, 2);
+    assert.ok(repoNames.includes('somnio-projects/marketplace-monorepo'));
+    assert.ok(repoNames.includes('espinozasenior/orch-agents'));
+
+    const marketplace = config.repos['somnio-projects/marketplace-monorepo'];
+    assert.equal(marketplace.url, 'git@github.com:somnio-projects/marketplace-monorepo.git');
+    assert.equal(marketplace.defaultBranch, 'main');
+    assert.deepEqual(marketplace.teams, ['AUT']);
+    assert.deepEqual(marketplace.labels, ['marketplace-monorepo', 'backend', 'infra']);
+    assert.ok(marketplace.github);
+    assert.equal(marketplace.github!.events['pull_request.opened'], '.claude/skills/github-ops/SKILL.md');
+    assert.equal(marketplace.tracker?.team, 'AUT');
+
+    const orchAgents = config.repos['espinozasenior/orch-agents'];
+    assert.equal(orchAgents.url, 'git@github.com:espinozasenior/orch-agents.git');
+    assert.deepEqual(orchAgents.labels, ['agent', 'orchestrator', 'bot']);
+    assert.ok(orchAgents.github);
+    assert.equal(orchAgents.github!.events['pull_request.opened'], '.claude/skills/review/SKILL.md');
+    assert.equal(orchAgents.tracker, undefined);
   });
 
-  // ---------------------------------------------------------------------------
-  // Phase 8: workspace.repos parsing
-  // ---------------------------------------------------------------------------
-
-  it('should parse workspace.repos with all fields', () => {
+  it('should parse repos map with minimal fields (url only)', () => {
     const workflow = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
-
-workspace:
-  root: /tmp/orch-agents
-  default_repo: orch-agents
-  repos:
-    - name: orch-agents
-      url: git@github.com:espinozasenior/orch-agents.git
-      teams: [AUT]
-      labels: [backend, agent, infra]
-      default_branch: main
-    - name: frontend-app
-      url: git@github.com:espinozasenior/frontend-app.git
-      teams: [FE]
-      labels: [frontend, ui]
-      default_branch: main
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 Prompt here.
 `;
     const config = parseWorkflowMdString(workflow);
 
-    assert.ok(config.workspace);
-    assert.equal(config.workspace.root, '/tmp/orch-agents');
-    assert.equal(config.workspace.defaultRepo, 'orch-agents');
-    assert.ok(config.workspace.repos);
-    assert.equal(config.workspace.repos.length, 2);
-    assert.equal(config.workspace.repos[0].name, 'orch-agents');
-    assert.equal(config.workspace.repos[0].url, 'git@github.com:espinozasenior/orch-agents.git');
-    assert.deepEqual(config.workspace.repos[0].teams, ['AUT']);
-    assert.deepEqual(config.workspace.repos[0].labels, ['backend', 'agent', 'infra']);
-    assert.equal(config.workspace.repos[0].defaultBranch, 'main');
-    assert.equal(config.workspace.repos[1].name, 'frontend-app');
-    assert.deepEqual(config.workspace.repos[1].teams, ['FE']);
-    assert.deepEqual(config.workspace.repos[1].labels, ['frontend', 'ui']);
+    const repoNames = getRepoNames(config);
+    assert.equal(repoNames.length, 1);
+    assert.equal(repoNames[0], 'org/my-repo');
+
+    const repo = config.repos['org/my-repo'];
+    assert.equal(repo.url, 'git@github.com:org/my-repo.git');
+    assert.equal(repo.defaultBranch, 'main');
+    assert.equal(repo.teams, undefined);
+    assert.equal(repo.labels, undefined);
+    assert.equal(repo.github, undefined);
+    assert.equal(repo.tracker, undefined);
   });
 
-  it('should parse workspace.repos with minimal fields (name + url only)', () => {
+  it('should throw when repos is missing', () => {
     const workflow = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
-
-agents:
-  routing:
-    default: quick-fix
-
-workspace:
-  root: /tmp/orch-agents
-  repos:
-    - name: my-repo
-      url: git@github.com:org/my-repo.git
----
-Prompt here.
-`;
-    const config = parseWorkflowMdString(workflow);
-
-    assert.ok(config.workspace);
-    assert.equal(config.workspace.repos.length, 1);
-    assert.equal(config.workspace.repos[0].name, 'my-repo');
-    assert.equal(config.workspace.repos[0].url, 'git@github.com:org/my-repo.git');
-    assert.equal(config.workspace.repos[0].teams, undefined);
-    assert.equal(config.workspace.repos[0].labels, undefined);
-    assert.equal(config.workspace.repos[0].defaultBranch, undefined);
-    assert.equal(config.workspace.defaultRepo, undefined);
-  });
-
-  it('should throw when workspace.repos is missing (workspace present but no repos)', () => {
-    const workflow = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
-tracker:
-  kind: linear
-  team: my-team
-
-agents:
-  routing:
-    default: quick-fix
-
-workspace:
-  root: /tmp/orch-agents
 ---
 Prompt here.
 `;
     assert.throws(
       () => parseWorkflowMdString(workflow),
-      (err: Error) => err instanceof WorkflowParseError && err.message.includes('workspace.repos'),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('repos'),
     );
   });
 
-  it('should throw when workspace.repos is an empty array', () => {
+  it('should throw when repos is empty', () => {
     const workflow = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
-
-workspace:
-  root: /tmp/orch-agents
-  repos: []
+repos: {}
 ---
 Prompt here.
 `;
     assert.throws(
       () => parseWorkflowMdString(workflow),
-      (err: Error) => err instanceof WorkflowParseError && err.message.includes('workspace.repos'),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('repos'),
     );
   });
 
-  it('should throw when workspace.repos entry is missing name', () => {
+  it('should throw when repos key is not in owner/repo format', () => {
     const workflow = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
-
-workspace:
-  root: /tmp/orch-agents
-  repos:
-    - url: git@github.com:org/my-repo.git
+repos:
+  my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 Prompt here.
 `;
     assert.throws(
       () => parseWorkflowMdString(workflow),
-      (err: Error) => err instanceof WorkflowParseError && err.message.includes('name'),
+      (err: Error) => err instanceof WorkflowParseError && err.message.includes('owner/repo'),
     );
   });
 
-  it('should throw when workspace.repos entry is missing url', () => {
+  it('should throw when repos entry is missing url', () => {
     const workflow = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
-
-workspace:
-  root: /tmp/orch-agents
-  repos:
-    - name: my-repo
+repos:
+  org/my-repo:
+    default_branch: main
 ---
 Prompt here.
 `;
@@ -714,17 +539,13 @@ Prompt here.
 
   it('should reject unsupported prompt placeholders', () => {
     const bad = `---
-templates:
-  quick-fix:
-    - .claude/agents/core/coder.md
-
 tracker:
   kind: linear
   team: my-team
 
-agents:
-  routing:
-    default: quick-fix
+repos:
+  org/my-repo:
+    url: git@github.com:org/my-repo.git
 ---
 Issue {{ issue.assignee }}
 `;
@@ -734,41 +555,34 @@ Issue {{ issue.assignee }}
       (err: Error) => err instanceof WorkflowParseError && err.message.includes('unsupported placeholders'),
     );
   });
-});
 
-// ---------------------------------------------------------------------------
-// Option C step 2 (PR A): templates deprecation warning
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // resolveRepoConfig
+  // ---------------------------------------------------------------------------
 
-describe('WorkflowParser — templates deprecation warning', () => {
-  let warnings: string[];
-  let originalWarn: typeof console.warn;
+  it('resolveRepoConfig returns repo-scoped config with github events', () => {
+    const config = parseWorkflowMdString(VALID_WORKFLOW);
 
-  beforeEach(() => {
-    __resetTemplatesDeprecationWarning();
-    warnings = [];
-    originalWarn = console.warn;
-    console.warn = (msg: unknown) => { warnings.push(String(msg)); };
+    const resolved = resolveRepoConfig(config, 'somnio-projects/marketplace-monorepo');
+    assert.ok(resolved);
+    assert.ok(resolved.github);
+    assert.equal(resolved.github!.events['pull_request.opened'], '.claude/skills/github-ops/SKILL.md');
+    // tracker.team overridden
+    assert.equal(resolved.tracker.team, 'AUT');
   });
 
-  afterEach(() => {
-    console.warn = originalWarn;
-    __resetTemplatesDeprecationWarning();
+  it('resolveRepoConfig returns null for unknown repo', () => {
+    const config = parseWorkflowMdString(VALID_WORKFLOW);
+
+    const resolved = resolveRepoConfig(config, 'unknown/repo');
+    assert.equal(resolved, null);
   });
 
-  it('emits a deprecation warning when templates section is present', () => {
-    parseWorkflowMdString(VALID_WORKFLOW);
+  it('resolveRepoConfig inherits global tracker when repo has no tracker override', () => {
+    const config = parseWorkflowMdString(VALID_WORKFLOW);
 
-    assert.equal(warnings.length, 1, 'Expected exactly one deprecation warning');
-    assert.match(warnings[0], /templates: section is deprecated/);
-  });
-
-  it('emits the deprecation warning at most once per process', () => {
-    parseWorkflowMdString(VALID_WORKFLOW);
-    parseWorkflowMdString(VALID_WORKFLOW);
-    parseWorkflowMdString(VALID_WORKFLOW);
-
-    assert.equal(warnings.length, 1, 'Warning should fire exactly once');
+    const resolved = resolveRepoConfig(config, 'espinozasenior/orch-agents');
+    assert.ok(resolved);
+    assert.equal(resolved.tracker.team, 'my-team');
   });
 });
-

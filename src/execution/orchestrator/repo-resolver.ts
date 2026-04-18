@@ -13,17 +13,21 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
-import type { RepoConfig, WorkspaceConfig } from '../../integration/linear/workflow-parser';
+import type { RepoConfig } from '../../integration/linear/workflow-parser';
 import { emitSelectElicitation } from './issue-worker-runner';
 
-export type { RepoConfig, WorkspaceConfig };
+export type { RepoConfig };
 
 // ---------------------------------------------------------------------------
 // Resolution result types
 // ---------------------------------------------------------------------------
 
+export interface ResolvedRepo extends RepoConfig {
+  name: string;
+}
+
 export type RepoResolutionResult =
-  | { status: 'resolved'; repo: RepoConfig }
+  | { status: 'resolved'; repo: ResolvedRepo }
   | { status: 'pending' };
 
 // ---------------------------------------------------------------------------
@@ -34,36 +38,36 @@ const AUTO_SELECT_CONFIDENCE_THRESHOLD = 0.8;
 
 export async function resolveRepoForIssue(
   issue: LinearIssueResponse,
-  workspaceConfig: WorkspaceConfig,
+  repos: Record<string, RepoConfig>,
   linearClient?: LinearClient,
   agentSessionId?: string,
   logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void },
 ): Promise<RepoResolutionResult> {
-  const { repos } = workspaceConfig;
+  const repoEntries = Object.entries(repos).map(([name, config]) => ({ name, ...config }));
 
-  if (!repos || repos.length === 0) {
-    throw new Error('workspace.repos is required and must be a non-empty array');
+  if (repoEntries.length === 0) {
+    throw new Error('repos is required and must be a non-empty map');
   }
 
   // 1. Label match (highest priority — explicit routing)
   const issueLabels = issue.labels.nodes.map((l) => l.name.toLowerCase());
-  for (const repo of repos) {
-    if (!repo.labels || repo.labels.length === 0) continue;
-    const repoLabels = repo.labels.map((l) => l.toLowerCase());
+  for (const entry of repoEntries) {
+    if (!entry.labels || entry.labels.length === 0) continue;
+    const repoLabels = entry.labels.map((l) => l.toLowerCase());
     const hasMatch = issueLabels.some((il) => repoLabels.includes(il));
     if (hasMatch) {
-      return { status: 'resolved', repo };
+      return { status: 'resolved', repo: entry };
     }
   }
 
   // 2. Team key match
   const issueTeamKey = issue.team?.key?.toLowerCase();
   if (issueTeamKey) {
-    for (const repo of repos) {
-      if (!repo.teams || repo.teams.length === 0) continue;
-      const repoTeams = repo.teams.map((t) => t.toLowerCase());
+    for (const entry of repoEntries) {
+      if (!entry.teams || entry.teams.length === 0) continue;
+      const repoTeams = entry.teams.map((t) => t.toLowerCase());
       if (repoTeams.includes(issueTeamKey)) {
-        return { status: 'resolved', repo };
+        return { status: 'resolved', repo: entry };
       }
     }
   }
@@ -71,9 +75,9 @@ export async function resolveRepoForIssue(
   // 3. issueRepositorySuggestions API (Linear AI ranking)
   if (linearClient && agentSessionId) {
     try {
-      const candidates = repos.map((r) => ({
+      const candidates = repoEntries.map((entry) => ({
         hostname: 'github.com',
-        repositoryFullName: extractFullName(r.url),
+        repositoryFullName: entry.name,
       }));
 
       const suggestions = await linearClient.issueRepositorySuggestions(
@@ -85,8 +89,8 @@ export async function resolveRepoForIssue(
         const best = sorted[0];
 
         if (best.confidence > AUTO_SELECT_CONFIDENCE_THRESHOLD) {
-          const matched = repos.find(
-            (r) => extractFullName(r.url) === best.repositoryFullName,
+          const matched = repoEntries.find(
+            (entry) => entry.name === best.repositoryFullName,
           );
           if (matched) {
             return { status: 'resolved', repo: matched };
@@ -114,17 +118,8 @@ export async function resolveRepoForIssue(
     }
   }
 
-  // 5. Fallback to default repo from config
-  if (workspaceConfig.defaultRepo) {
-    const defaultRepo = repos.find((r) => r.name === workspaceConfig.defaultRepo);
-    if (defaultRepo) {
-      return { status: 'resolved', repo: defaultRepo };
-    }
-  }
-
-  throw new Error(
-    `No repo resolved for issue ${issue.identifier} — check workspace.repos config`,
-  );
+  // 5. Fallback to first repo in the map
+  return { status: 'resolved', repo: repoEntries[0] };
 }
 
 // ---------------------------------------------------------------------------

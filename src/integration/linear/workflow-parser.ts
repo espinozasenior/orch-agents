@@ -4,26 +4,34 @@ import { AppError } from '../../shared/errors';
 import { validateWorkflowPromptTemplate } from './workflow-prompt';
 
 // ---------------------------------------------------------------------------
-// Phase 8: Multi-Repository Workspace types
+// SPEC-001: Multi-repo workflow config types
 // ---------------------------------------------------------------------------
 
 export interface RepoConfig {
-  name: string;
   url: string;
+  defaultBranch: string;
   teams?: string[];
   labels?: string[];
-  defaultBranch?: string;
-}
-
-export interface WorkspaceConfig {
-  root: string;
-  defaultRepo?: string;
-  repos: RepoConfig[];
+  github?: {
+    events: Record<string, string>;
+  };
+  tracker?: {
+    team?: string;
+  };
 }
 
 export interface WorkflowConfig {
-  templates: Record<string, string[]>;
-  tracker: {
+  repos: Record<string, RepoConfig>;
+  /** Present only on repo-resolved configs (via resolveRepoConfig). */
+  github?: {
+    events: Record<string, string>;
+  };
+  defaults: {
+    agents: { maxConcurrent: number };
+    stall: { timeoutMs: number };
+    polling: { intervalMs: number; enabled: boolean };
+  };
+  tracker?: {
     kind: 'linear';
     apiKey: string;
     team: string;
@@ -32,14 +40,8 @@ export interface WorkflowConfig {
     activeTypes: string[];
     terminalTypes: string[];
   };
-  github?: {
-    events: Record<string, string>;
-  };
-  workspace?: WorkspaceConfig;
   agents: {
     maxConcurrent: number;
-    routing: Record<string, string>;
-    defaultTemplate: string;
   };
   agent: {
     maxConcurrentAgents: number;
@@ -69,10 +71,9 @@ export interface WorkflowConfig {
 }
 
 interface WorkflowDocument {
-  templates?: Record<string, unknown>;
+  defaults?: Record<string, unknown>;
+  repos?: Record<string, unknown>;
   tracker?: Record<string, unknown>;
-  github?: Record<string, unknown>;
-  workspace?: Record<string, unknown>;
   agents?: Record<string, unknown>;
   agent?: Record<string, unknown>;
   polling?: Record<string, unknown>;
@@ -89,38 +90,39 @@ export function parseWorkflowMdString(content: string): WorkflowConfig {
   const { frontmatter, body } = extractFrontmatter(content);
   const document = parseWorkflowDocument(frontmatter);
   validatePromptTemplate(body);
-  const config = buildConfig(resolveEnvInValue(document) as WorkflowDocument, body);
-  // DEPRECATED (Option C step 2, PR A): templates parsed but unused by the
-  // main-thread IntakeCompleted handler. Worker thread (issue-worker-runner)
-  // still uses them — full removal scheduled for PR B.
-  warnIfTemplatesPresent(document);
-  return config;
+  return buildConfig(resolveEnvInValue(document) as WorkflowDocument, body);
 }
 
-let templatesDeprecationWarned = false;
+// ---------------------------------------------------------------------------
+// Repo resolution helpers
+// ---------------------------------------------------------------------------
 
-/**
- * Reset the deprecation-warning latch. Test-only helper so suites that load
- * multiple WORKFLOW.md fixtures can verify the warning fires exactly once
- * per process otherwise.
- */
-export function __resetTemplatesDeprecationWarning(): void {
-  templatesDeprecationWarned = false;
+export function resolveRepoConfig(config: WorkflowConfig, repoFullName: string): WorkflowConfig | null {
+  const repoEntry = config.repos[repoFullName];
+  if (!repoEntry) return null;
+
+  // Merge: repo's github.events (never inherited),
+  // repo's tracker.team overrides global tracker.team,
+  // everything else comes from the parent config
+  return {
+    ...config,
+    ...(repoEntry.github ? { github: repoEntry.github } : {}),
+    ...(config.tracker ? {
+      tracker: {
+        ...config.tracker,
+        ...(repoEntry.tracker?.team ? { team: repoEntry.tracker.team } : {}),
+      },
+    } : {}),
+  };
 }
 
-function warnIfTemplatesPresent(document: WorkflowDocument): void {
-  if (templatesDeprecationWarned) return;
-  if (!document.templates || typeof document.templates !== 'object') return;
-  if (Object.keys(document.templates).length === 0) return;
-  templatesDeprecationWarned = true;
-  // eslint-disable-next-line no-console
-  console.warn(
-    'WORKFLOW.md templates: section is deprecated — main-thread dispatch now '
-    + 'uses coordinator mode. Templates are still parsed for backward compat '
-    + 'and remain in use by the worker-thread path, but will be removed in a '
-    + 'future release (Option C step 2, PR A).',
-  );
+export function getRepoNames(config: WorkflowConfig): string[] {
+  return Object.keys(config.repos);
 }
+
+// ---------------------------------------------------------------------------
+// Frontmatter extraction
+// ---------------------------------------------------------------------------
 
 function extractFrontmatter(content: string): { frontmatter: string; body: string } {
   const trimmed = content.trimStart();
@@ -166,26 +168,46 @@ function parseWorkflowDocument(frontmatter: string): WorkflowDocument {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Config builder
+// ---------------------------------------------------------------------------
+
 function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
-  const tracker = asRecord(document.tracker, 'tracker');
-  const kind = readString(tracker.kind, 'tracker.kind');
-  if (kind !== 'linear') {
-    throw new WorkflowParseError(`tracker.kind must be 'linear', got '${kind}'`);
+  // tracker (optional — Linear integration is opt-in)
+  const trackerRecord = asOptionalRecord(document.tracker);
+  let trackerConfig: WorkflowConfig['tracker'] | undefined;
+  if (trackerRecord) {
+    const kind = readOptionalString(trackerRecord.kind) ?? 'linear';
+    if (kind !== 'linear') {
+      throw new WorkflowParseError(`tracker.kind must be 'linear', got '${kind}'`);
+    }
+    trackerConfig = {
+      kind: 'linear',
+      apiKey: readOptionalString(trackerRecord.api_key) ?? '',
+      team: readOptionalString(trackerRecord.team) ?? '',
+      activeStates: readStringArray(trackerRecord.active_states, 'tracker.active_states', ['Todo', 'In Progress']),
+      terminalStates: readStringArray(trackerRecord.terminal_states, 'tracker.terminal_states', ['Done', 'Cancelled']),
+      activeTypes: readStringArray(trackerRecord.active_types, 'tracker.active_types', ['unstarted', 'started']),
+      terminalTypes: readStringArray(trackerRecord.terminal_types, 'tracker.terminal_types', ['completed', 'canceled']),
+    };
   }
 
-  const team = readString(tracker.team, 'tracker.team');
-  // Option C step 2b (PR B): templates and routing are now fully optional.
-  // The worker thread no longer reads templates (coordinator-only dispatch),
-  // and the main-thread engine ignored them since PR A. We still parse them
-  // when present for normalizer metadata, but a missing/empty templates:
-  // section is no longer an error and routing validation is best-effort.
-  const templates = readTemplatesOptional(document.templates);
-  const routing = readRoutingOptional(document.agents);
-  const defaultTemplate = routing.default ?? 'coordinator';
-  delete routing.default;
-  validateTemplateRoutingPermissive(templates, routing, defaultTemplate);
+  // repos (required)
+  if (!document.repos || typeof document.repos !== 'object') {
+    throw new WorkflowParseError('repos is required and must be a non-empty object');
+  }
+  const reposRecord = asRecord(document.repos, 'repos');
+  if (Object.keys(reposRecord).length === 0) {
+    throw new WorkflowParseError('repos is required and must be a non-empty object');
+  }
+  const repos = buildReposMap(reposRecord);
 
-  const workspace = asOptionalRecord(document.workspace);
+  // defaults (optional, with fallbacks)
+  const defaults = asOptionalRecord(document.defaults);
+  const defaultsAgents = asOptionalRecord(defaults?.agents);
+  const defaultsStall = asOptionalRecord(defaults?.stall);
+  const defaultsPolling = asOptionalRecord(defaults?.polling);
+
   const hooks = asOptionalRecord(document.hooks);
   const agent = asOptionalRecord(document.agent);
   const agentRunner = asOptionalRecord(document.agent_runner);
@@ -193,33 +215,35 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
   const stall = asOptionalRecord(document.stall);
 
   const maxConcurrent = readNumber(
-    agent?.max_concurrent_agents ?? document.agents?.max_concurrent,
-    'agent.max_concurrent_agents',
+    defaultsAgents?.max_concurrent ?? agent?.max_concurrent_agents ?? document.agents?.max_concurrent,
+    'defaults.agents.max_concurrent',
     8,
   );
   const stallTimeoutMs = readNumber(
-    agentRunner?.stall_timeout_ms ?? stall?.timeout_ms,
-    'agent_runner.stall_timeout_ms',
+    defaultsStall?.timeout_ms ?? agentRunner?.stall_timeout_ms ?? stall?.timeout_ms,
+    'defaults.stall.timeout_ms',
     300_000,
+  );
+  const pollingIntervalMs = readNumber(
+    defaultsPolling?.interval_ms ?? polling?.interval_ms,
+    'defaults.polling.interval_ms',
+    30_000,
+  );
+  const pollingEnabled = readBoolean(
+    defaultsPolling?.enabled ?? polling?.enabled,
+    false,
   );
 
   return {
-    templates,
-    tracker: {
-      kind: 'linear',
-      apiKey: readOptionalString(tracker.api_key) ?? '',
-      team,
-      activeStates: readStringArray(tracker.active_states, 'tracker.active_states', ['Todo', 'In Progress']),
-      terminalStates: readStringArray(tracker.terminal_states, 'tracker.terminal_states', ['Done', 'Cancelled']),
-      activeTypes: readStringArray(tracker.active_types, 'tracker.active_types', ['unstarted', 'started']),
-      terminalTypes: readStringArray(tracker.terminal_types, 'tracker.terminal_types', ['completed', 'canceled']),
+    repos,
+    defaults: {
+      agents: { maxConcurrent },
+      stall: { timeoutMs: stallTimeoutMs },
+      polling: { intervalMs: pollingIntervalMs, enabled: pollingEnabled },
     },
-    ...(buildGitHubConfig(document.github) ? { github: buildGitHubConfig(document.github) } : {}),
-    ...(workspace ? { workspace: buildWorkspaceConfig(workspace) } : {}),
+    ...(trackerConfig ? { tracker: trackerConfig } : {}),
     agents: {
       maxConcurrent,
-      routing,
-      defaultTemplate,
     },
     agent: {
       maxConcurrentAgents: maxConcurrent,
@@ -227,8 +251,8 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
       maxTurns: readNumber(agent?.max_turns, 'agent.max_turns', 20),
     },
     polling: {
-      intervalMs: readNumber(polling?.interval_ms, 'polling.interval_ms', 30_000),
-      enabled: readBoolean(polling?.enabled, false),
+      intervalMs: pollingIntervalMs,
+      enabled: pollingEnabled,
     },
     stall: {
       timeoutMs: stallTimeoutMs,
@@ -249,37 +273,41 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
   };
 }
 
-function buildWorkspaceConfig(workspace: Record<string, unknown>): WorkspaceConfig {
-  const root = readString(workspace.root, 'workspace.root');
-  const defaultRepo = readOptionalString(workspace.default_repo);
-  const rawRepos = workspace.repos;
+// ---------------------------------------------------------------------------
+// Repos map builder
+// ---------------------------------------------------------------------------
 
-  if (!rawRepos || !Array.isArray(rawRepos) || rawRepos.length === 0) {
-    throw new WorkflowParseError('workspace.repos is required and must be a non-empty array');
-  }
-
-  const repos: RepoConfig[] = rawRepos.map((entry: unknown, index: number) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw new WorkflowParseError(`workspace.repos[${index}] must be an object`);
+function buildReposMap(repos: Record<string, unknown>): Record<string, RepoConfig> {
+  const result: Record<string, RepoConfig> = {};
+  for (const [repoFullName, rawEntry] of Object.entries(repos)) {
+    if (!repoFullName.includes('/')) {
+      throw new WorkflowParseError(`repos key '${repoFullName}' must be in owner/repo format`);
     }
-    const record = entry as Record<string, unknown>;
-    const name = readString(record.name, `workspace.repos[${index}].name`);
-    const url = readString(record.url, `workspace.repos[${index}].url`);
-    const teams = record.teams != null ? readStringArray(record.teams, `workspace.repos[${index}].teams`, []) : undefined;
-    const labels = record.labels != null ? readStringArray(record.labels, `workspace.repos[${index}].labels`, []) : undefined;
-    const defaultBranch = readOptionalString(record.default_branch);
+    const entry = asRecord(rawEntry, `repos.${repoFullName}`);
+    const url = readString(entry.url, `repos.${repoFullName}.url`);
+    const defaultBranch = readOptionalString(entry.default_branch) ?? 'main';
+    const teams = entry.teams != null ? readStringArray(entry.teams, `repos.${repoFullName}.teams`, []) : undefined;
+    const labels = entry.labels != null ? readStringArray(entry.labels, `repos.${repoFullName}.labels`, []) : undefined;
+    const github = buildGitHubConfig(entry.github);
+    const trackerOverride = asOptionalRecord(entry.tracker);
 
-    const repo: RepoConfig = { name, url };
-    if (teams && teams.length > 0) repo.teams = teams;
-    if (labels && labels.length > 0) repo.labels = labels;
-    if (defaultBranch) repo.defaultBranch = defaultBranch;
-    return repo;
-  });
-
-  return { root, defaultRepo, repos };
+    result[repoFullName] = {
+      url,
+      defaultBranch,
+      ...(teams && teams.length > 0 ? { teams } : {}),
+      ...(labels && labels.length > 0 ? { labels } : {}),
+      ...(github ? { github } : {}),
+      ...(trackerOverride ? { tracker: { team: readOptionalString(trackerOverride.team) } } : {}),
+    };
+  }
+  return result;
 }
 
-function buildGitHubConfig(github: unknown): WorkflowConfig['github'] | undefined {
+// ---------------------------------------------------------------------------
+// GitHub config builder
+// ---------------------------------------------------------------------------
+
+function buildGitHubConfig(github: unknown): { events: Record<string, string> } | undefined {
   const record = asOptionalRecord(github);
   if (!record) return undefined;
   const events = asOptionalRecord(record.events);
@@ -296,71 +324,9 @@ function buildGitHubConfig(github: unknown): WorkflowConfig['github'] | undefine
   return { events: normalized };
 }
 
-function readTemplatesOptional(value: unknown): Record<string, string[]> {
-  // Option C step 2b: templates: section is fully optional. If absent or
-  // empty, return an empty map and let downstream callers fall back to
-  // coordinator mode.
-  if (value === undefined || value === null) {
-    return {};
-  }
-  const templates = asRecord(value, 'templates');
-  const normalized = Object.fromEntries(
-    Object.entries(templates).map(([templateName, members]) => {
-      if (typeof members === 'string') {
-        return [templateName, [members]];
-      }
-      if (Array.isArray(members) && members.every((member) => typeof member === 'string')) {
-        return [templateName, members];
-      }
-      throw new WorkflowParseError(`templates.${templateName} must be a string or string[]`);
-    }),
-  );
-  return normalized;
-}
-
-function readRoutingOptional(value: unknown): Record<string, string> {
-  // agents: section itself is still parsed when present, but agents.routing
-  // is now optional. Returns an empty map when absent.
-  if (value === undefined || value === null) {
-    return {};
-  }
-  const agents = asOptionalRecord(value);
-  if (!agents || agents.routing === undefined || agents.routing === null) {
-    return {};
-  }
-  const routing = asRecord(agents.routing, 'agents.routing');
-  return Object.fromEntries(
-    Object.entries(routing).map(([route, templateName]) => [route, readString(templateName, `agents.routing.${route}`)]),
-  );
-}
-
-function validateTemplateRoutingPermissive(
-  templates: Record<string, string[]>,
-  routing: Record<string, string>,
-  defaultTemplate: string,
-): void {
-  // Option C step 2b: routing references to unknown templates emit a
-  // best-effort warning but never throw. If templates: is empty, all
-  // routing entries are treated as observability metadata only.
-  const templateNames = new Set(Object.keys(templates));
-  if (templateNames.size === 0) {
-    return;
-  }
-  if (defaultTemplate !== 'coordinator' && !templateNames.has(defaultTemplate)) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `WORKFLOW.md agents.routing.default references unknown template '${defaultTemplate}' — falling back to 'coordinator' at dispatch time.`,
-    );
-  }
-  for (const [route, templateName] of Object.entries(routing)) {
-    if (!templateNames.has(templateName)) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `WORKFLOW.md agents.routing.${route} references unknown template '${templateName}' — coordinator mode will be used at dispatch time.`,
-      );
-    }
-  }
-}
+// ---------------------------------------------------------------------------
+// Prompt template validation
+// ---------------------------------------------------------------------------
 
 function validatePromptTemplate(body: string): void {
   const unsupported = validateWorkflowPromptTemplate(body);
@@ -368,6 +334,10 @@ function validatePromptTemplate(body: string): void {
     throw new WorkflowParseError(`promptTemplate contains unsupported placeholders: ${unsupported.join(', ')}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Environment variable resolution
+// ---------------------------------------------------------------------------
 
 /**
  * Allowlist of environment variable names that may be substituted in WORKFLOW.md.
@@ -406,6 +376,10 @@ function resolveEnvInValue(value: unknown): unknown {
   }
   return value;
 }
+
+// ---------------------------------------------------------------------------
+// Primitive readers
+// ---------------------------------------------------------------------------
 
 function asRecord(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -470,6 +444,10 @@ function readBoolean(value: unknown, fallback: boolean): boolean {
   }
   return fallback;
 }
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
 
 export class WorkflowParseError extends AppError {
   constructor(message: string) {

@@ -45,19 +45,25 @@ function computeLinearSignature(payload: string, secret: string): string {
 
 function makeTestWorkflowConfig(): WorkflowConfig {
   return {
-    templates: {
-      'github-ops': ['.claude/agents/core/reviewer.md'],
-      'quick-fix': ['.claude/agents/core/coder.md'],
-    },
-    github: {
-      events: {
-        'issue_comment.mentions_bot': 'quick-fix',
+    repos: {
+      'test-org/test-repo': {
+        url: 'git@github.com:test-org/test-repo.git',
+        defaultBranch: 'main',
+        github: {
+          events: {
+            'issue_comment.mentions_bot': '.claude/skills/quick-fix/SKILL.md',
+          },
+        },
       },
     },
+    defaults: { agents: { maxConcurrent: 8 }, stall: { timeoutMs: 300000 }, polling: { intervalMs: 30000, enabled: false } },
     tracker: { kind: 'linear', apiKey: '', team: 'test', activeTypes: ['unstarted', 'started'], terminalTypes: ['completed', 'canceled'], activeStates: [], terminalStates: [] },
-    agents: { maxConcurrent: 8, routing: {}, defaultTemplate: 'quick-fix' },
+    agents: { maxConcurrent: 8 },
+    agent: { maxConcurrentAgents: 8, maxRetryBackoffMs: 300000, maxTurns: 20 },
     polling: { intervalMs: 30000, enabled: false },
     stall: { timeoutMs: 300000 },
+    agentRunner: { stallTimeoutMs: 300000, command: 'claude', turnTimeoutMs: 3600000 },
+    hooks: { afterCreate: null, beforeRun: null, afterRun: null, beforeRemove: null, timeoutMs: 60000 },
     promptTemplate: '',
   };
 }

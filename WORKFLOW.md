@@ -1,26 +1,12 @@
 ---
-# templates: section removed (Option C step 2b).
-# Coordinator mode now handles all dispatch dynamically. The coordinator
-# decides what work to do based on the issue context and the CC-canonical
-# 4-phase workflow (Research → Synthesis → Implementation → Verification).
-
-github:
-  # P20: values are relative paths to skill files. Behavior lives in the
-  # SKILL.md body; context fetchers live in its frontmatter. Add a new route
-  # by editing this map — no TypeScript changes required. Events without an
-  # explicit entry here are silently skipped at the normalizer (no IntakeEvent,
-  # no worktree, no coordinator cycle). Explicit-only routing — no default
-  # catch-all by design.
-  events:
-    pull_request.opened: .claude/skills/github-ops/SKILL.md
-    pull_request.synchronize: .claude/skills/github-ops/SKILL.md
-    pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
-    # Operator-only edit: route newly opened issues to the existing
-    # github-deep-research skill (already on disk under .claude/skills/).
-    # Demonstrates the "no new files, just a WORKFLOW.md entry" extension
-    # story — adding a route for a different event type is a one-line edit.
-    issues.opened: .claude/skills/github-deep-research/SKILL.md
-
+defaults:
+  agents:
+    max_concurrent: 8
+  stall:
+    timeout_ms: 300000
+  polling:
+    interval_ms: 30000
+    enabled: false
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
@@ -31,34 +17,55 @@ tracker:
   terminal_types:
     - completed
     - canceled
-
-agents:
-  max_concurrent: 8
-  # routing: section removed (Option C step 2b). Coordinator mode is now
-  # the only dispatch path — label-based template routing is no longer used.
-
-polling:
-  interval_ms: 30000
-  enabled: false
-
-stall:
-  timeout_ms: 300000
-
-workspace:
-  root: /tmp/orch-agents
-  default_repo: marketplace-monorepo
-  repos:
-    - name: marketplace-monorepo
-      url: git@github.com:somnio-projects/marketplace-monorepo.git
-      teams: [AUT]
-      labels: [marketplace-monorepo, backend, infra]
-      default_branch: main
-
-    - name: orch-agents
-      url: git@github.com:espinozasenior/orch-agents.git
-      labels: [agent, orchestrator, bot]
-      default_branch: main
+repos:
+  somnio-projects/marketplace-monorepo:
+    url: git@github.com:somnio-projects/marketplace-monorepo.git
+    default_branch: main
+    teams:
+      - AUT
+    labels:
+      - marketplace-monorepo
+      - backend
+      - infra
+    github:
+      events:
+        pull_request.opened: .claude/skills/github-ops/SKILL.md
+        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+        pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+        issues.opened: .claude/skills/github-deep-research/SKILL.md
+    tracker:
+      team: AUT
+  espinozasenior/orch-agents:
+    url: git@github.com:espinozasenior/orch-agents.git
+    default_branch: main
+    labels:
+      - agent
+      - orchestrator
+      - bot
+    github:
+      events:
+        pull_request.opened: .claude/skills/github-ops/SKILL.md
+        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+        pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+        issues.opened: .claude/skills/github-deep-research/SKILL.md
+  espinozasenior/automata-somnio-tl:
+    url: git@github.com:espinozasenior/automata-somnio-tl.git
+    default_branch: main
+    github:
+      events:
+        pull_request.opened: .claude/skills/github-ops/SKILL.md
+        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+        issues.opened: .claude/skills/github-ops/SKILL.md
+        # pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+        # pull_request.closed: .claude/skills/github-ops/SKILL.md
+        # issue_comment.created: .claude/skills/github-ops/SKILL.md
+        # push.default_branch: .claude/skills/github-ops/SKILL.md
+        # pull_request_review.submitted: .claude/skills/github-ops/SKILL.md
+        # workflow_run.completed: .claude/skills/github-ops/SKILL.md
+        # release.published: .claude/skills/github-ops/SKILL.md
 ---
+
+
 
 You are an autonomous development agent working on {{ issue.identifier }}.
 

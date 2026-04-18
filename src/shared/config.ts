@@ -55,6 +55,8 @@ export interface AppConfig {
   readonly linearClientSecret: string;
   /** Linear OAuth redirect URI for code exchange */
   readonly linearRedirectUri: string;
+  /** Enable Cloudflare Quick Tunnel on server start (default false) */
+  readonly enableTunnel: boolean;
 }
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = [
@@ -111,6 +113,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const linearClientId = env.LINEAR_CLIENT_ID ?? '';
   const linearClientSecret = env.LINEAR_CLIENT_SECRET ?? '';
   const linearRedirectUri = env.LINEAR_REDIRECT_URI ?? '';
+  const enableTunnel = env.ENABLE_TUNNEL !== 'false';
 
   if (isProduction && linearAuthMode === 'oauth' && (!linearClientId || !linearClientSecret)) {
     throw new Error('LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET are required when LINEAR_AUTH_MODE=oauth');
@@ -140,6 +143,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     linearClientId,
     linearClientSecret,
     linearRedirectUri,
+    enableTunnel,
   });
 }
 

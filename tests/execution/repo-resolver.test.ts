@@ -11,10 +11,10 @@ import {
   resolveRepoForIssue,
   extractFullName,
   ensureRepoCloned,
-  type RepoConfig,
-  type WorkspaceConfig,
+  type ResolvedRepo,
   type RepoResolutionResult,
 } from '../../src/execution/orchestrator/repo-resolver';
+import type { RepoConfig } from '../../src/integration/linear/workflow-parser';
 import type { LinearClient, LinearIssueResponse } from '../../src/integration/linear/linear-client';
 
 // ---------------------------------------------------------------------------
@@ -39,27 +39,21 @@ function makeIssue(overrides: Partial<LinearIssueResponse> = {}): LinearIssueRes
   };
 }
 
-function makeWorkspaceConfig(overrides: Partial<WorkspaceConfig> = {}): WorkspaceConfig {
+function makeRepos(overrides?: Record<string, RepoConfig>): Record<string, RepoConfig> {
+  if (overrides !== undefined) return overrides;
   return {
-    root: '/tmp/orch-agents',
-    repos: [
-      {
-        name: 'orch-agents',
-        url: 'git@github.com:espinozasenior/orch-agents.git',
-        teams: ['AUT'],
-        labels: ['backend', 'agent', 'infra'],
-        defaultBranch: 'main',
-      },
-      {
-        name: 'frontend-app',
-        url: 'git@github.com:espinozasenior/frontend-app.git',
-        teams: ['FE'],
-        labels: ['frontend', 'ui'],
-        defaultBranch: 'main',
-      },
-    ],
-    defaultRepo: 'orch-agents',
-    ...overrides,
+    'espinozasenior/orch-agents': {
+      url: 'git@github.com:espinozasenior/orch-agents.git',
+      defaultBranch: 'main',
+      teams: ['AUT'],
+      labels: ['backend', 'agent', 'infra'],
+    },
+    'espinozasenior/frontend-app': {
+      url: 'git@github.com:espinozasenior/frontend-app.git',
+      defaultBranch: 'main',
+      teams: ['FE'],
+      labels: ['frontend', 'ui'],
+    },
   };
 }
 
@@ -95,12 +89,12 @@ describe('resolveRepoForIssue (Phase 8)', () => {
     const issue = makeIssue({
       labels: { nodes: [{ id: 'l1', name: 'Frontend' }] },
     });
-    const config = makeWorkspaceConfig();
+    const repos = makeRepos();
 
-    const result = await resolveRepoForIssue(issue, config);
+    const result = await resolveRepoForIssue(issue, repos);
 
     assert.equal(result.status, 'resolved');
-    assert.equal((result as { repo: RepoConfig }).repo.name, 'frontend-app');
+    assert.equal((result as { repo: ResolvedRepo }).repo.name, 'espinozasenior/frontend-app');
   });
 
   it('returns correct repo on team key match when no label match', async () => {
@@ -108,12 +102,12 @@ describe('resolveRepoForIssue (Phase 8)', () => {
       labels: { nodes: [{ id: 'l1', name: 'bug' }] },
       team: { id: 'team-fe', key: 'fe' },
     });
-    const config = makeWorkspaceConfig();
+    const repos = makeRepos();
 
-    const result = await resolveRepoForIssue(issue, config);
+    const result = await resolveRepoForIssue(issue, repos);
 
     assert.equal(result.status, 'resolved');
-    assert.equal((result as { repo: RepoConfig }).repo.name, 'frontend-app');
+    assert.equal((result as { repo: ResolvedRepo }).repo.name, 'espinozasenior/frontend-app');
   });
 
   it('calls issueRepositorySuggestions when no label/team match', async () => {
@@ -121,7 +115,7 @@ describe('resolveRepoForIssue (Phase 8)', () => {
       labels: { nodes: [{ id: 'l1', name: 'bug' }] },
       team: { id: 'team-x', key: 'UNKNOWN' },
     });
-    const config = makeWorkspaceConfig();
+    const repos = makeRepos();
 
     let suggestionsCalled = false;
     const client = makeMockLinearClient({
@@ -133,7 +127,7 @@ describe('resolveRepoForIssue (Phase 8)', () => {
       },
     });
 
-    await resolveRepoForIssue(issue, config, client, 'session-1');
+    await resolveRepoForIssue(issue, repos, client, 'session-1');
 
     assert.equal(suggestionsCalled, true);
   });
@@ -143,7 +137,7 @@ describe('resolveRepoForIssue (Phase 8)', () => {
       labels: { nodes: [] },
       team: { id: 'team-x', key: 'UNKNOWN' },
     });
-    const config = makeWorkspaceConfig();
+    const repos = makeRepos();
 
     const client = makeMockLinearClient({
       issueRepositorySuggestions: async () => [
@@ -152,10 +146,10 @@ describe('resolveRepoForIssue (Phase 8)', () => {
       ],
     });
 
-    const result = await resolveRepoForIssue(issue, config, client, 'session-1');
+    const result = await resolveRepoForIssue(issue, repos, client, 'session-1');
 
     assert.equal(result.status, 'resolved');
-    assert.equal((result as { repo: RepoConfig }).repo.name, 'frontend-app');
+    assert.equal((result as { repo: ResolvedRepo }).repo.name, 'espinozasenior/frontend-app');
   });
 
   it('returns PENDING when low-confidence triggers select elicitation', async () => {
@@ -163,7 +157,7 @@ describe('resolveRepoForIssue (Phase 8)', () => {
       labels: { nodes: [] },
       team: { id: 'team-x', key: 'UNKNOWN' },
     });
-    const config = makeWorkspaceConfig({ defaultRepo: undefined });
+    const repos = makeRepos();
 
     let selectEmitted = false;
     const client = makeMockLinearClient({
@@ -177,59 +171,45 @@ describe('resolveRepoForIssue (Phase 8)', () => {
       },
     });
 
-    const result = await resolveRepoForIssue(issue, config, client, 'session-1');
+    const result = await resolveRepoForIssue(issue, repos, client, 'session-1');
 
     assert.equal(result.status, 'pending');
     assert.equal(selectEmitted, true);
   });
 
-  it('throws when no repos configured (empty array)', async () => {
+  it('throws when no repos configured (empty map)', async () => {
     const issue = makeIssue();
-    const config = makeWorkspaceConfig({ repos: [] });
 
     await assert.rejects(
-      () => resolveRepoForIssue(issue, config),
-      (err: Error) => err.message.includes('workspace.repos'),
+      () => resolveRepoForIssue(issue, {}),
+      (err: Error) => err.message.includes('repos is required'),
     );
   });
 
-  it('throws when no match and no default_repo', async () => {
+  it('falls back to first repo when no label/team/suggestion match', async () => {
     const issue = makeIssue({
       labels: { nodes: [] },
       team: { id: 'team-x', key: 'UNKNOWN' },
     });
-    const config = makeWorkspaceConfig({ defaultRepo: undefined });
+    const repos = makeRepos();
 
-    await assert.rejects(
-      () => resolveRepoForIssue(issue, config),
-      (err: Error) => err.message.includes('No repo resolved'),
-    );
-  });
-
-  it('falls back to default_repo when no label/team/suggestion match', async () => {
-    const issue = makeIssue({
-      labels: { nodes: [] },
-      team: { id: 'team-x', key: 'UNKNOWN' },
-    });
-    const config = makeWorkspaceConfig();
-
-    const result = await resolveRepoForIssue(issue, config);
+    const result = await resolveRepoForIssue(issue, repos);
 
     assert.equal(result.status, 'resolved');
-    assert.equal((result as { repo: RepoConfig }).repo.name, 'orch-agents');
+    assert.equal((result as { repo: ResolvedRepo }).repo.name, 'espinozasenior/orch-agents');
   });
 
   it('handles multiple label matches and returns first hit', async () => {
     const issue = makeIssue({
       labels: { nodes: [{ id: 'l1', name: 'backend' }, { id: 'l2', name: 'frontend' }] },
     });
-    const config = makeWorkspaceConfig();
+    const repos = makeRepos();
 
-    const result = await resolveRepoForIssue(issue, config);
+    const result = await resolveRepoForIssue(issue, repos);
 
     assert.equal(result.status, 'resolved');
     // 'backend' matches orch-agents (first repo checked)
-    assert.equal((result as { repo: RepoConfig }).repo.name, 'orch-agents');
+    assert.equal((result as { repo: ResolvedRepo }).repo.name, 'espinozasenior/orch-agents');
   });
 });
 

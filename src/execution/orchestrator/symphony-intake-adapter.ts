@@ -60,19 +60,19 @@ export function createSymphonyIntakeAdapter(
       if (!issue.id || !issue.identifier || !issue.title || !issue.state?.name) {
         return null;
       }
-      if (!workflowConfig.tracker.activeStates.includes(issue.state.name)) {
+      if (!(workflowConfig.tracker?.activeStates ?? []).includes(issue.state.name)) {
         return null;
       }
-      if (workflowConfig.tracker.terminalStates.includes(issue.state.name)) {
+      if ((workflowConfig.tracker?.terminalStates ?? []).includes(issue.state.name)) {
         return null;
       }
 
       // Repo resolution
       let repoConfig: CoordinatorTaskRequest['repoConfig'];
-      if (workflowConfig.workspace?.repos && workflowConfig.workspace.repos.length > 0) {
+      if (Object.keys(workflowConfig.repos).length > 0) {
         try {
           const result = await resolveRepoForIssue(
-            issue, workflowConfig.workspace, deps.linearClient, undefined, logger,
+            issue, workflowConfig.repos, deps.linearClient, undefined, logger,
           );
           if (result.status === 'pending') {
             logger.debug('Repo resolution pending; skipping intake', { issueId: issue.id });
