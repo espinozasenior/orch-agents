@@ -2,6 +2,7 @@
 defaults:
   agents:
     max_concurrent: 8
+    max_concurrent_per_org: 4
   stall:
     timeout_ms: 300000
   polling:

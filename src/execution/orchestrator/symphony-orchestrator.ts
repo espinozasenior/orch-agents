@@ -79,6 +79,8 @@ interface RunningEntry {
   workerResultStatus?: 'completed' | 'failed' | 'paused';
   /** P6: Task backbone ID for this running entry. */
   taskId?: string;
+  /** Org owner extracted from resolved repo name (owner/repo). */
+  owner: string;
 }
 
 interface RetryEntry {
@@ -365,6 +367,15 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     return Math.max(0, getWorkflowConfig().agent.maxConcurrentAgents - state.running.size);
   }
 
+  function availableSlotsForOrg(owner: string): number {
+    const perOrgLimit = getWorkflowConfig().defaults.agents.maxConcurrentPerOrg;
+    const runningForOrg = Array.from(state.running.values())
+      .filter((entry) => entry.owner === owner)
+      .length;
+    const orgAvailable = Math.max(0, perOrgLimit - runningForOrg);
+    return Math.min(availableSlots(), orgAvailable);
+  }
+
   function isEligible(issue: LinearIssueResponse): boolean {
     const workflowConfig = getWorkflowConfig();
     if (!issue.id || !issue.identifier || !issue.title || !issue.state?.name) {
@@ -395,6 +406,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     resolvedRepo?: ResolvedRepo,
   ): void {
     const workflowConfig = getWorkflowConfig();
+    const owner = resolvedRepo?.name?.split('/')[0] ?? 'default';
     const workerPath = pathResolve(__dirname, 'issue-worker.js');
     const resolvedRepoData = resolvedRepo
       ? { name: resolvedRepo.name, url: resolvedRepo.url, defaultBranch: resolvedRepo.defaultBranch }
@@ -445,10 +457,11 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       lastEventType: previousRuntime?.lastEventType,
       lastActivityAt: previousRuntime?.lastActivityAt,
       tokenUsage: previousRuntime?.tokenUsage,
-      workspacePath: previousRuntime?.workspacePath ?? pathResolve(worktreeBasePath, sanitizePlanId(issue.id)),
+      workspacePath: previousRuntime?.workspacePath ?? pathResolve(worktreeBasePath, owner, sanitizePlanId(issue.id)),
       workerHost: previousRuntime?.workerHost ?? 'local',
       turnCount: previousRuntime?.turnCount ?? 0,
       taskId: task.id,
+      owner,
     });
 
     worker.on('message', (message: unknown) => {
@@ -638,7 +651,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       });
       state.running.delete(issueId);
       void entry.worker.terminate().catch(() => {});
-      cleanupIssueWorkspace(issueId);
+      cleanupIssueWorkspace(issueId, entry.workspacePath);
       scheduleRetry(issueId, entry.attempt + 1, 'retry', undefined, entry);
     }
   }
@@ -657,13 +670,12 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       state.completed.delete(issueId);
     }
     await entry.worker.terminate().catch(() => {});
-    cleanupIssueWorkspace(issueId);
+    cleanupIssueWorkspace(issueId, entry.workspacePath);
   }
 
-  function cleanupIssueWorkspace(issueId: string): void {
-    const planId = sanitizePlanId(issueId);
-    const workspacePath = pathResolve(worktreeBasePath, planId);
+  function cleanupIssueWorkspace(issueId: string, explicitPath?: string): void {
     const basePath = pathResolve(worktreeBasePath);
+    const workspacePath = explicitPath ?? pathResolve(worktreeBasePath, sanitizePlanId(issueId));
     if (!workspacePath.startsWith(`${basePath}/`)) {
       return;
     }
@@ -798,6 +810,17 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
               });
             }
           }
+
+          // Per-org concurrency gate: check org-level slot availability
+          const dispatchOwner = resolvedRepo?.name?.split('/')[0] ?? 'default';
+          if (availableSlotsForOrg(dispatchOwner) <= 0) {
+            logger.debug('Per-org concurrency limit reached; skipping dispatch', {
+              issueId: issue.id,
+              owner: dispatchOwner,
+            });
+            continue;
+          }
+
           dispatch(issue, 0, undefined, resolvedRepo);
         }
       }
@@ -829,24 +852,51 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       return;
     }
 
-    const entries = readdirSync(worktreeBasePath, { withFileTypes: true })
+    // Worktree layout: {basePath}/{owner}/{planId}
+    // Iterate owner dirs, then plan dirs within each to collect all issue IDs
+    // and their full paths for cleanup.
+    const ownerDirs = readdirSync(worktreeBasePath, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
 
-    if (entries.length === 0) {
+    if (ownerDirs.length === 0) {
+      return;
+    }
+
+    const issueEntries: Array<{ issueId: string; fullPath: string }> = [];
+    for (const ownerDir of ownerDirs) {
+      const ownerPath = pathResolve(worktreeBasePath, ownerDir);
+      const planDirs = readdirSync(ownerPath, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+
+      if (planDirs.length === 0) {
+        // No subdirectories — treat this as a legacy flat plan ID
+        // for backward compat with pre-namespaced worktree layout.
+        issueEntries.push({ issueId: ownerDir, fullPath: ownerPath });
+        continue;
+      }
+
+      for (const planId of planDirs) {
+        issueEntries.push({ issueId: planId, fullPath: pathResolve(ownerPath, planId) });
+      }
+    }
+
+    if (issueEntries.length === 0) {
       return;
     }
 
     try {
-      const states = await deps.linearClient.fetchIssueStatesByIds(entries);
+      const allIssueIds = issueEntries.map((entry) => entry.issueId);
+      const states = await deps.linearClient.fetchIssueStatesByIds(allIssueIds);
       const stateByIssueId = new Map(states.map((entry) => [entry.id, entry.state]));
 
-      for (const issueId of entries) {
+      for (const { issueId, fullPath } of issueEntries) {
         const issueState = stateByIssueId.get(issueId);
         if (issueState && (getWorkflowConfig().tracker?.activeStates ?? []).includes(issueState)) {
           continue;
         }
-        cleanupIssueWorkspace(issueId);
+        cleanupIssueWorkspace(issueId, fullPath);
         startupState.cleanedWorkspaces.push(issueId);
       }
     } catch (err) {

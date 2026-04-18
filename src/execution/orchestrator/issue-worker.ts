@@ -147,6 +147,7 @@ async function main(): Promise<void> {
   // Phase 8: Determine effective base branch and workspace path from resolved repo
   const effectiveBranch = data.resolvedRepo?.defaultBranch ?? data.defaultBranch ?? 'main';
   const effectiveRepo = data.resolvedRepo?.name;
+  const effectiveOwner = effectiveRepo?.split('/')[0] ?? 'default';
 
   const workerStartedAt = new Date().toISOString();
   const result = await runIssueWorkerLifecycle({
@@ -154,10 +155,10 @@ async function main(): Promise<void> {
     attempt: data.attempt,
     workflowConfig: data.workflowConfig,
     acquireWorkspace: async (planId) => {
-      // Phase 8: Use workspace.root/issues/{issueId}/ when resolved repo is available
+      // Namespace worktree by org owner for multi-org isolation
       const workspacePath = data.resolvedRepo
-        ? joinPath(data.worktreeBasePath, 'issues', planId)
-        : joinPath(data.worktreeBasePath, planId);
+        ? joinPath(data.worktreeBasePath, effectiveOwner, 'issues', planId)
+        : joinPath(data.worktreeBasePath, effectiveOwner, planId);
 
       if (existsSync(workspacePath)) {
         logger.info('Reusing persistent issue workspace', { planId, path: workspacePath, repo: effectiveRepo });

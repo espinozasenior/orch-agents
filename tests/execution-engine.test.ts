@@ -66,6 +66,12 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
 
 function makeWorkflowConfig(): WorkflowConfig {
   return {
+    repos: {},
+    defaults: {
+      agents: { maxConcurrent: 8, maxConcurrentPerOrg: 4 },
+      stall: { timeoutMs: 300000 },
+      polling: { intervalMs: 30000, enabled: false },
+    },
     templates: {
       'github-ops': ['.claude/agents/core/reviewer.md'],
       'tdd-workflow': ['.claude/agents/core/coder.md', '.claude/agents/core/tester.md'],

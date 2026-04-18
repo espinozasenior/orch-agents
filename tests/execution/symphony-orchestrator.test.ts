@@ -71,7 +71,7 @@ function makeWorkflowConfig(): WorkflowConfig {
       },
     },
     defaults: {
-      agents: { maxConcurrent: 1 },
+      agents: { maxConcurrent: 1, maxConcurrentPerOrg: 1 },
       stall: { timeoutMs: 300000 },
       polling: { intervalMs: 1000, enabled: true },
     },
@@ -374,6 +374,7 @@ describe('SymphonyOrchestrator', () => {
     const workflowConfig = makeWorkflowConfig();
     workflowConfig.agent.maxConcurrentAgents = 2;
     workflowConfig.agent.maxRetryBackoffMs = 50;
+    workflowConfig.defaults.agents.maxConcurrentPerOrg = 2;
 
     const orchestrator = createSymphonyOrchestrator({
       workflowConfig,
