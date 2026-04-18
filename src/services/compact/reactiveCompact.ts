@@ -74,7 +74,7 @@ export function tryReactiveCompact(
 
   try {
     return emergencyCompact(messages, preserveRecent);
-  } catch (_error: unknown) {
+  } catch {
     return null;
   }
 }

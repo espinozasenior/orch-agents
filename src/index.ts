@@ -78,6 +78,13 @@ async function main(): Promise<void> {
   const logger = createLogger({ level: config.logLevel, name: 'orch-agents' });
   const eventBus = createEventBus(logger);
 
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled promise rejection', {
+      error: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined,
+    });
+  });
+
   // Clean up stale resources from previous runs
   cleanupStaleWorktrees(logger);
   cleanupStaleSandboxes(24 * 60 * 60 * 1000); // Remove sandbox dirs older than 24 hours
@@ -169,7 +176,7 @@ async function main(): Promise<void> {
       logger.warn('OAuth mode requires LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET');
     } else {
       // Persistent token storage via SQLite — survives restarts
-      const { createOAuthTokenPersistence } = require('./integration/linear/oauth-token-persistence');
+      const { createOAuthTokenPersistence } = await import('./integration/linear/oauth-token-persistence.js');
       tokenPersistence = createOAuthTokenPersistence({
         dbPath: process.env.OAUTH_TOKEN_DB_PATH ?? './data/oauth-tokens.db',
         logger,

@@ -246,7 +246,7 @@ export class CapacityWake {
 
       try {
         await pollFn();
-      } catch (_error) {
+      } catch {
         // Poll failure logged by caller; we continue the loop
       }
 

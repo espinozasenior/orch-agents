@@ -249,7 +249,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
           void emitActivity(
             { type: 'thought', body: `Starting ${phaseType} phase with ${agents.length} agent(s)` },
             { ephemeral: true },
-          );
+          ).catch(err => logger.warn('Activity emit failed', { error: err instanceof Error ? err.message : String(err) }));
         }),
       );
 
@@ -275,7 +275,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
             action: 'Phase completed',
             parameter: result.phaseType,
             result: `${result.status} in ${result.metrics.duration}ms`,
-          });
+          }).catch(err => logger.warn('Activity emit failed', { error: err instanceof Error ? err.message : String(err) }));
         }),
       );
 
@@ -298,7 +298,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
           void emitActivity(
             { type: 'action', action: 'Spawning agent', parameter: `${agentType} (${agentRole})` },
             { ephemeral: true },
-          );
+          ).catch(err => logger.warn('Activity emit failed', { error: err instanceof Error ? err.message : String(err) }));
         }),
       );
 
@@ -339,7 +339,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
           void emitActivity({
             type: 'response',
             body: `Work completed. Duration: ${totalDuration}ms`,
-          });
+          }).catch(err => logger.warn('Activity emit failed', { error: err instanceof Error ? err.message : String(err) }));
         }),
       );
 
@@ -359,7 +359,7 @@ export function createWorkpadReporter(deps: WorkpadReporterDeps): WorkpadReporte
           void emitActivity({
             type: 'error',
             body: `Work failed: ${redactSecrets(failureReason)}`,
-          });
+          }).catch(err => logger.warn('Activity emit failed', { error: err instanceof Error ? err.message : String(err) }));
         }),
       );
     },

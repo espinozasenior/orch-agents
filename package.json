@@ -39,8 +39,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
-    "test": "find tests -name '*.test.ts' -not -path 'tests/staging/*' -print0 | xargs -0 node --import tsx --test",
-    "test:ts": "find tests -name '*.test.ts' -not -path 'tests/staging/*' -print0 | xargs -0 node --import tsx --test",
+    "test": "find tests -name '*.test.ts' -not -path 'tests/staging/*' -print0 | xargs -0 node --import tsx --experimental-test-module-mocks --test",
+    "test:ts": "find tests -name '*.test.ts' -not -path 'tests/staging/*' -print0 | xargs -0 node --import tsx --experimental-test-module-mocks --test",
     "test:cjs": "node --test tests/**/*.test.cjs",
     "test:all": "node --test tests/**/*.test.cjs && node --import tsx --test tests/**/*.test.ts",
     "test:integration": "node --import tsx --test tests/integration/*.test.ts",

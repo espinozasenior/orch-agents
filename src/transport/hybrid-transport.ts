@@ -156,11 +156,11 @@ export interface TransportDeps {
   esFactory?: import('./sse-transport.js').EventSourceFactory;
 }
 
-export function getTransportForUrl(
+export async function getTransportForUrl(
   _sessionUrl: string,
   flags: FeatureFlags,
   deps: TransportDeps
-): Transport {
+): Promise<Transport> {
   const priorities = [
     { type: 'sse' as const, enabled: flags.sseTransport ?? true },
     { type: 'hybrid' as const, enabled: flags.hybridTransport ?? true },
@@ -177,13 +177,13 @@ export function getTransportForUrl(
       if (!deps.esFactory) {
         throw new Error('EventSource factory required for SSE transport');
       }
-      const { SSETransport } = require('./sse-transport.js') as typeof import('./sse-transport.js');
+      const { SSETransport } = await import('./sse-transport.js');
       return new SSETransport(deps.esFactory, deps.postWriter);
     }
     case 'hybrid':
       return new HybridTransport(deps.wsFactory, deps.postWriter);
     case 'ws': {
-      const { WSTransport } = require('./ws-transport.js') as typeof import('./ws-transport.js');
+      const { WSTransport } = await import('./ws-transport.js');
       return new WSTransport(deps.wsFactory);
     }
   }

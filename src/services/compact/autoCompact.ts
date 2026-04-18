@@ -147,7 +147,7 @@ export function autoCompactIfNeeded(
     }
 
     return { compactionResult: result };
-  } catch (_error: unknown) {
+  } catch {
     return { consecutiveFailures: tracking.consecutiveFailures + 1 };
   }
 }

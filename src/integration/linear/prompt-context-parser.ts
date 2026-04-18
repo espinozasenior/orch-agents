@@ -96,7 +96,6 @@ function innerText(xml: string, tagName: string): string | undefined {
 function allMatches(xml: string, re: RegExp): RegExpExecArray[] {
   const results: RegExpExecArray[] = [];
   let m: RegExpExecArray | null;
-  // eslint-disable-next-line no-cond-assign
   while ((m = re.exec(xml)) !== null) {
     results.push(m);
   }

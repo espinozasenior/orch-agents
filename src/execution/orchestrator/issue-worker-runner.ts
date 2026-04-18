@@ -280,7 +280,7 @@ export async function runIssueWorkerLifecycle(
       workpadCommentId,
     };
   } finally {
-    await deps.releaseWorkspace(handle, finalStatus).catch(() => {});
+    await deps.releaseWorkspace(handle, finalStatus).catch(err => deps.logger?.warn('Workspace release failed', { error: err instanceof Error ? err.message : String(err) }));
   }
 }
 

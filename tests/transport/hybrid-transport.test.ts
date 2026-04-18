@@ -130,8 +130,8 @@ describe('getTransportForUrl', () => {
   const mockWsFactory = () => createMockWS();
   const mockPostWriter = async () => {};
 
-  it('selects SSE transport when SSE flag enabled (default)', () => {
-    const transport = getTransportForUrl(
+  it('selects SSE transport when SSE flag enabled (default)', async () => {
+    const transport = await getTransportForUrl(
       'https://example.com/sessions/abc',
       {},
       { wsFactory: mockWsFactory, postWriter: mockPostWriter, esFactory: mockEsFactory }
@@ -139,8 +139,8 @@ describe('getTransportForUrl', () => {
     assert.ok(transport instanceof SSETransport);
   });
 
-  it('selects Hybrid transport when SSE disabled', () => {
-    const transport = getTransportForUrl(
+  it('selects Hybrid transport when SSE disabled', async () => {
+    const transport = await getTransportForUrl(
       'https://example.com/sessions/abc',
       { sseTransport: false },
       { wsFactory: mockWsFactory, postWriter: mockPostWriter }
@@ -148,8 +148,8 @@ describe('getTransportForUrl', () => {
     assert.ok(transport instanceof HybridTransport);
   });
 
-  it('selects WS transport when SSE and Hybrid disabled', () => {
-    const transport = getTransportForUrl(
+  it('selects WS transport when SSE and Hybrid disabled', async () => {
+    const transport = await getTransportForUrl(
       'https://example.com/sessions/abc',
       { sseTransport: false, hybridTransport: false },
       { wsFactory: mockWsFactory, postWriter: mockPostWriter }
@@ -157,8 +157,8 @@ describe('getTransportForUrl', () => {
     assert.ok(transport instanceof WSTransport);
   });
 
-  it('throws when all transports disabled', () => {
-    assert.throws(
+  it('throws when all transports disabled', async () => {
+    await assert.rejects(
       () => getTransportForUrl(
         'https://example.com/sessions/abc',
         { sseTransport: false, hybridTransport: false, wsTransport: false },

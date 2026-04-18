@@ -5,6 +5,8 @@
  * Uses node:sqlite (experimental in Node 22+, no external deps).
  */
 
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Logger } from '../../shared/logger';
 import type { OAuthTokenSet } from './oauth-token-store';
@@ -39,8 +41,6 @@ export function createOAuthTokenPersistence(deps: OAuthTokenPersistenceDeps = {}
   const logger = deps.logger;
 
   // Ensure data directory exists
-  const { mkdirSync } = require('node:fs');
-  const { dirname } = require('node:path');
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const db = new DatabaseSync(dbPath);

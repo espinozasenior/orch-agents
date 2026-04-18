@@ -168,7 +168,6 @@ async function executeWithQueryLoop(
   let terminal: import('../../query/transitions').Terminal | undefined;
 
   // Consume generator — collect assistant messages, propagate terminal
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const iterResult = await gen.next();
 

@@ -385,7 +385,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             planId: plan.id, agent: agent.type, error: message,
           });
           if (handle) {
-            await deps.worktreeManager.dispose(handle).catch(() => {});
+            await deps.worktreeManager.dispose(handle).catch(err => deps.logger.warn('Worktree dispose failed', { error: err instanceof Error ? err.message : String(err) }));
           }
           if (deps.taskRegistry && taskId) {
             try {

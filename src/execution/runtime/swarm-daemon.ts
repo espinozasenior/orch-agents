@@ -40,6 +40,7 @@ import {
   buildSessionPolicy,
   type SessionPermissionPolicy,
 } from './permission-evaluator';
+import { CapacityWake } from './capacity-wake';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,7 +95,7 @@ export class SwarmDaemon {
   private readonly workDirBase: string;
   private readonly sessionPolicies = new Map<string, SessionPermissionPolicy>();
   // 9D: Capacity-aware wake with two-tier polling
-  private readonly capacityWake: import('./capacity-wake').CapacityWake;
+  private readonly capacityWake: CapacityWake;
 
   private _isShuttingDown = false;
   private _totalSpawns = 0;
@@ -110,7 +111,6 @@ export class SwarmDaemon {
     this.workDirBase = config.workDirBase ?? '/tmp';
 
     // 9D: CapacityWake for intelligent slot management
-    const { CapacityWake } = require('./capacity-wake') as typeof import('./capacity-wake');
     this.capacityWake = new CapacityWake({
       maxSlotsTotal: this.maxSlots,
       seekingIntervalMs: 2_000,

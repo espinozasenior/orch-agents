@@ -154,7 +154,7 @@ export function createLinearPollingLoop(deps: LinearPollingLoopDeps): LinearPoll
   async function schedulePoll(): Promise<void> {
     await poll();
     if (timer !== null) {
-      timer = setTimeout(() => void schedulePoll(), pollIntervalMs);
+      timer = setTimeout(() => void schedulePoll().catch(err => logger.error('Poll schedule failed', { error: err instanceof Error ? err.message : String(err) })), pollIntervalMs);
       if (timer.unref) {
         timer.unref();
       }
@@ -166,7 +166,7 @@ export function createLinearPollingLoop(deps: LinearPollingLoopDeps): LinearPoll
       if (timer) return;
       // Use a sentinel value so schedulePoll knows we're running
       timer = setTimeout(() => {}, 0);
-      void schedulePoll();
+      void schedulePoll().catch(err => logger.error('Poll schedule failed', { error: err instanceof Error ? err.message : String(err) }));
     },
 
     stop() {

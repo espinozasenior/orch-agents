@@ -288,7 +288,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       pollIntervalMs: getWorkflowConfig().polling.intervalMs,
       maxConcurrentAgents: getWorkflowConfig().agent.maxConcurrentAgents,
     });
-    void onTick();
+    void onTick().catch(err => logger.error('Tick failed', { error: err instanceof Error ? err.message : String(err) }));
   }
 
   async function stop(): Promise<void> {
@@ -306,7 +306,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
 
     await Promise.all(
       Array.from(state.running.values()).map(async (entry) => {
-        await entry.worker.terminate().catch(() => {});
+        await entry.worker.terminate().catch(err => logger.warn('Worker terminate failed', { error: err instanceof Error ? err.message : String(err) }));
       }),
     );
     state.running.clear();
@@ -363,7 +363,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     nextPollAt = Date.now() + getWorkflowConfig().polling.intervalMs;
     pollTimer = setTimeout(() => {
       nextPollAt = undefined;
-      void onTick();
+      void onTick().catch(err => logger.error('Tick failed', { error: err instanceof Error ? err.message : String(err) }));
     }, getWorkflowConfig().polling.intervalMs);
     if (pollTimer.unref) {
       pollTimer.unref();
@@ -522,7 +522,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
 
       state.running.delete(issue.id);
       if (code === 0) {
-        void handleCleanWorkerExit(issue, entry);
+        void handleCleanWorkerExit(issue, entry).catch(err => logger.error('Clean worker exit handler failed', { error: err instanceof Error ? err.message : String(err) }));
         return;
       }
 
@@ -662,7 +662,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
         stallTimeoutMs,
       });
       state.running.delete(issueId);
-      void entry.worker.terminate().catch(() => {});
+      void entry.worker.terminate().catch(err => logger.warn('Worker terminate failed', { error: err instanceof Error ? err.message : String(err) }));
       cleanupIssueWorkspace(issueId, entry.workspacePath);
       scheduleRetry(issueId, entry.attempt + 1, 'retry', undefined, entry);
     }
@@ -681,7 +681,7 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     } else {
       state.completed.delete(issueId);
     }
-    await entry.worker.terminate().catch(() => {});
+    await entry.worker.terminate().catch(err => logger.warn('Worker terminate failed', { error: err instanceof Error ? err.message : String(err) }));
     cleanupIssueWorkspace(issueId, entry.workspacePath);
   }
 
