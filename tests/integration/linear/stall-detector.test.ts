@@ -11,9 +11,9 @@ import {
   TIMEOUT_BY_EFFORT,
 } from '../../../src/integration/linear/stall-detector';
 import type { StallDetector } from '../../../src/integration/linear/stall-detector';
-import { createEventBus, createDomainEvent, type EventBus } from '../../../src/shared/event-bus';
+import { createEventBus, createDomainEvent, type EventBus } from '../../../src/kernel/event-bus';
 import { createLogger } from '../../../src/shared/logger';
-import type { WorkPausedEvent } from '../../../src/shared/event-types';
+import type { WorkPausedEvent } from '../../../src/kernel/event-types';
 
 // ---------------------------------------------------------------------------
 // Tests

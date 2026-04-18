@@ -11,7 +11,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Logger } from '../shared/logger';
-import { ExecutionError } from '../shared/errors';
+import { ExecutionError } from '../kernel/errors';
 import { buildSafeEnv } from '../shared/safe-env';
 import type { GitHubTokenProvider } from './github-app-auth';
 

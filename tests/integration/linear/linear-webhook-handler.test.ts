@@ -15,14 +15,14 @@ import {
 import { createEventBuffer, type EventBuffer } from '../../../src/webhook-gateway/event-buffer';
 import { loadConfig, type AppConfig } from '../../../src/shared/config';
 import { createLogger } from '../../../src/shared/logger';
-import { createEventBus, type EventBus } from '../../../src/shared/event-bus';
+import { createEventBus, type EventBus } from '../../../src/kernel/event-bus';
 import {
   setWorkflowConfig,
   resetWorkflowConfig,
   setLinearBotUserId,
 } from '../../../src/integration/linear/linear-normalizer';
-import type { WorkflowConfig } from '../../../src/integration/linear/workflow-parser';
-import type { IntakeCompletedEvent, AgentPromptedEvent, WorkCancelledEvent } from '../../../src/shared/event-types';
+import type { WorkflowConfig } from '../../../src/config';
+import type { IntakeCompletedEvent, AgentPromptedEvent, WorkCancelledEvent } from '../../../src/kernel/event-types';
 import type { IntakeEvent } from '../../../src/types';
 import type { LinearClient } from '../../../src/integration/linear/linear-client';
 

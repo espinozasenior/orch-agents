@@ -12,7 +12,6 @@ const SUPPORTED_PLACEHOLDERS = new Set([
   'issue.state',
   'issue.team',
   'issue.title',
-  'plan.template',
   'plan.workItemId',
   'repository.branch',
   'repository.name',

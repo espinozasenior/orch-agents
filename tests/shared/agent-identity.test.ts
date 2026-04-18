@@ -14,7 +14,7 @@ import {
   isAgentComment,
   getBotName,
   getBotMarker,
-} from '../../src/shared/agent-identity';
+} from '../../src/kernel/agent-identity';
 
 describe('agent-identity', () => {
   describe('formatAgentComment', () => {

@@ -16,7 +16,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createEventBus, createDomainEvent, type EventBus } from '../../src/shared/event-bus';
+import { createEventBus, createDomainEvent, type EventBus } from '../../src/kernel/event-bus';
 import {
   normalizeLinearEvent,
   setWorkflowConfig,
@@ -27,7 +27,7 @@ import { parsePromptContext } from '../../src/integration/linear/prompt-context-
 import { createEventLogCollector } from '../../src/staging/event-log-collector';
 import type { LinearWebhookPayload } from '../../src/integration/linear/types';
 import type { IntakeEvent } from '../../src/types';
-import { linearIssueId, agentSessionId } from '../../src/shared/branded-types';
+import { linearIssueId, agentSessionId } from '../../src/kernel/branded-types';
 
 // ---------------------------------------------------------------------------
 // Fixtures: Real Linear webhook payloads
@@ -143,7 +143,7 @@ describe('Staging: Issue state transitions → IntakeEvent pipeline', () => {
     assert.equal(event.intent, 'custom:linear-start');
     assert.equal(event.entities.requirementId, 'ENG-42');
     assert.ok(event.sourceMetadata.linearIssueId, 'Has linear issue ID');
-    assert.ok(event.sourceMetadata.template, 'Has template from routing');
+    assert.ok(event.sourceMetadata.category, 'Has category from routing');
   });
 
   it('Issue moved to "Todo" (unstarted) → intent: custom:linear-todo', () => {
@@ -185,13 +185,13 @@ describe('Staging: Issue state transitions → IntakeEvent pipeline', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test: Label-based routing (Symphony research: template selection)
+// Test: Label-based routing (Symphony research: category selection)
 // ---------------------------------------------------------------------------
 
-describe('Staging: Label routing → template selection', () => {
+describe('Staging: Label routing → category selection', () => {
   beforeEach(() => resetWorkflowConfig());
 
-  it('bug label → tdd-workflow template', () => {
+  it('bug label → bug category', () => {
     const payload = issueStateChangePayload({
       labels: [{ id: 'l1', name: 'bug' }],
       updatedFrom: { labelIds: ['old-label'] },
@@ -200,11 +200,11 @@ describe('Staging: Label routing → template selection', () => {
     const event = normalizeLinearEvent(payload);
 
     assert.ok(event);
-    assert.equal(event.sourceMetadata.template, 'tdd-workflow');
+    assert.equal(event.sourceMetadata.category, 'bug');
     assert.equal(event.intent, 'custom:linear-bug');
   });
 
-  it('feature label → feature-build template', () => {
+  it('feature label → feature category', () => {
     const payload = issueStateChangePayload({
       labels: [{ id: 'l2', name: 'feature' }],
       updatedFrom: { labelIds: ['old-label'] },
@@ -213,11 +213,11 @@ describe('Staging: Label routing → template selection', () => {
     const event = normalizeLinearEvent(payload);
 
     assert.ok(event);
-    assert.equal(event.sourceMetadata.template, 'feature-build');
+    assert.equal(event.sourceMetadata.category, 'feature');
     assert.equal(event.intent, 'custom:linear-feature');
   });
 
-  it('security label → security-audit template with critical severity', () => {
+  it('security label → security category with critical severity', () => {
     const payload = issueStateChangePayload({
       labels: [{ id: 'l3', name: 'security' }],
       updatedFrom: { labelIds: ['old-label'] },
@@ -226,11 +226,11 @@ describe('Staging: Label routing → template selection', () => {
     const event = normalizeLinearEvent(payload);
 
     assert.ok(event);
-    assert.equal(event.sourceMetadata.template, 'security-audit');
+    assert.equal(event.sourceMetadata.category, 'security');
     assert.equal(event.entities.severity, 'critical');
   });
 
-  it('no matching label → quick-fix default template', () => {
+  it('no matching label → general default category', () => {
     const payload = issueStateChangePayload({
       labels: [{ id: 'l4', name: 'documentation' }],
       stateType: 'started',
@@ -240,7 +240,7 @@ describe('Staging: Label routing → template selection', () => {
     const event = normalizeLinearEvent(payload);
 
     assert.ok(event);
-    assert.equal(event.sourceMetadata.template, 'quick-fix');
+    assert.equal(event.sourceMetadata.category, 'general');
   });
 });
 
@@ -369,7 +369,6 @@ describe('Staging: IntakeEvent flows through event bus pipeline', () => {
       triageResult: {
         priority: 'P2-standard',
         complexity: { level: 'medium', percentage: 45 },
-        template: 'tdd-workflow',
         skipPlanning: false,
       },
     }, 'corr-001'));
@@ -658,7 +657,6 @@ describe('Staging: Full pipeline trace — Linear issue through triage', () => {
         triageResult: {
           priority: 'P2-standard',
           complexity: { level: 'medium', percentage: 45 },
-          template: intakeEvent.sourceMetadata.template as string,
           skipPlanning: false,
         },
       }, corrId));
@@ -671,7 +669,6 @@ describe('Staging: Full pipeline trace — Linear issue through triage', () => {
           id: 'plan-001',
           name: 'Fix login page timeout',
           intakeEventId: intakeEvent.id,
-          methodology: 'tdd',
           agents: [{ role: 'coder', type: 'sparc-coder', tier: 2 }],
         },
       }, corrId));

@@ -11,9 +11,9 @@
 
 import type { IntakeEvent } from '../types';
 import type { ParsedGitHubEvent } from '../webhook-gateway/event-parser';
-import type { WorkflowConfig } from '../integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../config';
 import { sanitize } from '../shared/input-sanitizer';
-import { isAgentCommit } from '../shared/agent-commit-tracker';
+import { isAgentCommit } from '../execution/agent-commit-tracker';
 import { createSkillResolver, type SkillResolver } from './skill-resolver';
 
 // Re-export so existing imports keep working.

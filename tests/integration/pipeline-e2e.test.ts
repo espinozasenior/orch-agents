@@ -11,14 +11,14 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { IntakeEvent, ReviewVerdict } from '../../src/types';
-import { linearIssueId } from '../../src/shared/branded-types';
-import { createEventBus, createDomainEvent } from '../../src/shared/event-bus';
-import type { EventBus } from '../../src/shared/event-bus';
-import type { DomainEventType } from '../../src/shared/event-types';
+import { linearIssueId } from '../../src/kernel/branded-types';
+import { createEventBus, createDomainEvent } from '../../src/kernel/event-bus';
+import type { EventBus } from '../../src/kernel/event-bus';
+import type { DomainEventType } from '../../src/kernel/event-types';
 import { createLogger } from '../../src/shared/logger';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
 import type { CoordinatorDispatcher as LocalAgentTaskExecutor, ExecutionResult } from '../../src/execution/coordinator-dispatcher';
-import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../src/config';
 import type { SkillResolver, ResolvedSkill } from '../../src/intake/skill-resolver';
 
 const STUB_SKILL: ResolvedSkill = {
@@ -305,7 +305,7 @@ describe('Pipeline E2E', () => {
       source: 'linear',
       sourceMetadata: {
         source: 'linear' as const,
-        template: 'quick-fix',
+        category: 'quick-fix',
         linearIssueId: linearIssueId('issue-linear-001'),
         intent: 'custom:linear-todo',
       },

@@ -4,7 +4,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFrontmatter, parseSkillFile } from '../../src/shared/frontmatter-parser';
+import { parseFrontmatter, parseSkillFile } from '../../src/intake/frontmatter-parser';
 
 describe('parseFrontmatter', () => {
   it('parses valid frontmatter with all fields', () => {

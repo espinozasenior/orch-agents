@@ -14,8 +14,8 @@ import {
 } from '../../../src/integration/linear/workpad-reporter';
 import type { WorkpadState } from '../../../src/integration/linear/types';
 import type { LinearClient } from '../../../src/integration/linear/linear-client';
-import { createEventBus, createDomainEvent, type EventBus } from '../../../src/shared/event-bus';
-import { linearIssueId } from '../../../src/shared/branded-types';
+import { createEventBus, createDomainEvent, type EventBus } from '../../../src/kernel/event-bus';
+import { linearIssueId } from '../../../src/kernel/branded-types';
 import { createLogger } from '../../../src/shared/logger';
 
 // ---------------------------------------------------------------------------
@@ -201,8 +201,6 @@ describe('WorkpadReporter', () => {
         workflowPlan: {
           id: 'plan-1',
           workItemId: 'work-1',
-          methodology: 'sparc-full' as const,
-          template: 'adhoc',
           topology: 'hierarchical' as const,
           swarmStrategy: 'specialized' as const,
           consensus: 'raft' as const,
@@ -290,8 +288,6 @@ describe('WorkpadReporter', () => {
         workflowPlan: {
           id: 'plan-1',
           workItemId: 'work-1',
-          methodology: 'sparc-full' as const,
-          template: 'adhoc',
           topology: 'hierarchical' as const,
           swarmStrategy: 'specialized' as const,
           consensus: 'raft' as const,
@@ -491,8 +487,6 @@ describe('WorkpadReporter', () => {
         workflowPlan: {
           id: 'plan-1',
           workItemId: 'work-1',
-          methodology: 'sparc-full' as const,
-          template: 'adhoc',
           topology: 'hierarchical' as const,
           swarmStrategy: 'specialized' as const,
           consensus: 'raft' as const,
@@ -549,8 +543,6 @@ describe('WorkpadReporter', () => {
         workflowPlan: {
           id: 'plan-1',
           workItemId: 'work-1',
-          methodology: 'sparc-full' as const,
-          template: 'adhoc',
           topology: 'hierarchical' as const,
           swarmStrategy: 'specialized' as const,
           consensus: 'raft' as const,

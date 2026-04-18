@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildServer, type ServerDependencies } from '../src/server';
 import { loadConfig } from '../src/shared/config';
 import { createLogger } from '../src/shared/logger';
-import { createEventBus } from '../src/shared/event-bus';
+import { createEventBus } from '../src/kernel/event-bus';
 import type { FastifyInstance } from 'fastify';
 
 function createTestDeps(): ServerDependencies {

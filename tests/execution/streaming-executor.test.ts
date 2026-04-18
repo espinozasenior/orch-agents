@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createStreamingTaskExecutor } from '../../src/execution/runtime/streaming-executor';
-import { createEventBus } from '../../src/shared/event-bus';
+import { createEventBus } from '../../src/kernel/event-bus';
 import { createAgentTracker } from '../../src/execution/runtime/agent-tracker';
 import { createCancellationController } from '../../src/execution/runtime/cancellation-controller';
 import type { TaskExecutionRequest } from '../../src/execution/runtime/task-executor';

@@ -15,8 +15,8 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ReviewVerdict } from '../src/types';
-import type { ReviewCompletedEvent, WorkCompletedEvent } from '../src/shared/event-types';
-import { createEventBus, createDomainEvent } from '../src/shared/event-bus';
+import type { ReviewCompletedEvent, WorkCompletedEvent } from '../src/kernel/event-types';
+import { createEventBus, createDomainEvent } from '../src/kernel/event-bus';
 import { createLogger } from '../src/shared/logger';
 import { startReviewPipeline, type ReviewPipelineDeps } from '../src/review/review-pipeline';
 

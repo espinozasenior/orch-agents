@@ -7,7 +7,7 @@
 
 import { loadConfig } from './shared/config';
 import { createLogger } from './shared/logger';
-import { createEventBus } from './shared/event-bus';
+import { createEventBus } from './kernel/event-bus';
 import { buildServer } from './server';
 import { startPipeline } from './pipeline';
 import { createWorktreeManager } from './execution/workspace/worktree-manager';
@@ -21,10 +21,10 @@ import { readFileSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { cleanupAllSandboxes, cleanupStaleSandboxes } from './execution/runtime/agent-sandbox';
 import { createCoordinatorDispatcher, type CoordinatorDispatcher } from './execution/coordinator-dispatcher';
-import type { WorkflowConfig } from './integration/linear/workflow-parser';
+import type { WorkflowConfig } from './config';
 import { resolve as pathResolve } from 'node:path';
 import { createGitHubAppTokenProvider, type GitHubTokenProvider } from './integration/github-app-auth';
-import { setBotName } from './shared/agent-identity';
+import { setBotName } from './kernel/agent-identity';
 import { createLinearClient, type LinearAuthStrategy } from './integration/linear/linear-client';
 import { createOAuthTokenStore, type OAuthTokenStore } from './integration/linear/oauth-token-store';
 import { createSymphonyOrchestrator, type SymphonyOrchestrator } from './execution/orchestrator/symphony-orchestrator';

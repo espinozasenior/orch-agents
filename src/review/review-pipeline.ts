@@ -14,11 +14,11 @@
  */
 
 import type { ReviewVerdict } from '../types';
-import type { EventBus } from '../shared/event-bus';
+import type { EventBus } from '../kernel/event-bus';
 import type { Logger } from '../shared/logger';
-import type { WorkCompletedEvent } from '../shared/event-types';
-import { createDomainEvent } from '../shared/event-bus';
-import { ReviewError } from '../shared/errors';
+import type { WorkCompletedEvent } from '../kernel/event-types';
+import { createDomainEvent } from '../kernel/event-bus';
+import { ReviewError } from '../kernel/errors';
 import type { ReviewGate } from './review-gate';
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
  * Also enforces per-repository rate limits.
  */
 
-import { ConflictError, RateLimitError } from '../shared/errors';
+import { ConflictError, RateLimitError } from '../kernel/errors';
 
 interface DeliveryRecord {
   timestamp: number;

@@ -13,7 +13,7 @@ import {
   type WorktreeManagerDeps,
   createWorktreeManager,
 } from '../../src/execution/workspace/worktree-manager';
-import { ValidationError, ExecutionError } from '../../src/shared/errors';
+import { ValidationError, ExecutionError } from '../../src/kernel/errors';
 
 // ---------------------------------------------------------------------------
 // Helpers

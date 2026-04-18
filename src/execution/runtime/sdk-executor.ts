@@ -12,7 +12,7 @@ import type { Logger } from '../../shared/logger';
 import type { LinearToolBridge, LinearToolOperation } from '../../integration/linear/linear-client';
 import { evaluatePermission } from './permission-evaluator';
 import type { SessionPermissionPolicy as EvaluatorPolicy } from './permission-evaluator';
-import type { EventBus } from '../../shared/event-bus';
+import type { EventBus } from '../../kernel/event-bus';
 import {
   callWithOverloadRetry,
   createWorkCancelledStopRegistry,

@@ -12,8 +12,8 @@
 import { spawn as _spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { TaskExecutionRequest, TaskExecutionResult, TaskExecutor } from './task-executor';
-import type { EventBus } from '../../shared/event-bus';
-import { createDomainEvent } from '../../shared/event-bus';
+import type { EventBus } from '../../kernel/event-bus';
+import { createDomainEvent } from '../../kernel/event-bus';
 import type { AgentTracker } from './agent-tracker';
 import type { CancellationController } from './cancellation-controller';
 import { parseChunk, tryParseTokens } from './output-parser';
@@ -21,7 +21,7 @@ import type { Logger } from '../../shared/logger';
 import { createAgentSandbox, type AgentSandbox } from './agent-sandbox';
 import { buildSafeEnv } from '../../shared/safe-env';
 import { extractJson } from './task-executor';
-import { execId as toExecId, planId as toPlanId } from '../../shared/branded-types';
+import { execId as toExecId, planId as toPlanId } from '../../kernel/branded-types';
 
 // ---------------------------------------------------------------------------
 // Public types

@@ -11,9 +11,9 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { IntakeEvent, ReviewVerdict } from '../../src/types';
-import { createEventBus, createDomainEvent } from '../../src/shared/event-bus';
-import type { EventBus } from '../../src/shared/event-bus';
-import type { DomainEventType } from '../../src/shared/event-types';
+import { createEventBus, createDomainEvent } from '../../src/kernel/event-bus';
+import type { EventBus } from '../../src/kernel/event-bus';
+import type { DomainEventType } from '../../src/kernel/event-types';
 import { createLogger } from '../../src/shared/logger';
 import { startPipeline, type PipelineHandle } from '../../src/pipeline';
 import type { SkillResolver, ResolvedSkill } from '../../src/intake/skill-resolver';
@@ -33,7 +33,7 @@ const STUB_RESOLVER: SkillResolver = {
   resolveSkillForEvent: () => STUB_SKILL,
 };
 import type { CoordinatorDispatcher as LocalAgentTaskExecutor, ExecutionResult } from '../../src/execution/coordinator-dispatcher';
-import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../src/config';
 
 // ---------------------------------------------------------------------------
 // Test helpers

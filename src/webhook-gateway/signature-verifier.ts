@@ -6,7 +6,7 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { AuthenticationError } from '../shared/errors';
+import { AuthenticationError } from '../kernel/errors';
 
 /**
  * Verify the HMAC-SHA256 signature of a GitHub webhook payload.

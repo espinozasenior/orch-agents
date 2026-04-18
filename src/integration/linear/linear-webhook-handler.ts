@@ -14,8 +14,8 @@
 
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { EventBus } from '../../shared/event-bus';
-import { createDomainEvent } from '../../shared/event-bus';
+import type { EventBus } from '../../kernel/event-bus';
+import { createDomainEvent } from '../../kernel/event-bus';
 import type { AppConfig } from '../../shared/config';
 import type { Logger } from '../../shared/logger';
 import { createEventBuffer, type EventBuffer } from '../../webhook-gateway/event-buffer';
@@ -23,9 +23,9 @@ import { verifySignature } from '../../webhook-gateway/signature-verifier';
 import { normalizeLinearEvent } from './linear-normalizer';
 import { parsePromptContext } from './prompt-context-parser';
 import type { LinearWebhookPayload } from './types';
-import { agentSessionId as asId, workItemId as wId } from '../../shared/branded-types';
+import { agentSessionId as asId, workItemId as wId } from '../../kernel/branded-types';
 import { sanitizeDeep } from '../../shared/input-sanitizer';
-import { handleWebhookError } from '../../shared/webhook-error-handler';
+import { handleWebhookError } from '../../webhook-gateway/webhook-error-handler';
 import type { IntakeEvent } from '../../types';
 import type { LinearClient } from './linear-client';
 import type { OAuthTokenPersistence } from './oauth-token-persistence';

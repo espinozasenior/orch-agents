@@ -10,8 +10,8 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '../../shared/logger';
-import type { EventBus } from '../../shared/event-bus';
-import { createDomainEvent } from '../../shared/event-bus';
+import type { EventBus } from '../../kernel/event-bus';
+import { createDomainEvent } from '../../kernel/event-bus';
 import type { LinearClient } from './linear-client';
 import { LinearRateLimitError } from './linear-client';
 import type { LinearIssueSnapshot, LinearWebhookPayload } from './types';

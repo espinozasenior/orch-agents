@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import {
   parseWorkflowMdString,
   resolveRepoConfig,
-} from '../../../src/integration/linear/workflow-parser';
+} from '../../../src/config';
 
 // ---------------------------------------------------------------------------
 // Helpers

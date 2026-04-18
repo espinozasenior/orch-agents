@@ -7,7 +7,7 @@ import {
   type SymphonyOrchestrator,
   type WorkerLike,
 } from '../../src/execution/orchestrator/symphony-orchestrator';
-import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../src/config';
 import type { LinearClient, LinearIssueResponse } from '../../src/integration/linear/linear-client';
 import type { Logger } from '../../src/shared/logger';
 import { mkdtempSync, mkdirSync } from 'node:fs';
@@ -469,7 +469,7 @@ describe('SymphonyOrchestrator', () => {
 
   it('forwards stop message to running worker when WorkCancelled event is received (Phase 7G)', async () => {
     const workers: MockWorker[] = [];
-    const { createEventBus } = await import('../../src/shared/event-bus');
+    const { createEventBus } = await import('../../src/kernel/event-bus');
     const eventBus = createEventBus();
 
     const linearClient = makeLinearClient({
@@ -493,7 +493,7 @@ describe('SymphonyOrchestrator', () => {
     assert.equal(workers.length, 1);
 
     // Simulate WorkCancelled event (as published by webhook handler on stop signal)
-    const { createDomainEvent } = await import('../../src/shared/event-bus');
+    const { createDomainEvent } = await import('../../src/kernel/event-bus');
     eventBus.publish(createDomainEvent('WorkCancelled', {
       workItemId: 'linear-session-session-abc',
       cancellationReason: 'User sent stop signal via Linear',
@@ -530,7 +530,7 @@ describe('SymphonyOrchestrator', () => {
 
   it('does not crash when WorkCancelled is received for unknown issue (Phase 7G)', async () => {
     const workers: MockWorker[] = [];
-    const { createEventBus } = await import('../../src/shared/event-bus');
+    const { createEventBus } = await import('../../src/kernel/event-bus');
     const eventBus = createEventBus();
 
     const orchestrator = createSymphonyOrchestrator({
@@ -552,7 +552,7 @@ describe('SymphonyOrchestrator', () => {
     assert.equal(workers.length, 0);
 
     // Publish WorkCancelled for a non-existent session — should be a no-op
-    const { createDomainEvent } = await import('../../src/shared/event-bus');
+    const { createDomainEvent } = await import('../../src/kernel/event-bus');
     eventBus.publish(createDomainEvent('WorkCancelled', {
       workItemId: 'linear-session-unknown-session',
       cancellationReason: 'User sent stop signal via Linear',

@@ -1,5 +1,5 @@
 /**
- * Shared webhook error handler for Fastify webhook routes.
+ * Webhook error handler for Fastify webhook routes.
  *
  * Maps AppError subclasses to appropriate HTTP status codes and
  * structured error responses. Used by both the GitHub webhook router
@@ -7,14 +7,14 @@
  */
 
 import type { FastifyReply } from 'fastify';
-import type { Logger } from './logger';
+import type { Logger } from '../shared/logger';
 import {
   AppError,
   AuthenticationError,
   ConflictError,
   RateLimitError,
   ValidationError,
-} from './errors';
+} from '../kernel/errors';
 
 /**
  * Handle webhook errors by mapping AppError subclasses to HTTP responses.

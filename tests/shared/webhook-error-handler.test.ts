@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { handleWebhookError } from '../../src/shared/webhook-error-handler';
+import { handleWebhookError } from '../../src/webhook-gateway/webhook-error-handler';
 import {
   AppError,
   AuthenticationError,
@@ -15,7 +15,7 @@ import {
   RateLimitError,
   ValidationError,
   ExecutionError,
-} from '../../src/shared/errors';
+} from '../../src/kernel/errors';
 
 // ---------------------------------------------------------------------------
 // Test helpers — minimal FastifyReply and Logger stubs

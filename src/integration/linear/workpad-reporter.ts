@@ -9,13 +9,13 @@
  * and updated in-place via the Linear commentUpdate mutation.
  */
 
-import type { EventBus } from '../../shared/event-bus';
+import type { EventBus } from '../../kernel/event-bus';
 import type { Logger } from '../../shared/logger';
 import { formatDuration } from '../../shared/format';
-import { redactSecrets } from '../../shared/errors';
+import { redactSecrets } from '../../kernel/errors';
 import type { LinearClient } from './linear-client';
 import type { AgentActivityContent, AgentActivityOptions, WorkpadState } from './types';
-import { getBotMarker, getBotName } from '../../shared/agent-identity';
+import { getBotMarker, getBotName } from '../../kernel/agent-identity';
 
 // ---------------------------------------------------------------------------
 // Public types

@@ -5,7 +5,7 @@
  * (e.g., after tunnel starts with a new public URL).
  */
 
-import type { RepoConfig } from '../integration/linear/workflow-parser';
+import type { RepoConfig } from '../config';
 import { createJWT } from '../integration/github-app-auth';
 
 // All GitHub event types we subscribe to

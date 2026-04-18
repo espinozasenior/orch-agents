@@ -9,12 +9,12 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppConfig } from './shared/config';
 import type { Logger } from './shared/logger';
-import type { EventBus } from './shared/event-bus';
+import type { EventBus } from './kernel/event-bus';
 import { webhookRouter } from './webhook-gateway/webhook-router';
 import { linearWebhookHandler } from './integration/linear/linear-webhook-handler';
 import { setBotUsername } from './intake/github-workflow-normalizer';
-import { setBotName } from './shared/agent-identity';
-import type { WorkflowConfig } from './integration/linear/workflow-parser';
+import { setBotName } from './kernel/agent-identity';
+import type { WorkflowConfig } from './config';
 import type { IntakeEvent } from './types';
 import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 import type { LinearAuthStrategy } from './integration/linear/linear-client';

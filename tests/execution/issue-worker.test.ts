@@ -5,7 +5,7 @@ import {
   setupIssueForExecution,
   emitTerminalActivity,
 } from '../../src/execution/orchestrator/issue-worker-runner';
-import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../src/config';
 import type { LinearClient, LinearIssueResponse } from '../../src/integration/linear/linear-client';
 import type { WorktreeHandle } from '../../src/types';
 

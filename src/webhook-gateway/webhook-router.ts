@@ -11,9 +11,9 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { EventBus } from '../shared/event-bus';
-import { createDomainEvent } from '../shared/event-bus';
-import { workItemId as wId } from '../shared/branded-types';
+import type { EventBus } from '../kernel/event-bus';
+import { createDomainEvent } from '../kernel/event-bus';
+import { workItemId as wId } from '../kernel/branded-types';
 import { isGitHubMeta } from '../types';
 import type { AppConfig } from '../shared/config';
 import type { Logger } from '../shared/logger';
@@ -21,12 +21,12 @@ import { verifySignature } from './signature-verifier';
 import { createEventBuffer, type EventBuffer } from './event-buffer';
 import { parseGitHubEvent } from './event-parser';
 import { normalizeGitHubEventFromWorkflow } from '../intake/github-workflow-normalizer';
-import type { WorkflowConfig } from '../integration/linear/workflow-parser';
-import { resolveRepoConfig } from '../integration/linear/workflow-parser';
-import { ValidationError } from '../shared/errors';
+import type { WorkflowConfig } from '../config';
+import { resolveRepoConfig } from '../config';
+import { ValidationError } from '../kernel/errors';
 import { sanitizeDeep } from '../shared/input-sanitizer';
-import { handleWebhookError } from '../shared/webhook-error-handler';
-import { getBotName, getBotMarker } from '../shared/agent-identity';
+import { handleWebhookError } from './webhook-error-handler';
+import { getBotName, getBotMarker } from '../kernel/agent-identity';
 import type { OrchestratorSnapshot } from '../execution/orchestrator/symphony-orchestrator';
 
 export interface WebhookRouterDeps {

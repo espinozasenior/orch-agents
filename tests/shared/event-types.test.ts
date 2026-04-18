@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createDomainEvent } from '../../src/shared/event-bus';
+import { createDomainEvent } from '../../src/kernel/event-bus';
 
 /**
  * Tests that event type definitions are structurally correct.
@@ -71,8 +71,6 @@ describe('DomainEvent type definitions', () => {
         workflowPlan: {
           id: 'plan-1',
           workItemId: 'w-1',
-          methodology: 'sparc-full',
-          template: 'sparc-full-cycle',
           topology: 'hierarchical',
           swarmStrategy: 'specialized',
           consensus: 'raft',

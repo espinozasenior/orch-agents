@@ -188,7 +188,7 @@ describe('GitHub API Integration', { skip: !GITHUB_TOKEN ? SKIP_REASON : false }
     it('can build a realistic IntakeEvent from live GitHub data', async () => {
       // Dynamically import the normalizer
       const { normalizeGitHubEventFromWorkflow } = await import('../../src/intake/github-workflow-normalizer');
-      const { parseWorkflowMdString, resolveRepoConfig } = await import('../../src/integration/linear/workflow-parser');
+      const { parseWorkflowMdString, resolveRepoConfig } = await import('../../src/config');
       const { parseGitHubEvent } = await import('../../src/webhook-gateway/event-parser');
 
       // Fetch a real repo first so we can include it in the config

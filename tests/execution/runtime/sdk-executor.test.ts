@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 
 import { createSdkExecutor } from '../../../src/execution/runtime/sdk-executor.js';
-import { createEventBus, createDomainEvent } from '../../../src/shared/event-bus.js';
+import { createEventBus, createDomainEvent } from '../../../src/kernel/event-bus.js';
 import type { InteractiveExecutionRequest } from '../../../src/execution/runtime/interactive-executor.js';
 
 // ---------------------------------------------------------------------------

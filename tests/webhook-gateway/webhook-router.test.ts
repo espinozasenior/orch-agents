@@ -6,11 +6,11 @@ import { webhookRouter, type WebhookRouterDeps } from '../../src/webhook-gateway
 import { createEventBuffer, type EventBuffer } from '../../src/webhook-gateway/event-buffer';
 import { loadConfig } from '../../src/shared/config';
 import { createLogger } from '../../src/shared/logger';
-import { createEventBus, type EventBus } from '../../src/shared/event-bus';
+import { createEventBus, type EventBus } from '../../src/kernel/event-bus';
 import { setBotUserId } from '../../src/intake/github-workflow-normalizer';
-import { setBotName } from '../../src/shared/agent-identity';
-import type { IntakeCompletedEvent } from '../../src/shared/event-types';
-import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
+import { setBotName } from '../../src/kernel/agent-identity';
+import type { IntakeCompletedEvent } from '../../src/kernel/event-types';
+import type { WorkflowConfig } from '../../src/config';
 import type { OrchestratorSnapshot } from '../../src/execution/orchestrator/symphony-orchestrator';
 
 function makeTestWorkflowConfig(): WorkflowConfig {

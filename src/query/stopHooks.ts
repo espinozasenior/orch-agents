@@ -29,8 +29,8 @@
 // `type` imports — no runtime dependency. Tests construct a fake bus
 // with the same shape.
 
-import type { EventBus } from '../shared/event-bus.js';
-import type { WorkCancelledEvent } from '../shared/event-types.js';
+import type { EventBus } from '../kernel/event-bus.js';
+import type { WorkCancelledEvent } from '../kernel/event-types.js';
 import type { QueryMessage } from './state.js';
 import type { StopHookResult } from './queryLoop.js';
 import type { QueryEventEmitter } from './events.js';

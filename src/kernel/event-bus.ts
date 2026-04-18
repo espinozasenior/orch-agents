@@ -11,7 +11,7 @@ import type {
   DomainEventType,
   DomainEventMap,
 } from './event-types';
-import type { Logger } from './logger';
+import type { Logger } from '../shared/logger';
 
 export type EventHandler<T extends DomainEventType> = (
   event: DomainEventMap[T],

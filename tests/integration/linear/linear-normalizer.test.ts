@@ -13,7 +13,7 @@ import {
   setLinearBotUserId,
 } from '../../../src/integration/linear/linear-normalizer';
 import type { LinearWebhookPayload } from '../../../src/integration/linear/types';
-import type { WorkflowConfig } from '../../../src/integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../../src/config';
 
 // ---------------------------------------------------------------------------
 // Test workflow config (multi-repo schema)
@@ -112,7 +112,7 @@ describe('LinearNormalizer', () => {
     assert.ok(result);
     assert.equal(result.source, 'linear');
     assert.equal(result.sourceMetadata.intent, 'custom:linear-todo');
-    assert.equal(result.sourceMetadata.template, 'general');
+    assert.equal(result.sourceMetadata.category, 'general');
     assert.equal(result.sourceMetadata.linearIssueId, 'issue-abc');
     assert.equal(result.sourceMetadata.linearIdentifier, 'ENG-42');
   });
@@ -141,7 +141,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-bug');
-    assert.equal(result.sourceMetadata.template, 'bug');
+    assert.equal(result.sourceMetadata.category, 'bug');
   });
 
   it('should produce IntakeEvent with feature category for label feature', () => {
@@ -154,7 +154,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-feature');
-    assert.equal(result.sourceMetadata.template, 'feature');
+    assert.equal(result.sourceMetadata.category, 'feature');
   });
 
   it('should produce IntakeEvent with security category for label security', () => {
@@ -167,7 +167,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-security');
-    assert.equal(result.sourceMetadata.template, 'security');
+    assert.equal(result.sourceMetadata.category, 'security');
     assert.equal(result.entities.severity, 'critical');
   });
 
@@ -181,7 +181,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-refactor');
-    assert.equal(result.sourceMetadata.template, 'refactor');
+    assert.equal(result.sourceMetadata.category, 'refactor');
   });
 
   it('should produce IntakeEvent for assignee change', () => {
@@ -194,7 +194,7 @@ describe('LinearNormalizer', () => {
 
     assert.ok(result);
     assert.equal(result.sourceMetadata.intent, 'custom:linear-assigned');
-    assert.equal(result.sourceMetadata.template, 'general');
+    assert.equal(result.sourceMetadata.category, 'general');
   });
 
   it('should produce IntakeEvent for urgent priority change', () => {
@@ -210,7 +210,7 @@ describe('LinearNormalizer', () => {
     assert.equal(result.entities.severity, 'critical');
   });
 
-  it('should produce IntakeEvent for non-urgent priority change (with default template)', () => {
+  it('should produce IntakeEvent for non-urgent priority change (with default category)', () => {
     const payload = makeLinearPayload({}, {
       priority: 3, // Normal
     });
@@ -218,9 +218,9 @@ describe('LinearNormalizer', () => {
 
     const result = normalizeLinearEvent(payload, updatedFrom);
 
-    // Non-urgent priority change still routes through but with default template
+    // Non-urgent priority change still routes through but with default category
     assert.ok(result);
-    assert.equal(result.sourceMetadata.template, 'general');
+    assert.equal(result.sourceMetadata.category, 'general');
   });
 
   // AC12: Bot loop prevention
@@ -365,7 +365,7 @@ describe('LinearNormalizer', () => {
     assert.ok(result);
     // First match: bug
     assert.equal(result.sourceMetadata.intent, 'custom:linear-bug');
-    assert.equal(result.sourceMetadata.template, 'bug');
+    assert.equal(result.sourceMetadata.category, 'bug');
   });
 
   it('should include requirementId from issue identifier', () => {
@@ -401,6 +401,6 @@ describe('LinearNormalizer', () => {
     const result = normalizeLinearEvent(payload, updatedFrom);
 
     assert.ok(result);
-    assert.equal(result.sourceMetadata.template, 'general');
+    assert.equal(result.sourceMetadata.category, 'general');
   });
 });

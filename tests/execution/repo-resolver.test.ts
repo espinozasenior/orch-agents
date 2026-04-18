@@ -14,7 +14,7 @@ import {
   type ResolvedRepo,
   type RepoResolutionResult,
 } from '../../src/execution/orchestrator/repo-resolver';
-import type { RepoConfig } from '../../src/integration/linear/workflow-parser';
+import type { RepoConfig } from '../../src/config';
 import type { LinearClient, LinearIssueResponse } from '../../src/integration/linear/linear-client';
 
 // ---------------------------------------------------------------------------

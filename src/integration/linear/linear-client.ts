@@ -9,7 +9,7 @@
  */
 
 import type { Logger } from '../../shared/logger';
-import { AppError } from '../../shared/errors';
+import { AppError } from '../../kernel/errors';
 import type { OAuthTokenStore } from './oauth-token-store';
 import type {
   AgentActivityContent,

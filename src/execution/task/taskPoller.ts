@@ -10,8 +10,8 @@
 import { TaskStatus } from './types';
 import type { TaskRegistry } from './taskRegistry';
 import type { TaskOutputWriter } from './taskOutputWriter';
-import type { EventBus } from '../../shared/event-bus';
-import { createDomainEvent } from '../../shared/event-bus';
+import type { EventBus } from '../../kernel/event-bus';
+import { createDomainEvent } from '../../kernel/event-bus';
 
 // ---------------------------------------------------------------------------
 // Per-task read offset tracking (in-memory, keyed by taskId)

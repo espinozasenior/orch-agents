@@ -13,10 +13,10 @@
 
 import { randomUUID } from 'node:crypto';
 import type { IntakeEvent } from '../../types';
-import { linearIssueId } from '../../shared/branded-types';
+import { linearIssueId } from '../../kernel/branded-types';
 import { sanitize } from '../../shared/input-sanitizer';
 import type { LinearWebhookPayload } from './types';
-import type { WorkflowConfig } from './workflow-parser';
+import type { WorkflowConfig } from '../../config';
 
 // ---------------------------------------------------------------------------
 // Default workflow config (used when no WORKFLOW.md is loaded)
@@ -173,10 +173,10 @@ export function normalizeLinearEvent(
   }
 
   // Categorize by label for observability metadata
-  const template = findTemplateByLabels(issue.labels);
+  const category = findCategoryByLabels(issue.labels);
 
   // Determine intent label (kept as a sourceMetadata string for observability)
-  const intent = buildIntent(template, issue, fields);
+  const intent = buildIntent(category, issue, fields);
 
   // Check if we should process: active state or label/assignee/priority change
   if (stateChanged) {
@@ -204,7 +204,7 @@ export function normalizeLinearEvent(
       linearTeamKey: issue.team?.key,
       linearIdentifier: issue.identifier,
       linearUrl: issue.url,
-      template,
+      category,
       previousState: fields,
       intent,
     },
@@ -212,7 +212,7 @@ export function normalizeLinearEvent(
       repo: findGitHubRepo(issue) ?? config?.defaultRepo,
       labels: issue.labels?.map((l) => l.name),
       author: issue.creator?.name,
-      severity: deriveSeverity(issue, template),
+      severity: deriveSeverity(issue, category),
       requirementId: issue.identifier,
       projectId: issue.project?.id,
     },
@@ -228,7 +228,7 @@ export function normalizeLinearEvent(
 
 const KNOWN_CATEGORIES = new Set(['bug', 'feature', 'security', 'refactor']);
 
-function findTemplateByLabels(
+function findCategoryByLabels(
   labels: LinearWebhookPayload['data']['labels'],
 ): string {
   if (!labels) return 'general';
@@ -244,11 +244,11 @@ function findTemplateByLabels(
 // ---------------------------------------------------------------------------
 
 function buildIntent(
-  template: string,
+  category: string,
   issue: LinearWebhookPayload['data'],
   fields: Record<string, unknown>,
 ): string {
-  // Map template names to descriptive intents
+  // Map category names to descriptive intents
   const labelsChanged = fields.labelIds !== undefined;
   const assigneeChanged = fields.assigneeId !== undefined;
   const priorityChanged = fields.priority !== undefined;
@@ -288,7 +288,7 @@ function buildIntent(
     return `custom:linear-${issue.state.name.toLowerCase().replace(/\s+/g, '-')}`;
   }
 
-  return `custom:linear-${template}`;
+  return `custom:linear-${category}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,10 +303,10 @@ function findGitHubRepo(issue: LinearWebhookPayload['data']): string | undefined
 
 function deriveSeverity(
   issue: LinearWebhookPayload['data'],
-  template: string,
+  category: string,
 ): 'low' | 'medium' | 'high' | 'critical' {
   // Security category is always critical
-  if (template === 'security') return 'critical';
+  if (category === 'security') return 'critical';
 
   // Map Linear priority to severity
   if (issue.priority <= 1) return 'critical';
