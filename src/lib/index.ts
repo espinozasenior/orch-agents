@@ -15,11 +15,11 @@ export type { LogLevel } from '../shared/config';
 export {
   planId, workItemId, execId, linearIssueId,
   agentSessionId, phaseId, correlationId,
-} from '../shared/branded-types';
+} from '../kernel/branded-types';
 export type {
   PlanId, WorkItemId, ExecId, LinearIssueId,
   AgentSessionId, PhaseId, CorrelationId,
-} from '../shared/branded-types';
+} from '../kernel/branded-types';
 
 // Domain types (curated — intake/triage/deployment types omitted
 // because they're app-internal and leak Linear/GitHub event shapes)
@@ -44,4 +44,4 @@ export {
   AppError, ValidationError, AuthenticationError, ConflictError,
   RateLimitError, TriageError, ExecutionError, ReviewError,
   shortErrorStack, redactSecrets, sanitizeForExternalDisplay,
-} from '../shared/errors';
+} from '../kernel/errors';

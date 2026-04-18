@@ -13,11 +13,11 @@ import { webhookRouter, type WebhookRouterDeps } from '../src/webhook-gateway/we
 import { createEventBuffer, type EventBuffer } from '../src/webhook-gateway/event-buffer';
 import { loadConfig } from '../src/shared/config';
 import { createLogger } from '../src/shared/logger';
-import { createEventBus, type EventBus } from '../src/shared/event-bus';
+import { createEventBus, type EventBus } from '../src/kernel/event-bus';
 import { setBotUserId } from '../src/intake/github-workflow-normalizer';
-import type { WorkflowConfig } from '../src/integration/linear/workflow-parser';
-import type { WorkCancelledEvent } from '../src/shared/event-types';
-import { formatAgentComment, getBotMarker } from '../src/shared/agent-identity';
+import type { WorkflowConfig } from '../src/config';
+import type { WorkCancelledEvent } from '../src/kernel/event-types';
+import { formatAgentComment, getBotMarker } from '../src/kernel/agent-identity';
 import {
   linearWebhookHandler,
   type LinearWebhookHandlerDeps,

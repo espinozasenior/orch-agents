@@ -12,7 +12,7 @@ import {
   triageEvent,
   startTriageEngine,
 } from '../src/triage/triage-engine';
-import { createEventBus, createDomainEvent } from '../src/shared/event-bus';
+import { createEventBus, createDomainEvent } from '../src/kernel/event-bus';
 import { createLogger } from '../src/shared/logger';
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ function makeIntakeEvent(overrides: Partial<IntakeEvent> = {}): IntakeEvent {
     id: 'test-intake-001',
     timestamp: new Date().toISOString(),
     source: 'github',
-    sourceMetadata: { eventType: 'push', template: 'cicd-pipeline', skipTriage: false, intent: 'validate-main' },
+    sourceMetadata: { eventType: 'push', skipTriage: false, intent: 'validate-main' },
     entities: {
       repo: 'org/repo',
       branch: 'main',
@@ -128,7 +128,7 @@ describe('Triage Engine', () => {
   describe('skipTriage fast path', () => {
     it('returns fast result when skipTriage=true', () => {
       const result = triageEvent(makeIntakeEvent({
-        sourceMetadata: { skipTriage: true, template: 'quick-fix' },
+        sourceMetadata: { skipTriage: true },
       }));
       assert.equal(result.skipTriage, true);
     });

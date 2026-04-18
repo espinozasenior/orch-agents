@@ -13,7 +13,7 @@ import {
   getRepoClonePath,
   getIssueWorktreePath,
 } from '../../src/execution/orchestrator/repo-resolver';
-import type { RepoConfig } from '../../src/integration/linear/workflow-parser';
+import type { RepoConfig } from '../../src/config';
 
 // ---------------------------------------------------------------------------
 // Fixtures

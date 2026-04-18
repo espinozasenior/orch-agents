@@ -12,7 +12,7 @@ import {
   WorkflowParseError,
   resolveRepoConfig,
   getRepoNames,
-} from '../../../src/integration/linear/workflow-parser';
+} from '../../../src/config';
 
 // ---------------------------------------------------------------------------
 // Helpers

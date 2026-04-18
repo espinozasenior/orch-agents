@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   createWorkCancelledStopRegistry,
 } from '../../src/query/index.js';
-import { createEventBus, createDomainEvent } from '../../src/shared/event-bus.js';
+import { createEventBus, createDomainEvent } from '../../src/kernel/event-bus.js';
 
 describe('createWorkCancelledStopRegistry', () => {
   it('reports isCancelled === false before WorkCancelled fires', () => {

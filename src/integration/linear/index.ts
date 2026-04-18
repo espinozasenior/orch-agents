@@ -31,8 +31,8 @@ export {
   parseWorkflowMd,
   parseWorkflowMdString,
   WorkflowParseError,
-} from './workflow-parser';
-export type { WorkflowConfig } from './workflow-parser';
+} from '../../config';
+export type { WorkflowConfig } from '../../config';
 
 // Client
 export {

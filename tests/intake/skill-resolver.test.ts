@@ -19,7 +19,7 @@ import {
   createSkillResolver,
   buildRuleKeyCandidates,
 } from '../../src/intake/skill-resolver';
-import type { WorkflowConfig } from '../../src/integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../src/config';
 import type { ParsedGitHubEvent } from '../../src/webhook-gateway/event-parser';
 
 // ---------------------------------------------------------------------------

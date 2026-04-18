@@ -1,10 +1,8 @@
 /**
  * Tests for the Execution Engine.
  *
- * As of Option C step 2 (PR A), the engine dispatches every IntakeCompleted
- * event through LocalAgentTask in coordinator mode. The legacy template branch
- * (template lookup, agent path resolution, multi-agent fan-out) has been
- * removed from the main-thread engine.
+ * The engine dispatches every IntakeCompleted event through LocalAgentTask
+ * in coordinator mode.
  *
  * The engine:
  * 1. Subscribes to IntakeCompleted
@@ -16,8 +14,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import type { IntakeEvent, WorkflowPlan } from '../src/types';
-import { linearIssueId } from '../src/shared/branded-types';
-import { createEventBus, createDomainEvent } from '../src/shared/event-bus';
+import { linearIssueId } from '../src/kernel/branded-types';
+import { createEventBus, createDomainEvent } from '../src/kernel/event-bus';
 import { createLogger } from '../src/shared/logger';
 import {
   startExecutionEngine,
@@ -26,7 +24,7 @@ import type {
   CoordinatorDispatcher as LocalAgentTaskExecutor,
   ExecutionResult,
 } from '../src/execution/coordinator-dispatcher';
-import type { WorkflowConfig } from '../src/integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../src/config';
 import type { LinearClient } from '../src/integration/linear/linear-client';
 import type { SkillResolver, ResolvedSkill } from '../src/intake/skill-resolver';
 
@@ -199,14 +197,14 @@ describe('Execution Engine', () => {
       assert.equal(workCompleted.length, 1);
       assert.equal(workCompleted[0].workItemId, 'intake-001');
       assert.ok(workCompleted[0].planId);
-      // Coordinator-only: exactly one agent dispatched, regardless of template
+      // Coordinator-only: exactly one agent dispatched
       assert.equal(workCompleted[0].phaseCount, 1);
 
       unsub();
       eventBus.removeAllListeners();
     });
 
-    it('always builds a coordinator-only plan, ignoring template metadata', async () => {
+    it('always builds a coordinator-only plan', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
 
@@ -222,25 +220,22 @@ describe('Execution Engine', () => {
         intakeEvent: makeIntakeEvent({
           source: 'linear',
           // tdd-workflow used to fan out to coder + tester; now ignored.
-          sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-tdd-1'), template: 'tdd-workflow' },
+          sourceMetadata: { source: 'linear' as const, linearIssueId: linearIssueId('issue-tdd-1'), category: 'tdd-workflow' },
         }),
       }));
 
       await new Promise((r) => setTimeout(r, 100));
 
       assert.ok(localAgentTask.lastPlan, 'expected localAgentTask.execute to be called');
-      assert.equal(localAgentTask.lastPlan!.methodology, 'coordinator');
       assert.equal(localAgentTask.lastPlan!.agentTeam.length, 1);
       assert.equal(localAgentTask.lastPlan!.agentTeam[0].role, 'coordinator');
       assert.equal(localAgentTask.lastPlan!.agentTeam[0].type, 'coordinator');
-      // Template name still preserved on plan for observability.
-      assert.equal(localAgentTask.lastPlan!.template, 'tdd-workflow');
 
       unsub();
       eventBus.removeAllListeners();
     });
 
-    it('uses "coordinator" as plan template when intake provides no template metadata', async () => {
+    it('creates plan without template when intake provides no category metadata', async () => {
       const eventBus = createEventBus();
       const logger = createLogger({ level: 'error' });
 
@@ -259,8 +254,7 @@ describe('Execution Engine', () => {
       await new Promise((r) => setTimeout(r, 100));
 
       assert.ok(localAgentTask.lastPlan);
-      assert.equal(localAgentTask.lastPlan!.template, 'coordinator');
-      assert.equal(localAgentTask.lastPlan!.methodology, 'coordinator');
+      assert.equal(localAgentTask.lastPlan!.agentTeam[0].role, 'coordinator');
 
       unsub();
       eventBus.removeAllListeners();
@@ -375,7 +369,7 @@ describe('Execution Engine', () => {
           source: 'linear',
           sourceMetadata: {
             source: 'linear' as const,
-            template: 'quick-fix',
+            category: 'quick-fix',
             linearIssueId: linearIssueId('issue-linear-1'),
           },
         }),
@@ -431,7 +425,7 @@ describe('Execution Engine', () => {
           source: 'linear',
           sourceMetadata: {
             source: 'linear' as const,
-            template: 'quick-fix',
+            category: 'quick-fix',
             linearIssueId: linearIssueId('issue-linear-stable-1'),
           },
         }),
@@ -443,7 +437,7 @@ describe('Execution Engine', () => {
           source: 'linear',
           sourceMetadata: {
             source: 'linear' as const,
-            template: 'quick-fix',
+            category: 'quick-fix',
             linearIssueId: linearIssueId('issue-linear-stable-1'),
           },
         }),
@@ -485,7 +479,7 @@ describe('Execution Engine', () => {
           source: 'linear',
           sourceMetadata: {
             source: 'linear' as const,
-            template: 'quick-fix',
+            category: 'quick-fix',
             linearIssueId: linearIssueId('issue-linear-skip-1'),
           },
         }),

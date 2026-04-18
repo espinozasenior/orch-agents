@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
-import type { RepoConfig } from '../integration/linear/workflow-parser';
+import type { RepoConfig } from '../config';
 
 // ---------------------------------------------------------------------------
 // Public types

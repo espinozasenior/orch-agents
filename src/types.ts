@@ -13,7 +13,7 @@ import type {
   LinearIssueId,
   AgentSessionId,
   PhaseId,
-} from './shared/branded-types';
+} from './kernel/branded-types';
 
 // ---------------------------------------------------------------------------
 // SPARC Phase
@@ -67,7 +67,7 @@ export interface LinearSourceMetadata {
   linearUrl?: string;
   agentSessionId?: AgentSessionId;
   attempt?: number;
-  template?: string;
+  category?: string;
   /** Snapshot of Linear issue fields at intake time (free-form). */
   previousState?: Record<string, unknown>;
   /** Free-form intent string used by the Linear path for log/dispatch hints. */
@@ -154,12 +154,9 @@ export interface TriageResult {
 export interface WorkflowPlan {
   id: PlanId;
   workItemId: WorkItemId;
-  template: string;
   promptTemplate?: string;
   agentTeam: PlannedAgent[];
   maxAgents?: number;
-  /** @deprecated Kept for backward compat with prompt-builder / fix-it-loop. */
-  methodology?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +314,6 @@ export interface DecisionRecord {
     scope: string;
     risk: string;
   };
-  templateSelected: string;
   agentTeam: string[];
   outcome: 'success' | 'partial' | 'failure';
   duration: number;

@@ -9,7 +9,7 @@ import {
   TriageError,
   ExecutionError,
   ReviewError,
-} from '../../src/shared/errors';
+} from '../../src/kernel/errors';
 
 describe('AppError', () => {
   it('should set message and defaults', () => {

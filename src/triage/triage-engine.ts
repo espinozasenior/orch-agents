@@ -9,11 +9,11 @@
  */
 
 import type { IntakeEvent, TriageResult } from '../types';
-import type { EventBus } from '../shared/event-bus';
+import type { EventBus } from '../kernel/event-bus';
 import type { Logger } from '../shared/logger';
-import { createDomainEvent } from '../shared/event-bus';
-import { workItemId as wId } from '../shared/branded-types';
-import { TriageError } from '../shared/errors';
+import { createDomainEvent } from '../kernel/event-bus';
+import { workItemId as wId } from '../kernel/branded-types';
+import { TriageError } from '../kernel/errors';
 
 // ---------------------------------------------------------------------------
 // Triage logic

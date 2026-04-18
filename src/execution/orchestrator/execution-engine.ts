@@ -20,17 +20,17 @@ import {
   planId as toPlanId,
   workItemId as toWorkItemId,
   linearIssueId as toLinearIssueId,
-} from '../../shared/branded-types';
-import type { EventBus } from '../../shared/event-bus';
+} from '../../kernel/branded-types';
+import type { EventBus } from '../../kernel/event-bus';
 import type { Logger } from '../../shared/logger';
-import { createDomainEvent } from '../../shared/event-bus';
+import { createDomainEvent } from '../../kernel/event-bus';
 import type { CoordinatorDispatcher } from '../coordinator-dispatcher';
-import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../config';
 import { createWorkTracker } from './work-tracker';
 import type { GitHubClient } from '../../integration/github-client';
 import type { LinearClient } from '../../integration/linear/linear-client';
 import type { CancellationController } from '../runtime/cancellation-controller';
-import { formatAgentComment, getBotName } from '../../shared/agent-identity';
+import { formatAgentComment, getBotName } from '../../kernel/agent-identity';
 import { buildWorkpadComment, postOrUpdateWorkpad } from '../../integration/linear/workpad-reporter';
 import { createSkillResolver, type SkillResolver } from '../../intake/skill-resolver';
 import { fetchContextForSkill } from '../../intake/context-fetchers';
@@ -149,29 +149,20 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       return;
     }
 
-    // Option C step 2 (PR A): coordinator mode is the only mode for the
-    // main-thread engine. Templates from WORKFLOW.md are still parsed for
-    // backward compat (and still used by the worker-thread path) but are
-    // no longer consulted here. The template metadata field is preserved
-    // on the plan purely for downstream observability.
     const meta = intakeEvent.sourceMetadata;
-    const templateName = (meta && isLinearMeta(meta) ? meta.template : undefined) ?? 'coordinator';
 
     const task = createTask(TaskType.local_agent);
     const taskPlanId = toPlanId(task.id);
     const plan: WorkflowPlan = {
       id: taskPlanId,
       workItemId: toWorkItemId(intakeEvent.id),
-      template: templateName,
       agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }],
       maxAgents: workflowConfig.agents.maxConcurrent,
-      methodology: 'coordinator',
     };
 
     logger.info('Executing work item (coordinator mode)', {
       planId: taskPlanId,
       workItemId: executionKey,
-      template: templateName,
       correlationId,
     });
 
@@ -338,10 +329,8 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
     const plan: WorkflowPlan = {
       id: promptPlanId,
       workItemId: toWorkItemId(issueId),
-      template: 'coordinator',
       agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }],
       maxAgents: workflowConfig.agents.maxConcurrent,
-      methodology: 'coordinator',
     };
 
     // Fetch issue context from Linear so the coordinator knows what the

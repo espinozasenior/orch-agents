@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
-import type { RepoConfig } from '../../integration/linear/workflow-parser';
+import type { RepoConfig } from '../../config';
 import { emitSelectElicitation } from './issue-worker-runner';
 
 export type { RepoConfig };

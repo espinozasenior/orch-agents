@@ -10,8 +10,8 @@ import { resolve as pathResolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { WorktreeHandle } from '../../types';
 import type { Logger } from '../../shared/logger';
-import { ValidationError, ExecutionError } from '../../shared/errors';
-import { planId as pId } from '../../shared/branded-types';
+import { ValidationError, ExecutionError } from '../../kernel/errors';
+import { planId as pId } from '../../kernel/branded-types';
 
 const execFile = promisify(execFileCb);
 

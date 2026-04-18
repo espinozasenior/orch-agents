@@ -1,10 +1,10 @@
 import type { IntakeEvent, WorkflowPlan, WorktreeHandle } from '../../types';
-import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../config';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
 import type { AgentPlanStep } from '../../integration/linear/types';
 import { createTask, TaskType, TaskStatus } from '../task';
 import type { TaskRegistry } from '../task';
-import { planId as pId, workItemId as wId, linearIssueId as lId } from '../../shared/branded-types';
+import { planId as pId, workItemId as wId, linearIssueId as lId } from '../../kernel/branded-types';
 
 // ---------------------------------------------------------------------------
 // Phase 7F: Plan step definitions
@@ -84,20 +84,12 @@ export interface IssueWorkerLifecycleResult {
 export async function runIssueWorkerLifecycle(
   deps: IssueWorkerLifecycleDeps,
 ): Promise<IssueWorkerLifecycleResult> {
-  // Option C step 2b (PR B): coordinator-only dispatch via LocalAgentTask.
-  // Templates from WORKFLOW.md are no longer consulted — every issue runs
-  // through the coordinator's decide-at-runtime model. The template metadata
-  // field on the plan is preserved as 'coordinator' for downstream
-  // observability and parity with the main-thread engine (PR A).
-  const templateName = 'coordinator';
   const plan: WorkflowPlan = {
     id: pId(sanitizePlanId(deps.issue.id)),
     workItemId: wId(deps.issue.identifier),
-    template: templateName,
     promptTemplate: deps.workflowConfig.promptTemplate,
     maxAgents: deps.workflowConfig.agent.maxConcurrentAgents,
     agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2 as const, required: true }],
-    methodology: 'coordinator',
   };
 
   // Phase 7H: Best-effort setup — set delegate and move to started state
@@ -137,7 +129,7 @@ export async function runIssueWorkerLifecycle(
 
       const intakeEvent = buildIntakeEvent({
         issue: currentIssue,
-        templateName,
+        category: 'coordinator',
         attempt: deps.attempt + continuationCount,
         defaultRepo: deps.defaultRepo,
         defaultBranch: deps.defaultBranch,
@@ -468,12 +460,12 @@ export async function emitSelectElicitation(
 
 export function buildIntakeEvent(params: {
   issue: LinearIssueResponse;
-  templateName: string;
+  category: string;
   attempt: number;
   defaultRepo?: string;
   defaultBranch?: string;
 }): IntakeEvent {
-  const { issue, templateName, attempt, defaultRepo, defaultBranch } = params;
+  const { issue, category, attempt, defaultRepo, defaultBranch } = params;
   return {
     id: issue.id,
     timestamp: new Date().toISOString(),
@@ -487,7 +479,7 @@ export function buildIntakeEvent(params: {
       linearTeamId: issue.team?.id,
       linearTeamKey: issue.team?.key,
       attempt,
-      template: templateName,
+      category,
       intent: 'custom:linear-issue',
     },
     entities: {

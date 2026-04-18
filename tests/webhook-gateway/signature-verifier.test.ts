@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { verifySignature } from '../../src/webhook-gateway/signature-verifier';
-import { AuthenticationError } from '../../src/shared/errors';
+import { AuthenticationError } from '../../src/kernel/errors';
 
 function computeSignature(payload: string, secret: string): string {
   const hmac = createHmac('sha256', secret).update(payload).digest('hex');

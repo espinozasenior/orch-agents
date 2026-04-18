@@ -1,7 +1,7 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEventBuffer, type EventBuffer } from '../../src/webhook-gateway/event-buffer';
-import { ConflictError, RateLimitError } from '../../src/shared/errors';
+import { ConflictError, RateLimitError } from '../../src/kernel/errors';
 
 describe('EventBuffer', () => {
   let buffer: EventBuffer;

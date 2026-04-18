@@ -1,6 +1,6 @@
 import { watch, readFileSync, type FSWatcher } from 'node:fs';
 import type { Logger } from '../../shared/logger';
-import { parseWorkflowMd, type WorkflowConfig } from './workflow-parser';
+import { parseWorkflowMd, type WorkflowConfig } from '../../config';
 
 export interface WorkflowConfigStoreDeps {
   filePath: string;

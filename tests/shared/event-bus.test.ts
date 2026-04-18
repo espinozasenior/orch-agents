@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createEventBus, createDomainEvent } from '../../src/shared/event-bus';
-import type { EventBus } from '../../src/shared/event-bus';
+import { createEventBus, createDomainEvent } from '../../src/kernel/event-bus';
+import type { EventBus } from '../../src/kernel/event-bus';
 import { createLogger } from '../../src/shared/logger';
 
 describe('EventBus', () => {
@@ -151,8 +151,6 @@ describe('createDomainEvent', () => {
       workflowPlan: {
         id: 'plan-1',
         workItemId: 'w-1',
-        methodology: 'sparc-full' as const,
-        template: 'sparc-full-cycle',
         topology: 'hierarchical' as const,
         swarmStrategy: 'specialized' as const,
         consensus: 'raft' as const,

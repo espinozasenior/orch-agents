@@ -10,9 +10,9 @@
 
 import type { LinearClient } from './linear-client';
 import type { GitHubClient } from '../github-client';
-import { getBotMarker } from '../../shared/agent-identity';
+import { getBotMarker } from '../../kernel/agent-identity';
 import type { Logger } from '../../shared/logger';
-import { redactSecrets } from '../../shared/errors';
+import { redactSecrets } from '../../kernel/errors';
 
 // ---------------------------------------------------------------------------
 // Public types

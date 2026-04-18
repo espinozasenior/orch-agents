@@ -6,11 +6,11 @@
  * timeout (scaled by effort level).
  */
 
-import type { EventBus } from '../../shared/event-bus';
-import { createDomainEvent } from '../../shared/event-bus';
+import type { EventBus } from '../../kernel/event-bus';
+import { createDomainEvent } from '../../kernel/event-bus';
 import type { Logger } from '../../shared/logger';
 import { formatDuration } from '../../shared/format';
-import { workItemId as wId } from '../../shared/branded-types';
+import { workItemId as wId } from '../../kernel/branded-types';
 
 // ---------------------------------------------------------------------------
 // Public types

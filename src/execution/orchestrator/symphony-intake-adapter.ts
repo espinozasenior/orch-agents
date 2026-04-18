@@ -11,7 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { LinearClient, LinearIssueResponse } from '../../integration/linear/linear-client';
-import type { WorkflowConfig } from '../../integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../../config';
 import { resolveRepoForIssue } from './repo-resolver';
 import type { CoordinatorTaskRequest } from '../../coordinator/types';
 import type { Logger } from '../../shared/logger';

@@ -9,7 +9,7 @@ import {
   type GitHubClient,
   type GitHubClientDeps,
 } from '../../src/integration/github-client';
-import { ExecutionError } from '../../src/shared/errors';
+import { ExecutionError } from '../../src/kernel/errors';
 
 // ---------------------------------------------------------------------------
 // Helpers

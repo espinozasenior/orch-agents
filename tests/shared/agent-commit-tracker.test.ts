@@ -9,7 +9,7 @@ import {
   trackAgentCommit,
   isAgentCommit,
   clearTrackedCommits,
-} from '../../src/shared/agent-commit-tracker';
+} from '../../src/execution/agent-commit-tracker';
 
 describe('agent-commit-tracker', () => {
   beforeEach(() => {

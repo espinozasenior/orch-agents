@@ -12,15 +12,15 @@ import {
 import type { LinearPollingLoopDeps } from '../../../src/integration/linear/linear-polling-loop';
 import type { LinearClient, LinearIssueResponse } from '../../../src/integration/linear/linear-client';
 import { LinearRateLimitError } from '../../../src/integration/linear/linear-client';
-import { createEventBus, type EventBus } from '../../../src/shared/event-bus';
+import { createEventBus, type EventBus } from '../../../src/kernel/event-bus';
 import { createLogger } from '../../../src/shared/logger';
 import {
   setWorkflowConfig,
   resetWorkflowConfig,
   setLinearBotUserId,
 } from '../../../src/integration/linear/linear-normalizer';
-import type { WorkflowConfig } from '../../../src/integration/linear/workflow-parser';
-import type { IntakeCompletedEvent } from '../../../src/shared/event-types';
+import type { WorkflowConfig } from '../../../src/config';
+import type { IntakeCompletedEvent } from '../../../src/kernel/event-types';
 
 // ---------------------------------------------------------------------------
 // Test workflow config

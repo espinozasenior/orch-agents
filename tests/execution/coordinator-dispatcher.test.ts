@@ -14,7 +14,7 @@ import {
   type CoordinatorDispatcher,
 } from '../../src/execution/coordinator-dispatcher';
 import type { WorkflowPlan, IntakeEvent, WorktreeHandle } from '../../src/types';
-import { planId, workItemId, linearIssueId, agentSessionId } from '../../src/shared/branded-types';
+import { planId, workItemId, linearIssueId, agentSessionId } from '../../src/kernel/branded-types';
 import type { InteractiveTaskExecutor, InteractiveExecutionRequest } from '../../src/execution/runtime/interactive-executor';
 import type { TaskExecutionResult } from '../../src/execution/runtime/task-executor';
 import type { WorktreeManager } from '../../src/execution/workspace/worktree-manager';
@@ -22,7 +22,7 @@ import type { ArtifactApplier, ApplyResult } from '../../src/execution/workspace
 import type { GitHubClient } from '../../src/integration/github-client';
 import type { LinearClient } from '../../src/integration/linear/linear-client';
 import type { Logger } from '../../src/shared/logger';
-import { clearTrackedCommits, isAgentCommit } from '../../src/shared/agent-commit-tracker';
+import { clearTrackedCommits, isAgentCommit } from '../../src/execution/agent-commit-tracker';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,8 +44,6 @@ function makeCoordinatorPlan(overrides: Partial<WorkflowPlan> = {}): WorkflowPla
   return {
     id: planId('plan-coord-1'),
     workItemId: workItemId('work-1'),
-    template: 'coordinator',
-    methodology: 'coordinator',
     agentTeam: [{ role: 'coordinator', type: 'coordinator', tier: 2, required: true }],
     maxAgents: 1,
     ...overrides,

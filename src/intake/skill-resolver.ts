@@ -14,11 +14,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ParsedGitHubEvent } from '../webhook-gateway/event-parser';
-import type { WorkflowConfig } from '../integration/linear/workflow-parser';
+import type { WorkflowConfig } from '../config';
 import {
   parseSkillFile,
   type AgentFrontmatter,
-} from '../shared/frontmatter-parser';
+} from './frontmatter-parser';
 
 // ---------------------------------------------------------------------------
 // Rule key parsing (ported from github-workflow-normalizer.ts — FR-P20-003)
