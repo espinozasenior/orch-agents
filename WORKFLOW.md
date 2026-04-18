@@ -49,6 +49,7 @@ repos:
         pull_request.synchronize: .claude/skills/github-ops/SKILL.md
         pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
         issues.opened: .claude/skills/github-deep-research/SKILL.md
+        workflow_run.completed: .claude/skills/ci-status/SKILL.md
   espinozasenior/automata-somnio-tl:
     url: git@github.com:espinozasenior/automata-somnio-tl.git
     default_branch: main
