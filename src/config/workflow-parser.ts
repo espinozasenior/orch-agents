@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { AppError } from '../kernel/errors';
-import { validateWorkflowPromptTemplate } from '../integration/linear/workflow-prompt';
+import { validateWorkflowPromptTemplate } from './workflow-prompt';
 import type { WorkflowConfig, RepoConfig } from './workflow-config';
 import { WORKFLOW_SAFE_ENV_VARS } from './workflow-config';
 
@@ -158,7 +158,7 @@ function buildConfig(document: WorkflowDocument, body: string): WorkflowConfig {
   return {
     repos,
     defaults: {
-      agents: { maxConcurrent, maxConcurrentPerOrg },
+      agents: { maxConcurrentPerOrg },
       stall: { timeoutMs: stallTimeoutMs },
       polling: { intervalMs: pollingIntervalMs, enabled: pollingEnabled },
     },

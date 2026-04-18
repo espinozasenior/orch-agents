@@ -113,7 +113,7 @@ describe('WorkflowParser', () => {
   it('should parse defaults section correctly', () => {
     const config = parseWorkflowMdString(VALID_WORKFLOW);
 
-    assert.equal(config.defaults.agents.maxConcurrent, 8);
+    assert.equal(config.defaults.agents.maxConcurrentPerOrg, 8);
     assert.equal(config.defaults.stall.timeoutMs, 300000);
     assert.equal(config.defaults.polling.intervalMs, 30000);
     assert.equal(config.defaults.polling.enabled, false);

@@ -22,7 +22,7 @@ export interface WorkflowConfig {
     events: Record<string, string>;
   };
   defaults: {
-    agents: { maxConcurrent: number; maxConcurrentPerOrg: number };
+    agents: { maxConcurrentPerOrg: number };
     stall: { timeoutMs: number };
     polling: { intervalMs: number; enabled: boolean };
   };
@@ -101,6 +101,16 @@ export function getRepoNames(config: WorkflowConfig): string[] {
  * Prevents leaking sensitive secrets (API keys, tokens) if an attacker controls
  * WORKFLOW.md content. Only non-secret, configuration-level variables are allowed.
  */
+/**
+ * Validates that a repository full name (owner/repo) matches the expected
+ * format and does not contain path-traversal or URL-encoding sequences.
+ */
+export function validateRepoName(repoFullName: string): void {
+  if (!/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(repoFullName)) {
+    throw new Error(`Invalid repo name format: '${repoFullName}'`);
+  }
+}
+
 export const WORKFLOW_SAFE_ENV_VARS = new Set([
   // Runtime / system
   'NODE_ENV', 'HOME', 'USER', 'TMPDIR', 'TMP', 'TEMP', 'PATH',

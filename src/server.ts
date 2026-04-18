@@ -6,6 +6,7 @@
  * Phase 1: adds webhook gateway routes.
  */
 
+import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppConfig } from './shared/config';
 import type { Logger } from './shared/logger';
@@ -89,26 +90,52 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
 
   // ── OAuth routes (Phase 7A) ──────────────────────────────────
   if (config.linearAuthMode === 'oauth' && config.linearClientId) {
+    // CSRF state store: state token → creation timestamp (ms)
+    const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+    const oauthStateStore = new Map<string, number>();
+
+    /** Remove expired state entries (older than TTL). */
+    function purgeExpiredStates(): void {
+      const now = Date.now();
+      for (const [token, ts] of oauthStateStore) {
+        if (now - ts > STATE_TTL_MS) {
+          oauthStateStore.delete(token);
+        }
+      }
+    }
+
     server.get('/oauth/authorize', async (_request, reply) => {
+      const state = randomBytes(16).toString('hex');
+      oauthStateStore.set(state, Date.now());
+
       const params = new URLSearchParams({
         client_id: config.linearClientId,
         redirect_uri: config.linearRedirectUri,
         response_type: 'code',
         scope: 'read,write,app:assignable,app:mentionable',
         actor: 'app',
+        state,
       });
       const url = `https://linear.app/oauth/authorize?${params.toString()}`;
       return reply.redirect(url);
     });
 
-    server.get<{ Querystring: { code?: string; error?: string } }>(
+    server.get<{ Querystring: { code?: string; error?: string; state?: string } }>(
       '/oauth/callback',
       async (request, reply) => {
-        const { code, error: oauthError } = request.query;
+        purgeExpiredStates();
+
+        const { code, error: oauthError, state } = request.query;
         if (oauthError) {
           logger.error('OAuth callback error', { error: oauthError });
           return reply.status(400).send({ error: oauthError });
         }
+        if (!state || !oauthStateStore.has(state)) {
+          logger.error('OAuth callback missing or invalid state parameter');
+          return reply.status(400).send({ error: 'Invalid or missing state parameter' });
+        }
+        oauthStateStore.delete(state);
+
         if (!code) {
           return reply.status(400).send({ error: 'Missing authorization code' });
         }

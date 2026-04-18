@@ -10,40 +10,10 @@ import { resolve } from 'node:path';
 import { readEnvFile } from '../env-writer';
 import { createWorkflowEditor } from '../workflow-editor';
 import { createGitHubAppTokenProvider } from '../../integration/github-app-auth';
+import { validateRepoName } from '../../config/workflow-config';
+import { ALL_WEBHOOK_EVENTS, githubFetch } from '../../integration/github-api';
 
 const ENV_PATH = resolve(process.cwd(), '.env');
-
-// All GitHub event types we subscribe to at the webhook level
-const ALL_WEBHOOK_EVENTS = [
-  'pull_request',
-  'issues',
-  'issue_comment',
-  'push',
-  'pull_request_review',
-  'workflow_run',
-  'release',
-];
-
-// ---------------------------------------------------------------------------
-// GitHub API helper
-// ---------------------------------------------------------------------------
-
-async function githubFetch(
-  path: string,
-  token: string,
-  options?: RequestInit,
-): Promise<Response> {
-  const url = path.startsWith('https://') ? path : `https://api.github.com${path}`;
-  return fetch(url, {
-    ...options,
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...options?.headers,
-    },
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Command entry point
@@ -76,6 +46,9 @@ export async function runRepoAdd(repoFullName: string): Promise<void> {
     console.error('  Error: No GitHub credentials found in .env. Run `orch-setup github` first.');
     process.exit(1);
   }
+
+  // Validate repo name format before using in API paths
+  validateRepoName(repoFullName);
 
   // Validate repo exists and fetch metadata
   console.log(`  Checking ${repoFullName}...`);

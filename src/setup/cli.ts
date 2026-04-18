@@ -6,8 +6,10 @@
  * GitHub, Linear, and repository integrations.
  */
 
+import { resolve } from 'node:path';
 import { Command } from 'commander';
 import { createTerminalIO } from './renderer';
+import { writeEnvFile } from './env-writer';
 import { runGitHubSetup } from './commands/github';
 import { runRepoAdd } from './commands/repo-add';
 import { runRepoList } from './commands/repo-list';
@@ -90,8 +92,6 @@ program
   .description('Enable or disable Cloudflare tunnel')
   .argument('<on|off>', '"on" to enable, "off" to disable')
   .action((state: string) => {
-    const { resolve } = require('node:path');
-    const { writeEnvFile } = require('./env-writer');
     const envPath = resolve(process.cwd(), '.env');
     if (state === 'on') {
       writeEnvFile(envPath, { ENABLE_TUNNEL: 'true' });

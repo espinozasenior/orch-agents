@@ -56,7 +56,7 @@ function makeTestWorkflowConfig(): WorkflowConfig {
         },
       },
     },
-    defaults: { agents: { maxConcurrent: 8, maxConcurrentPerOrg: 8 }, stall: { timeoutMs: 300000 }, polling: { intervalMs: 30000, enabled: false } },
+    defaults: { agents: { maxConcurrentPerOrg: 8 }, stall: { timeoutMs: 300000 }, polling: { intervalMs: 30000, enabled: false } },
     tracker: { kind: 'linear', apiKey: '', team: 'test', activeTypes: ['unstarted', 'started'], terminalTypes: ['completed', 'canceled'], activeStates: [], terminalStates: [] },
     agents: { maxConcurrent: 8 },
     agent: { maxConcurrentAgents: 8, maxRetryBackoffMs: 300000, maxTurns: 20 },

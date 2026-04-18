@@ -215,7 +215,12 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
     });
   }
 
+  // Tick-scoped config cache: refreshed once per onTick() so all functions
+  // within a single tick share the same snapshot without redundant calls.
+  let _cachedWorkflowConfig: WorkflowConfig | null = null;
+
   function getWorkflowConfig(): WorkflowConfig {
+    if (_cachedWorkflowConfig) return _cachedWorkflowConfig;
     return deps.workflowConfigProvider?.() ?? deps.workflowConfig;
   }
 
@@ -224,46 +229,53 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
       return;
     }
 
-    if (!startupInitialized) {
-      await runStartupCleanup();
-      startupInitialized = true;
-      starting = false;
-    }
+    // Cache config for the duration of this tick
+    _cachedWorkflowConfig = deps.workflowConfigProvider?.() ?? deps.workflowConfig;
 
-    await reconcileRunningIssues();
-
-    const workflowState = deps.workflowState?.();
-    if (workflowState && !workflowState.valid) {
-      logger.warn('Skipping dispatch because WORKFLOW.md is invalid', {
-        error: workflowState.error,
-      });
-      scheduleNextTick();
-      return;
-    }
-
-    let candidates: LinearIssueResponse[] = [];
     try {
-      const workflowConfig = getWorkflowConfig();
-      candidates = await deps.linearClient.fetchIssuesByStates(
-        workflowConfig.tracker?.team ?? '',
-        workflowConfig.tracker?.activeStates ?? [],
-      );
-    } catch (err) {
-      logger.error('Failed to fetch Linear candidate issues', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      if (!startupInitialized) {
+        await runStartupCleanup();
+        startupInitialized = true;
+        starting = false;
+      }
+
+      await reconcileRunningIssues();
+
+      const workflowState = deps.workflowState?.();
+      if (workflowState && !workflowState.valid) {
+        logger.warn('Skipping dispatch because WORKFLOW.md is invalid', {
+          error: workflowState.error,
+        });
+        scheduleNextTick();
+        return;
+      }
+
+      let candidates: LinearIssueResponse[] = [];
+      try {
+        const workflowConfig = _cachedWorkflowConfig;
+        candidates = await deps.linearClient.fetchIssuesByStates(
+          workflowConfig.tracker?.team ?? '',
+          workflowConfig.tracker?.activeStates ?? [],
+        );
+      } catch (err) {
+        logger.error('Failed to fetch Linear candidate issues', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        scheduleNextTick();
+        return;
+      }
+
+      await dispatchEligibleCandidates(candidates);
+
+      // P6 (FR-P6-007): Poll task backbone for output deltas and terminal notifications
+      if (deps.eventBus) {
+        pollTasks(taskRegistry, taskOutputWriter, deps.eventBus);
+      }
+
       scheduleNextTick();
-      return;
+    } finally {
+      _cachedWorkflowConfig = null;
     }
-
-    await dispatchEligibleCandidates(candidates);
-
-    // P6 (FR-P6-007): Poll task backbone for output deltas and terminal notifications
-    if (deps.eventBus) {
-      pollTasks(taskRegistry, taskOutputWriter, deps.eventBus);
-    }
-
-    scheduleNextTick();
   }
 
   function start(): void {
@@ -675,14 +687,40 @@ export function createSymphonyOrchestrator(deps: SymphonyOrchestratorDeps): Symp
 
   function cleanupIssueWorkspace(issueId: string, explicitPath?: string): void {
     const basePath = pathResolve(worktreeBasePath);
-    const workspacePath = explicitPath ?? pathResolve(worktreeBasePath, sanitizePlanId(issueId));
-    if (!workspacePath.startsWith(`${basePath}/`)) {
+
+    if (explicitPath) {
+      if (!explicitPath.startsWith(`${basePath}/`)) {
+        return;
+      }
+      if (existsSync(explicitPath)) {
+        rmSync(explicitPath, { recursive: true, force: true });
+      }
       return;
     }
-    if (!existsSync(workspacePath)) {
-      return;
+
+    // Fallback: no explicit path provided. Check both the new org-namespaced
+    // layout ({basePath}/{owner}/{planId}) and the legacy flat layout
+    // ({basePath}/{planId}).
+    const sanitizedId = sanitizePlanId(issueId);
+
+    // Check legacy flat path
+    const legacyPath = pathResolve(basePath, sanitizedId);
+    if (legacyPath.startsWith(`${basePath}/`) && existsSync(legacyPath)) {
+      rmSync(legacyPath, { recursive: true, force: true });
     }
-    rmSync(workspacePath, { recursive: true, force: true });
+
+    // Check org-namespaced paths: scan owner dirs for matching plan ID
+    if (existsSync(basePath)) {
+      for (const entry of readdirSync(basePath, { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        const candidate = pathResolve(basePath, entry.name, sanitizedId);
+        if (candidate.startsWith(`${basePath}/`) && existsSync(candidate)) {
+          rmSync(candidate, { recursive: true, force: true });
+        }
+      }
+    }
   }
 
   function forwardPromptedMessage(issueId: string, message: { body: string; agentSessionId: string }): void {
