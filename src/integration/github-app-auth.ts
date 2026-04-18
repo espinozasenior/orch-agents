@@ -15,6 +15,8 @@ import type { Logger } from '../shared/logger';
 
 export interface GitHubTokenProvider {
   getToken(): Promise<string>;
+  /** Resolve an installation token for the org/user that owns the given repo. */
+  getTokenForRepo(repoFullName: string): Promise<string>;
   /** Fetch the App's slug from GitHub (e.g., "automata-ai-bot"). Bot login is `${slug}[bot]`. */
   getAppSlug(): Promise<string>;
 }
@@ -55,22 +57,87 @@ export function createJWT(appId: string, privateKey: string): string {
 // Factory
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Installation list types
+// ---------------------------------------------------------------------------
+
+interface GitHubInstallation {
+  id: number;
+  account: { login: string } | null;
+}
+
 export function createGitHubAppTokenProvider(
   opts: GitHubAppTokenProviderOpts,
 ): GitHubTokenProvider {
   const { appId, installationId, logger } = opts;
   const privateKey = readFileSync(opts.privateKeyPath, 'utf-8');
 
-  let cache: { token: string; expiresAt: number } | null = null;
-  let refreshing: Promise<string> | null = null;
+  // Per-installation token cache keyed by installation ID string
+  const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+  const refreshing = new Map<string, Promise<string>>();
 
-  async function doRefresh(): Promise<string> {
-    logger?.debug('Refreshing GitHub App installation token', { appId, installationId });
+  // Installation list cache (refreshed every 10 minutes)
+  let installationsCache: GitHubInstallation[] | null = null;
+  let installationsCacheExpiresAt = 0;
+
+  async function listInstallations(): Promise<GitHubInstallation[]> {
+    if (installationsCache && Date.now() < installationsCacheExpiresAt) {
+      return installationsCache;
+    }
+
+    const jwt = createJWT(appId, privateKey);
+    const response = await fetch('https://api.github.com/app/installations', {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'orch-agents',
+      },
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`GitHub GET /app/installations failed (${response.status}): ${body}`);
+    }
+
+    const data = (await response.json()) as GitHubInstallation[];
+    installationsCache = data;
+    installationsCacheExpiresAt = Date.now() + 10 * 60_000; // 10 min TTL
+
+    logger?.debug('GitHub App installations fetched', {
+      count: data.length,
+      accounts: data.map((i) => i.account?.login).filter(Boolean),
+    });
+
+    return data;
+  }
+
+  async function resolveInstallationId(owner: string): Promise<string> {
+    const installations = await listInstallations();
+    const match = installations.find(
+      (i) => i.account?.login?.toLowerCase() === owner.toLowerCase(),
+    );
+
+    if (!match) {
+      const available = installations
+        .map((i) => i.account?.login)
+        .filter(Boolean)
+        .join(', ');
+      throw new Error(
+        `No GitHub App installation found for owner "${owner}". ` +
+        `Available installations: [${available}]`,
+      );
+    }
+
+    return String(match.id);
+  }
+
+  async function doRefreshForInstallation(instId: string): Promise<string> {
+    logger?.debug('Refreshing GitHub App installation token', { appId, installationId: instId });
 
     const jwt = createJWT(appId, privateKey);
 
     const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}/access_tokens`,
+      `https://api.github.com/app/installations/${instId}/access_tokens`,
       {
         method: 'POST',
         headers: {
@@ -94,30 +161,50 @@ export function createGitHubAppTokenProvider(
       throw new Error('GitHub App token response missing required fields (token, expires_at)');
     }
 
-    cache = {
+    tokenCache.set(instId, {
       token: data.token,
       expiresAt: Date.parse(data.expires_at),
-    };
+    });
 
     logger?.info('GitHub App installation token refreshed', {
       appId,
+      installationId: instId,
       expiresAt: data.expires_at,
     });
 
-    return cache.token;
+    return data.token;
+  }
+
+  function getTokenForInstallation(instId: string): Promise<string> {
+    // Return cached token if >5 min remaining
+    const cached = tokenCache.get(instId);
+    if (cached && cached.expiresAt > Date.now() + 300_000) {
+      return Promise.resolve(cached.token);
+    }
+
+    // Dedup concurrent refresh calls per installation
+    let pending = refreshing.get(instId);
+    if (!pending) {
+      pending = doRefreshForInstallation(instId).finally(() => {
+        refreshing.delete(instId);
+      });
+      refreshing.set(instId, pending);
+    }
+    return pending;
   }
 
   async function getToken(): Promise<string> {
-    // Return cached token if >5 min remaining
-    if (cache && cache.expiresAt > Date.now() + 300_000) {
-      return cache.token;
-    }
+    return getTokenForInstallation(installationId);
+  }
 
-    // Dedup concurrent refresh calls
-    if (!refreshing) {
-      refreshing = doRefresh().finally(() => { refreshing = null; });
+  async function getTokenForRepo(repoFullName: string): Promise<string> {
+    const slashIdx = repoFullName.indexOf('/');
+    if (slashIdx < 1) {
+      throw new Error(`Invalid repo name "${repoFullName}" — expected "owner/repo" format`);
     }
-    return refreshing;
+    const owner = repoFullName.slice(0, slashIdx);
+    const instId = await resolveInstallationId(owner);
+    return getTokenForInstallation(instId);
   }
 
   let appSlug: string | null = null;
@@ -149,5 +236,5 @@ export function createGitHubAppTokenProvider(
     return appSlug;
   }
 
-  return { getToken, getAppSlug };
+  return { getToken, getTokenForRepo, getAppSlug };
 }

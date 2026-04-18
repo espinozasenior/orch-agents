@@ -46,7 +46,7 @@ interface WebhookUpdateResult {
 export async function updateRepoWebhooks(
   repos: Record<string, RepoConfig>,
   webhookUrl: string,
-  token: string,
+  getToken: (repoFullName: string) => Promise<string>,
   webhookSecret: string,
 ): Promise<WebhookUpdateResult[]> {
   const results: WebhookUpdateResult[] = [];
@@ -54,6 +54,9 @@ export async function updateRepoWebhooks(
 
   for (const repoFullName of Object.keys(repos)) {
     try {
+      // Resolve token for this repo's org/owner
+      const token = await getToken(repoFullName);
+
       // List existing hooks
       const hooksRes = await githubFetch(`/repos/${repoFullName}/hooks`, token);
       if (!hooksRes.ok) {

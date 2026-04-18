@@ -68,7 +68,7 @@ export async function runRepoAdd(repoFullName: string): Promise<void> {
       privateKeyPath: env.GITHUB_APP_PRIVATE_KEY_PATH,
       installationId: env.GITHUB_APP_INSTALLATION_ID,
     });
-    token = await provider.getToken();
+    token = await provider.getTokenForRepo(repoFullName);
     console.log('  Using GitHub App authentication');
   } else if (env.GITHUB_TOKEN) {
     token = env.GITHUB_TOKEN;
