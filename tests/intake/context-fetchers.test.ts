@@ -99,10 +99,10 @@ function makeGhClient(impls: Partial<GitHubClient>): GitHubClient {
 // ---------------------------------------------------------------------------
 
 describe('CONTEXT_FETCHERS registry', () => {
-  it('exposes the five built-in fetchers', () => {
+  it('exposes the four built-in fetchers', () => {
     assert.deepEqual(
       Object.keys(CONTEXT_FETCHERS).sort(),
-      ['gh-issue-view', 'gh-pr-checks', 'gh-pr-diff', 'gh-pr-view', 'gh-workflow-run'],
+      ['gh-issue-view', 'gh-pr-checks', 'gh-pr-diff', 'gh-pr-view'],
     );
   });
 

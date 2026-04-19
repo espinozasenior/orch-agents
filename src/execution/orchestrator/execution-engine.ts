@@ -245,7 +245,18 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
         fetchedContext = await fetchContextForSkill(skill, parsedGh, deps.githubClient, logger);
       }
 
-      const composedRawText = `${skill.body}\n\n## Trigger Context\n\n${fetchedContext}`;
+      // Inject raw webhook payload so the agent has full event context
+      const payloadJson = parsedGh?.rawPayload
+        ? JSON.stringify(parsedGh.rawPayload, null, 2)
+        : '';
+      const payloadSection = payloadJson
+        ? `### Event Payload\n\`\`\`json\n${payloadJson.slice(0, 20000)}\n\`\`\`\n\n`
+        : '';
+      const prefetchSection = fetchedContext
+        ? `### Pre-fetched Context\n\n${fetchedContext}`
+        : '';
+
+      const composedRawText = `${skill.body}\n\n## Trigger Context\n\n${payloadSection}${prefetchSection}`;
       enrichedIntake = { ...intakeEvent, rawText: composedRawText };
 
       logger.info('Resolved skill for IntakeCompleted', {

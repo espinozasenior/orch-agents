@@ -7,8 +7,6 @@ allowed-tools:
   - Glob
   - Bash(gh run *)
   - Bash(gh api *)
-context-fetchers:
-  - gh-workflow-run
 ---
 
 # CI Status Handler
@@ -17,17 +15,22 @@ You are responding to a GitHub Actions workflow run completion event.
 
 ## Your job
 
-1. Check if the workflow run succeeded or failed
-2. If **succeeded**: post a brief comment on the associated PR (if any) confirming CI passed
-3. If **failed**: diagnose the failure, identify the failing step, and post actionable feedback
+1. Read the `### Event Payload` JSON block in `## Trigger Context` below
+2. Check if the workflow run succeeded or failed
+3. If **succeeded**: post a brief comment on the associated PR (if any) confirming CI passed
+4. If **failed**: diagnose the failure, identify the failing step, and post actionable feedback
 
 ## How to get context
 
-The trigger event metadata is available in `## Trigger Context`. Extract:
-- `workflow_run.conclusion` (success, failure, cancelled)
-- `workflow_run.html_url` (link to the run)
-- `workflow_run.head_branch` (which branch triggered it)
-- `workflow_run.name` (which workflow ran)
+The full webhook event payload is injected as JSON in the `## Trigger Context` section. Read these fields from the `workflow_run` object:
+- `conclusion` — success, failure, or cancelled
+- `html_url` — link to the run
+- `head_branch` — which branch triggered it
+- `name` — which workflow ran
+- `id` — the run ID (use this with `gh run view`)
+- `pull_requests` — array of associated PRs (may be empty for main pushes)
+
+The `repository.full_name` field gives you the repo slug for `gh` commands.
 
 If you need more detail on a failure:
 
@@ -37,7 +40,7 @@ gh run view <run_id> --repo <repo> --log-failed
 
 ## On success
 
-If a PR exists for the branch, post a brief comment:
+If a PR exists for the branch (check `pull_requests` array), post a brief comment:
 ```bash
 gh pr comment <pr_number> --repo <repo> --body "CI passed. All checks green."
 ```
