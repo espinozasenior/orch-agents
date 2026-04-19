@@ -7,6 +7,8 @@ allowed-tools:
   - Glob
   - Bash(gh run *)
   - Bash(gh api *)
+context-fetchers:
+  - gh-workflow-run
 ---
 
 # CI Status Handler

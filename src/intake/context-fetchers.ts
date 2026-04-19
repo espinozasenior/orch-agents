@@ -40,6 +40,38 @@ export const CONTEXT_FETCHERS: Record<string, ContextFetcher> = {
     if (parsed.prNumber == null) return '';
     return gh.prChecks(parsed.repoFullName, parsed.prNumber);
   },
+  'gh-workflow-run': async (parsed, gh) => {
+    if (parsed.eventType !== 'workflow_run') return '';
+    const payload = parsed.rawPayload as Record<string, unknown>;
+    const run = payload.workflow_run as Record<string, unknown> | undefined;
+    if (!run) return '';
+
+    const conclusion = String(run.conclusion ?? 'unknown');
+    const runId = String(run.id ?? '');
+    const name = String(run.name ?? '');
+    const branch = String(run.head_branch ?? '');
+    const url = String(run.html_url ?? '');
+    const event = String(run.event ?? '');
+
+    let failedLogs = '';
+    if (conclusion === 'failure' && runId) {
+      try {
+        failedLogs = await gh.runLogsFailed(parsed.repoFullName, Number(runId));
+      } catch {
+        failedLogs = '(failed to fetch logs)';
+      }
+    }
+
+    return [
+      `Workflow: ${name}`,
+      `Conclusion: ${conclusion}`,
+      `Branch: ${branch}`,
+      `Triggered by: ${event}`,
+      `Run URL: ${url}`,
+      runId ? `Run ID: ${runId}` : '',
+      failedLogs ? `\nFailed step logs:\n${failedLogs}` : '',
+    ].filter(Boolean).join('\n');
+  },
 };
 
 const SECTION_SEPARATOR = '\n\n---\n\n';

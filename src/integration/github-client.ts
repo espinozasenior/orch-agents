@@ -50,6 +50,8 @@ export interface GitHubClient {
   issueView(repoFullName: string, issueNumber: number): Promise<string>;
   /** P20: Read PR checks (`gh pr checks`). */
   prChecks(repoFullName: string, prNumber: number): Promise<string>;
+  /** Read failed workflow run logs (`gh run view --log-failed`). */
+  runLogsFailed(repoFullName: string, runId: number): Promise<string>;
 }
 
 export interface PushOpts {
@@ -278,6 +280,16 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
         '--repo', repoFullName,
       ]);
       return stdout;
+    },
+
+    async runLogsFailed(repoFullName, runId) {
+      validateRepo(repoFullName);
+      const { stdout } = await run('gh', [
+        'run', 'view', String(runId),
+        '--repo', repoFullName,
+        '--log-failed',
+      ]);
+      return stdout.slice(0, 5000);
     },
   };
 }
