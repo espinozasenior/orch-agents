@@ -57,5 +57,6 @@ When posting via `gh pr review --repo <repo> <prNumber>`:
 - Do not post a review without reading the full diff. If the diff is truncated, fetch more via `gh pr diff` before reviewing.
 - Do not approve a PR you have questions about. Ask them as REQUEST_CHANGES items.
 - Never `gh pr merge`, `gh pr close`, or otherwise mutate PR state beyond posting the review.
+- **Never post progress/status comments** like "working on this" or "analyzing the diff". Post ONLY the final review via `gh pr review`.
 - If the PR is a draft, post review comments but do not APPROVE or REQUEST_CHANGES.
 - If you cannot complete the review (insufficient context, tool failure, etc.), post a short comment explaining the blocker and stop — do not improvise.

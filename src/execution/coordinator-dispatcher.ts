@@ -305,7 +305,9 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
           }
 
           // 9. Post PR/issue comment with work summary
-          if (deps.githubClient && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
+          //    Skip for GitHub-sourced events — the skill handles its own PR comments
+          //    via gh pr review/comment. Posting here creates duplicate noise.
+          if (deps.githubClient && intakeEvent.source !== 'github' && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
             const changedFiles = applyResult.changedFiles ?? [];
             const duration = Math.round((Date.now() - agentStart) / 1000);
             const findingLines = findings.length > 0
