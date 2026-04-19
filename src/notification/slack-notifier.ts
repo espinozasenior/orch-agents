@@ -91,9 +91,7 @@ export function startSlackNotifier(deps: SlackNotifierDeps): () => void {
     if (!ctx) return;
 
     const skillName = ctx.skillPath.split('/').slice(-2, -1)[0] || ctx.skillPath;
-    const outputPreview = output
-      ? `\n\n${output.slice(0, 1500)}${output.length > 1500 ? '\n_(truncated)_' : ''}`
-      : '';
+    const outputPreview = output ? `\n\n${output}` : '';
     const text = [
       `*Agent completed* on \`${ctx.repoFullName}\``,
       `Event: ${ctx.eventType} | Skill: ${skillName}`,

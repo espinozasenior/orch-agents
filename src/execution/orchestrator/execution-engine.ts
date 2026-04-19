@@ -277,11 +277,18 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
         return;
       }
 
-      const latestOutput = result.agentResults
+      // Use the last agent's output as the final result summary.
+      // The output contains all assistant messages joined by \n — take the
+      // last substantial block as the agent's conclusion.
+      const lastAgentOutput = result.agentResults
         .filter(r => r.output)
-        .map(r => r.output!)
+        .pop()?.output ?? '';
+      const lastBlock = lastAgentOutput
+        .split('\n')
+        .filter(line => line.trim().length > 0)
+        .slice(-20)
         .join('\n')
-        .slice(0, 4000);
+        .slice(0, 2000);
 
       eventBus.publish(
         createDomainEvent('WorkCompleted', {
@@ -289,7 +296,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           planId: taskPlanId,
           phaseCount: result.agentResults.length,
           totalDuration: result.totalDuration,
-          output: latestOutput || undefined,
+          output: lastBlock || undefined,
         }, correlationId),
       );
     } catch (err) {
@@ -433,11 +440,15 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
           retryCount: 0,
         }, correlationId));
       } else {
-        const promptOutput = result.agentResults
+        const promptLastOutput = result.agentResults
           .filter(r => r.output)
-          .map(r => r.output!)
+          .pop()?.output ?? '';
+        const promptOutput = promptLastOutput
+          .split('\n')
+          .filter(line => line.trim().length > 0)
+          .slice(-20)
           .join('\n')
-          .slice(0, 4000);
+          .slice(0, 2000);
 
         eventBus.publish(createDomainEvent('WorkCompleted', {
           workItemId: toWorkItemId(executionKey),
