@@ -162,6 +162,13 @@ export async function webhookRouter(
           return reply.status(202).send({ id: deliveryId, status: 'skipped' });
         }
 
+        // Skip synchronize events from bot pushes (prevents feedback loop
+        // when ci-status agent pushes a fix triggering pull_request.synchronize)
+        if (eventType === 'pull_request' && parsed.action === 'synchronize' && parsed.senderIsBot) {
+          log.info('Skipping synchronize from bot', { sender: parsed.sender, deliveryId });
+          return reply.status(202).send({ id: deliveryId, status: 'skipped' });
+        }
+
         // Step 2.5: Self-comment loop prevention for issue_comment events
         if (eventType === 'issue_comment' && parsed.commentBody) {
           const commentAuthor = (
