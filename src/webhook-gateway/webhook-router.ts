@@ -156,6 +156,13 @@ export async function webhookRouter(
           return reply.status(202).send({ id: deliveryId, status: 'skipped' });
         }
 
+        // Skip synchronize events triggered by the bot (prevents feedback loop
+        // when ci-status agent pushes a fix, which triggers pull_request.synchronize)
+        if (eventType === 'pull_request' && parsed.action === 'synchronize' && parsed.senderIsBot) {
+          log.info('Skipping synchronize from bot', { sender: parsed.sender, deliveryId });
+          return reply.status(202).send({ id: deliveryId, status: 'skipped' });
+        }
+
         // Skip create events for agent branches
         if (eventType === 'create' && parsed.branch?.startsWith('agent/')) {
           log.info('Skipping create for agent branch', { branch: parsed.branch, deliveryId });

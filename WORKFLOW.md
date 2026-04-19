@@ -31,7 +31,6 @@ repos:
     github:
       events:
         pull_request.opened: .claude/skills/github-ops/SKILL.md
-        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
         pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
         issues.opened: .claude/skills/github-deep-research/SKILL.md
     tracker:
@@ -46,7 +45,6 @@ repos:
     github:
       events:
         pull_request.opened: .claude/skills/github-ops/SKILL.md
-        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
         pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
         issues.opened: .claude/skills/github-deep-research/SKILL.md
         workflow_run.completed: .claude/skills/ci-status/SKILL.md
@@ -56,9 +54,9 @@ repos:
     github:
       events:
         pull_request.opened: .claude/skills/github-ops/SKILL.md
-        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
         issues.opened: .claude/skills/github-ops/SKILL.md
         # pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+        # pull_request.synchronize: .claude/skills/github-ops/SKILL.md
         # pull_request.closed: .claude/skills/github-ops/SKILL.md
         # issue_comment.created: .claude/skills/github-ops/SKILL.md
         # push.default_branch: .claude/skills/github-ops/SKILL.md
