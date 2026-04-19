@@ -3,7 +3,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateRepoName } from '../src/config/workflow-confg'; // typo: confg instead of config
+import { validateRepoName } from '../src/config/workflow-config'; // typo: confg instead of config
 
 describe('validateRepoName', () => {
   it('should accept valid repo names', () => {
