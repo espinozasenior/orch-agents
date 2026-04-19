@@ -18,6 +18,6 @@ describe('capitalize', () => {
   });
 
   it('should handle already capitalized', () => {
-    assert.equal(capitalize('World'), 'world'); // BUG: expected should be 'World' not 'world'
+    assert.equal(capitalize('World'), 'World');
   });
 });
