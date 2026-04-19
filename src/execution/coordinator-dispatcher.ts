@@ -57,6 +57,8 @@ export interface CoordinatorDispatcherDeps {
   taskRegistry?: TaskRegistry;
   /** MCP server descriptors passed through to coordinator prompt context. */
   mcpClients?: Array<{ name: string }>;
+  /** Provides a fresh GitHub token for the agent's gh CLI (bot identity). */
+  getGitHubToken?: () => Promise<string>;
 }
 
 export interface CoordinatorDispatcher {
@@ -197,7 +199,18 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             deps.taskRegistry.update(taskId, task);
           }
 
-          // 5. Run Claude Code session in worktree
+          // 5. Set GH_TOKEN for bot identity in agent's gh CLI
+          if (deps.getGitHubToken) {
+            try {
+              process.env.GH_TOKEN = await deps.getGitHubToken();
+            } catch (err) {
+              deps.logger.warn('Failed to set GH_TOKEN for agent', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+
+          // 6. Run Claude Code session in worktree
           const execResult = await deps.interactiveExecutor.execute({
             prompt,
             worktreePath: handle.path,

@@ -347,6 +347,7 @@ async function main(): Promise<void> {
       eventBus,
       agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
       mcpClients,
+      getGitHubToken: tokenProvider ? () => tokenProvider!.getToken() : undefined,
     });
 
     logger.info('Interactive agent execution enabled', {
