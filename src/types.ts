@@ -90,6 +90,17 @@ export interface SystemSourceMetadata {
 }
 
 /**
+ * Automation-originated metadata, stamped by the scheduling bounded context.
+ */
+export interface AutomationSourceMetadata {
+  readonly source: 'automation';
+  automationId: string;
+  trigger: 'cron' | 'webhook' | 'manual';
+  /** Relative path to a skill file, if the automation config specifies one. */
+  skillPath?: string;
+}
+
+/**
  * Discriminated union of all source metadata variants.
  *
  * Narrows on the `source` discriminant field — each variant only contains
@@ -99,7 +110,8 @@ export type IntakeSourceMetadata =
   | GitHubSourceMetadata
   | LinearSourceMetadata
   | StagingSourceMetadata
-  | SystemSourceMetadata;
+  | SystemSourceMetadata
+  | AutomationSourceMetadata;
 
 // ---------------------------------------------------------------------------
 // Type guards for narrowing IntakeSourceMetadata
@@ -117,10 +129,14 @@ export function isStagingMeta(meta: IntakeSourceMetadata): meta is StagingSource
   return meta.source === 'staging';
 }
 
+export function isAutomationMeta(meta: IntakeSourceMetadata): meta is AutomationSourceMetadata {
+  return meta.source === 'automation';
+}
+
 export interface IntakeEvent {
   id: string;
   timestamp: string;
-  source: 'github' | 'linear' | 'client' | 'schedule' | 'system';
+  source: 'github' | 'linear' | 'client' | 'schedule' | 'system' | 'automation';
   sourceMetadata: IntakeSourceMetadata;
   entities: {
     repo?: string;

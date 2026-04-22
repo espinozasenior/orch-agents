@@ -468,6 +468,22 @@ async function main(): Promise<void> {
   // Assigned after server.listen() if ENABLE_TUNNEL is set.
   let tunnelManager: import('./tunnel/cloudflare-tunnel').TunnelManager | undefined;
 
+  // ── Automation scheduling (cron + webhook + auto-pause) ──────
+  const { createAutomationRunPersistence } = await import('./scheduling/automation-run-persistence');
+  const { createCronScheduler } = await import('./scheduling/cron-scheduler');
+
+  const automationPersistence = createAutomationRunPersistence({
+    dbPath: process.env.AUTOMATION_DB_PATH ?? './data/automation-runs.db',
+    logger,
+  });
+  const cronScheduler = createCronScheduler({
+    workflowConfigProvider: () => workflowConfigStore.requireConfig(),
+    eventBus,
+    logger,
+    persistence: automationPersistence,
+  });
+  cronScheduler.start();
+
   const pipeline = await startPipeline({
     eventBus, logger, reviewGate, localAgentTask, workflowConfig,
     slackWebhookUrl: config.slackWebhookUrl,
@@ -512,6 +528,7 @@ async function main(): Promise<void> {
       : undefined,
     tokenPersistence,
     directSpawnStrategy,
+    cronScheduler,
   });
 
   try {
@@ -591,6 +608,12 @@ async function main(): Promise<void> {
     forceExitTimer.unref();
 
     try {
+      logger.info('Shutdown step: stopping cron scheduler');
+      cronScheduler.stop();
+
+      logger.info('Shutdown step: closing automation persistence');
+      automationPersistence.close();
+
       logger.info('Shutdown step: stopping tunnel');
       tunnelManager?.stop();
 

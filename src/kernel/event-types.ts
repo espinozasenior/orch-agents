@@ -308,6 +308,35 @@ export type WorkspaceSetupFailedEvent = DomainEvent<
 >;
 
 // ---------------------------------------------------------------------------
+// Automation scheduling events (Phase 2 — cron / webhook / auto-pause)
+// ---------------------------------------------------------------------------
+
+export type AutomationTriggeredEvent = DomainEvent<
+  'AutomationTriggered',
+  { automationId: string; repoName: string; trigger: 'cron' | 'webhook' | 'manual'; runId: string }
+>;
+
+export type AutomationCompletedEvent = DomainEvent<
+  'AutomationCompleted',
+  { automationId: string; runId: string; durationMs: number }
+>;
+
+export type AutomationFailedEvent = DomainEvent<
+  'AutomationFailed',
+  { automationId: string; runId: string; durationMs: number; error: string; consecutiveFailures: number }
+>;
+
+export type AutomationPausedEvent = DomainEvent<
+  'AutomationPaused',
+  { automationId: string; consecutiveFailures: number }
+>;
+
+export type AutomationResumedEvent = DomainEvent<
+  'AutomationResumed',
+  { automationId: string }
+>;
+
+// ---------------------------------------------------------------------------
 // Union of all domain event types
 // ---------------------------------------------------------------------------
 
@@ -356,7 +385,12 @@ export type AnyDomainEvent =
   | ChildAgentCancelledEvent
   | WorkspaceSetupStartedEvent
   | WorkspaceSetupCompletedEvent
-  | WorkspaceSetupFailedEvent;
+  | WorkspaceSetupFailedEvent
+  | AutomationTriggeredEvent
+  | AutomationCompletedEvent
+  | AutomationFailedEvent
+  | AutomationPausedEvent
+  | AutomationResumedEvent;
 
 // ---------------------------------------------------------------------------
 // Event type string literals for use with the event bus
@@ -414,4 +448,9 @@ export interface DomainEventMap {
   WorkspaceSetupStarted: WorkspaceSetupStartedEvent;
   WorkspaceSetupCompleted: WorkspaceSetupCompletedEvent;
   WorkspaceSetupFailed: WorkspaceSetupFailedEvent;
+  AutomationTriggered: AutomationTriggeredEvent;
+  AutomationCompleted: AutomationCompletedEvent;
+  AutomationFailed: AutomationFailedEvent;
+  AutomationPaused: AutomationPausedEvent;
+  AutomationResumed: AutomationResumedEvent;
 }

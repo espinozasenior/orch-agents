@@ -21,6 +21,7 @@ import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 import type { LinearAuthStrategy } from './integration/linear/linear-client';
 import type { OAuthTokenStore } from './integration/linear/oauth-token-store';
 import type { OAuthTokenPersistence } from './integration/linear/oauth-token-persistence';
+import type { CronScheduler } from './scheduling/cron-scheduler';
 
 export interface ServerDependencies {
   config: AppConfig;
@@ -39,6 +40,8 @@ export interface ServerDependencies {
   linearClient?: import('./integration/linear/linear-client').LinearClient;
   /** Token persistence for cleanup on OAuth revocation. */
   tokenPersistence?: OAuthTokenPersistence;
+  /** Cron scheduler for automation routes (optional). */
+  cronScheduler?: CronScheduler;
 }
 
 /**
@@ -69,6 +72,46 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
       timestamp: new Date().toISOString(),
     };
   });
+
+  // ── Automation scheduling API ────────────────────────────────
+  if (deps.cronScheduler) {
+    const cronScheduler = deps.cronScheduler;
+
+    server.get('/automations', async () => {
+      return cronScheduler.getSnapshot();
+    });
+
+    server.post<{ Params: { id: string } }>('/automations/:id/trigger', async (request, reply) => {
+      try {
+        const runId = await cronScheduler.triggerManually(request.params.id);
+        return { runId };
+      } catch (err) {
+        return reply.status(404).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    });
+
+    server.post<{ Params: { id: string } }>('/automations/:id/resume', async (request, reply) => {
+      try {
+        cronScheduler.resumeAutomation(request.params.id);
+        return { ok: true };
+      } catch (err) {
+        return reply.status(404).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    });
+
+    server.post<{ Params: { id: string } }>('/webhooks/automation/:id', async (request, reply) => {
+      try {
+        const runId = await cronScheduler.triggerWebhook(request.params.id);
+        return { runId };
+      } catch (err) {
+        return reply.status(404).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    });
+
+    logger.info('Automation routes registered', {
+      routes: ['/automations', '/automations/:id/trigger', '/automations/:id/resume', '/webhooks/automation/:id'],
+    });
+  }
 
   // ── Child agent status API (direct spawn mode) ──────────────
   if (deps.directSpawnStrategy) {
