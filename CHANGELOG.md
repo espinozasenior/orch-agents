@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1.0] - 2026-04-22
+
+### Added
+
+- **Post-Execution Actions Module** — Extracted push, PR creation, review submission, PR comment, and Linear response from `coordinator-dispatcher.ts` into `post-execution-actions.ts`. Each action is independent and failure-isolated.
+- **Agent PR Creation** — Agents can now create PRs via `GitHubClient.createPR()` when they push a branch without an existing PR. Includes idempotency handling for already-existing PRs.
+- **GitHub Issue Creation** — `GitHubClient.createIssue()` for agents to open issues with labels.
+- **Inline Review Comments** — `Finding` type now carries `filePath`, `lineNumber`, and `commitSha` for structured PR review submissions. `diff-review-parser` extracts these from both explicit fields and `path:line` location strings.
+- **Agent Depth Limiting** — Maximum agent depth of 3 levels. Workers at max depth have `Agent`/`AgentTool` removed from their allowed tools.
+- **Concurrent Worker Cap** — Coordinator injects a capacity warning when the active worker count reaches the configurable max (default 8).
+- **Agent Spawn Observability** — `sdk-executor` emits `agentSpawn` events with child prompt preview and subagent type.
+- **Agent PR Tracking** — `trackAgentPR()`/`isAgentPR()` for feedback loop prevention on agent-created PRs.
+- **Bot PR Skip** — Webhook router skips `pull_request.opened/reopened` events from bot senders to prevent feedback loops.
+- **Worktree Isolation Guidance** — Coordinator prompt now instructs write-heavy workers to use `isolation: "worktree"`.
+
+### Changed
+
+- **Coordinator Dispatcher** — Simplified from ~450 LOC to ~400 LOC by delegating post-execution side effects to the new module.
+- **ReviewGate Integration** — Coordinator dispatcher now accepts an optional `ReviewGate` dependency and runs it before post-execution actions.
+- **Coordinator Session** — Exposes `registerWorker()` for external worker state seeding and accepts `maxChildAgents` config.
+
 ## [0.4.0] - 2026-04-12
 
 ### Added
