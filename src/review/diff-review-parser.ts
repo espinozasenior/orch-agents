@@ -84,13 +84,36 @@ export function toFinding(raw: unknown): Finding {
     ? rawSeverity
     : 'info') as Finding['severity'];
 
-  return {
+  const finding: Finding = {
     id: obj.id ? String(obj.id) : randomUUID(),
     severity,
     category: String(obj.category ?? 'diff-review'),
     message: String(obj.message ?? ''),
     ...(obj.location ? { location: String(obj.location) } : {}),
   };
+
+  // Extract structured file/line from explicit fields or parse from location
+  if (obj.filePath || obj.file_path || obj.file || obj.path) {
+    finding.filePath = String(obj.filePath ?? obj.file_path ?? obj.file ?? obj.path);
+  }
+  if (obj.lineNumber != null || obj.line_number != null || obj.line != null) {
+    const rawLine = Number(obj.lineNumber ?? obj.line_number ?? obj.line);
+    if (!isNaN(rawLine) && rawLine > 0) finding.lineNumber = rawLine;
+  }
+  if (obj.commitSha || obj.commit_sha) {
+    finding.commitSha = String(obj.commitSha ?? obj.commit_sha);
+  }
+
+  // Fallback: try to parse "path:line" from location string
+  if (!finding.filePath && finding.location) {
+    const locMatch = finding.location.match(/^([^\s:]+):(\d+)/);
+    if (locMatch) {
+      finding.filePath = locMatch[1];
+      finding.lineNumber = parseInt(locMatch[2], 10);
+    }
+  }
+
+  return finding;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,12 +150,19 @@ export function parseFindings(rawOutput: string): Finding[] {
   for (const line of lines) {
     const match = line.match(/\[(INFO|WARNING|ERROR|CRITICAL)\]\s*(\w[\w-]*):\s*(.+)/i);
     if (match) {
-      findings.push({
+      const finding: Finding = {
         id: randomUUID(),
         severity: match[1].toLowerCase() as Finding['severity'],
         category: match[2],
         message: match[3].trim(),
-      });
+      };
+      // Try to extract file:line from the message (e.g., "src/foo.ts:42 — description")
+      const locMatch = match[3].match(/^([^\s:]+):(\d+)\s/);
+      if (locMatch) {
+        finding.filePath = locMatch[1];
+        finding.lineNumber = parseInt(locMatch[2], 10);
+      }
+      findings.push(finding);
     }
   }
 

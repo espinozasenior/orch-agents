@@ -42,6 +42,10 @@ export interface CoordinatorSessionDeps {
   logger?: Logger;
   mcpClients?: Array<{ name: string }>;
   scratchpadDir?: string;
+  /** Step 3: Callback fired when a child agent is spawned (wired by dispatcher). */
+  onAgentSpawn?: (info: { childPrompt: string; childSubagentType?: string }) => void;
+  /** Step 6: Maximum number of concurrent child agents. Defaults to 8. */
+  maxChildAgents?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,12 +60,16 @@ export interface CoordinatorSessionDeps {
  */
 export function createCoordinatorSession(
   deps: CoordinatorSessionDeps,
-): InteractiveTaskExecutor & { enqueueTask(req: CoordinatorTaskRequest): void } {
+): InteractiveTaskExecutor & {
+  enqueueTask(req: CoordinatorTaskRequest): void;
+  registerWorker(id: string, worker: WorkerState): void;
+} {
   const {
     baseExecutor,
     logger,
     mcpClients = [],
     scratchpadDir,
+    maxChildAgents = 8,
   } = deps;
 
   // Coordinator state: tracks workers, findings, current phase, and task queue
@@ -272,8 +280,17 @@ export function createCoordinatorSession(
   // Execute
   // -------------------------------------------------------------------------
 
+  /**
+   * Register a worker in the coordinator state. Used externally to seed
+   * worker state (e.g., from dispatcher-level spawn tracking).
+   */
+  function registerWorker(id: string, worker: WorkerState): void {
+    state.workers.set(id, worker);
+  }
+
   return {
     enqueueTask,
+    registerWorker,
 
     async execute(
       request: InteractiveExecutionRequest,
@@ -322,6 +339,12 @@ export function createCoordinatorSession(
           taskQueue.map((t, i) => `${i + 1}. [${t.source}] ${t.description} (priority: ${t.priority})`).join('\n')
         : '';
 
+      // Step 6: Capacity guard — inject warning when at max concurrent workers
+      const activeWorkerCount = state.workers.size;
+      const capacityWarning = activeWorkerCount >= maxChildAgents
+        ? `\n\nIMPORTANT: You have reached the maximum number of concurrent workers (${maxChildAgents}). Wait for existing workers to complete before spawning new ones.`
+        : '';
+
       const enhancedPrompt = [
         '--- COORDINATOR SYSTEM PROMPT ---',
         systemPrompt,
@@ -330,6 +353,7 @@ export function createCoordinatorSession(
         workerToolsContext,
         queueContext,
         actionDirective ? `\n--- COORDINATOR ACTION ---\n${actionDirective}` : '',
+        capacityWarning,
         '',
         '--- TASK ---',
         request.prompt,

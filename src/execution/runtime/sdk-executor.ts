@@ -94,6 +94,15 @@ type NormalizedRuntimeEvent =
     agentType: string;
     sessionId?: string;
     error: string;
+  }
+  | {
+    type: 'agentSpawn';
+    timestamp: number;
+    agentRole: string;
+    agentType: string;
+    sessionId?: string;
+    childPrompt?: string;
+    childSubagentType?: string;
   };
 
 export interface SdkExecutorDeps {
@@ -125,15 +134,28 @@ export interface SdkExecutorDeps {
    *  allowedTools list is derived from the registry instead of the
    *  hardcoded default. Omitting it preserves prior behavior exactly. */
   deferredToolRegistry?: import('../../services/deferred-tools').DeferredToolRegistry;
+  /** Current agent depth for depth limiting. 0 = top-level coordinator.
+   *  When agentDepth >= MAX_AGENT_DEPTH (3), Agent/AgentTool are removed
+   *  from allowedTools to prevent further sub-spawning. */
+  agentDepth?: number;
+  /** Maximum agent depth before Agent tool is removed. Defaults to 3. */
+  maxAgentDepth?: number;
 }
 
 export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskExecutor {
   const logger = deps.logger;
   // P12: prefer deferredToolRegistry → explicit allowedTools → hardcoded default.
-  const allowedTools =
+  let allowedTools =
     deps.deferredToolRegistry?.list().map((t) => t.name)
     ?? deps.allowedTools
     ?? ['Edit', 'Write', 'Read', 'Bash', 'Grep', 'Glob'];
+
+  // Step 5: Depth limiting — remove Agent/AgentTool when at max depth
+  const currentDepth = deps.agentDepth ?? 0;
+  const maxAgentDepth = deps.maxAgentDepth ?? 3;
+  if (currentDepth >= maxAgentDepth) {
+    allowedTools = allowedTools.filter((t) => t !== 'Agent' && t !== 'AgentTool');
+  }
   const permissionPolicy: SessionPermissionPolicy = {
     permissionMode: 'default',
     allowDangerouslySkipPermissions: false,
@@ -342,6 +364,20 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
               resourceId: toolResult && 'resourceId' in toolResult ? toolResult.resourceId : undefined,
               error: toolResult && !toolResult.ok ? toolResult.error : undefined,
             });
+
+            // Step 2: AgentTool event interception — emit agentSpawn observability event
+            if (toolEvent.toolName === 'Agent' || toolEvent.toolName === 'AgentTool') {
+              const agentArgs = extractAgentToolArgs(event);
+              emitNormalizedEvent(eventSink, {
+                type: 'agentSpawn',
+                timestamp: activityTimestamp,
+                agentRole: request.agentRole,
+                agentType: request.agentType,
+                sessionId,
+                childPrompt: agentArgs?.prompt?.slice(0, 200),
+                childSubagentType: agentArgs?.subagentType,
+              });
+            }
           }
 
           const result = extractResult(event);
@@ -784,6 +820,39 @@ function emitNormalizedEvent(
       sessionId: payload.sessionId,
     });
   }
+}
+
+/**
+ * Extract AgentTool arguments (prompt, subagent_type, description) from a tool
+ * call event. Returns undefined if the event doesn't contain parseable args.
+ */
+function extractAgentToolArgs(
+  event: unknown,
+): { prompt?: string; subagentType?: string; description?: string } | undefined {
+  if (!event || typeof event !== 'object') {
+    return undefined;
+  }
+
+  const candidate = event as {
+    arguments?: unknown;
+    input?: unknown;
+    params?: unknown;
+  };
+
+  const args = asRecord(candidate.input ?? candidate.arguments ?? candidate.params);
+  if (!args) {
+    return undefined;
+  }
+
+  return {
+    prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
+    subagentType: typeof args.subagent_type === 'string'
+      ? args.subagent_type
+      : typeof args.subagentType === 'string'
+        ? args.subagentType
+        : undefined,
+    description: typeof args.description === 'string' ? args.description : undefined,
+  };
 }
 
 function extractTextFromContent(content: unknown): string {

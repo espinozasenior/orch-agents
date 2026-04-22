@@ -413,4 +413,198 @@ describe('GitHubClient', () => {
       await assert.rejects(() => client.prChecks('owner/repo', 1), ExecutionError);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // createPR
+  // ---------------------------------------------------------------------------
+
+  describe('createPR', () => {
+    it('calls gh pr create with correct args and parses result', async () => {
+      const calls: ExecCall[] = [];
+      const exec: GitHubClientDeps['exec'] = async (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return { stdout: 'https://github.com/owner/repo/pull/99\n', stderr: '' };
+      };
+      const client = createGitHubClient({ exec });
+
+      const result = await client.createPR('owner/repo', {
+        head: 'feature-branch',
+        base: 'main',
+        title: 'Add feature',
+        body: 'Description here',
+      });
+
+      assert.equal(result.number, 99);
+      assert.equal(result.url, 'https://github.com/owner/repo/pull/99');
+      assert.equal(calls[0].command, 'gh');
+      assert.deepEqual(calls[0].args, [
+        'pr', 'create',
+        '--repo', 'owner/repo',
+        '--head', 'feature-branch',
+        '--base', 'main',
+        '--title', 'Add feature',
+        '--body', 'Description here',
+      ]);
+    });
+
+    it('includes --draft flag when draft option is true', async () => {
+      const { exec, calls } = createMockExec();
+      // Override to return a URL
+      const execWithUrl: GitHubClientDeps['exec'] = async (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return { stdout: 'https://github.com/owner/repo/pull/1\n', stderr: '' };
+      };
+      const client = createGitHubClient({ exec: execWithUrl });
+
+      await client.createPR('owner/repo', {
+        head: 'branch', base: 'main', title: 'Draft', body: 'WIP', draft: true,
+      });
+
+      assert.ok(calls[0].args.includes('--draft'));
+    });
+
+    it('throws on invalid repo format', async () => {
+      const { exec } = createMockExec();
+      const client = createGitHubClient({ exec });
+
+      await assert.rejects(
+        () => client.createPR('invalid', { head: 'b', base: 'main', title: 't', body: 'b' }),
+        (err: unknown) => {
+          assert.ok(err instanceof ExecutionError);
+          assert.ok(err.message.includes('Invalid repo format'));
+          return true;
+        },
+      );
+    });
+
+    it('throws on empty title', async () => {
+      const { exec } = createMockExec();
+      const client = createGitHubClient({ exec });
+
+      await assert.rejects(
+        () => client.createPR('owner/repo', { head: 'b', base: 'main', title: '', body: 'b' }),
+        (err: unknown) => {
+          assert.ok(err instanceof ExecutionError);
+          assert.ok(err.message.includes('title'));
+          return true;
+        },
+      );
+    });
+
+    it('throws ExecutionError on exec failure', async () => {
+      const exec = createFailingExec('PR creation failed');
+      const client = createGitHubClient({ exec });
+
+      await assert.rejects(
+        () => client.createPR('owner/repo', { head: 'b', base: 'main', title: 't', body: 'b' }),
+        (err: unknown) => {
+          assert.ok(err instanceof ExecutionError);
+          assert.ok(err.message.includes('PR creation failed'));
+          return true;
+        },
+      );
+    });
+
+    it('extracts PR number from various URL formats', async () => {
+      const exec: GitHubClientDeps['exec'] = async () => {
+        return { stdout: 'https://github.com/org/my-repo.v2/pull/42\n', stderr: '' };
+      };
+      const client = createGitHubClient({ exec });
+
+      const result = await client.createPR('org/my-repo.v2', {
+        head: 'b', base: 'main', title: 't', body: 'b',
+      });
+
+      assert.equal(result.number, 42);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // createIssue
+  // ---------------------------------------------------------------------------
+
+  describe('createIssue', () => {
+    it('calls gh issue create with correct args and parses result', async () => {
+      const calls: ExecCall[] = [];
+      const exec: GitHubClientDeps['exec'] = async (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return { stdout: 'https://github.com/owner/repo/issues/55\n', stderr: '' };
+      };
+      const client = createGitHubClient({ exec });
+
+      const result = await client.createIssue('owner/repo', {
+        title: 'Bug report',
+        body: 'Steps to reproduce',
+      });
+
+      assert.equal(result.number, 55);
+      assert.equal(result.url, 'https://github.com/owner/repo/issues/55');
+      assert.equal(calls[0].command, 'gh');
+      assert.deepEqual(calls[0].args, [
+        'issue', 'create',
+        '--repo', 'owner/repo',
+        '--title', 'Bug report',
+        '--body', 'Steps to reproduce',
+      ]);
+    });
+
+    it('includes labels when provided', async () => {
+      const calls: ExecCall[] = [];
+      const exec: GitHubClientDeps['exec'] = async (command, args, opts) => {
+        calls.push({ command, args, opts });
+        return { stdout: 'https://github.com/owner/repo/issues/1\n', stderr: '' };
+      };
+      const client = createGitHubClient({ exec });
+
+      await client.createIssue('owner/repo', {
+        title: 'Bug', body: 'desc', labels: ['bug', 'priority'],
+      });
+
+      assert.ok(calls[0].args.includes('--label'));
+      assert.ok(calls[0].args.includes('bug'));
+      assert.ok(calls[0].args.includes('priority'));
+    });
+
+    it('throws on invalid repo format', async () => {
+      const { exec } = createMockExec();
+      const client = createGitHubClient({ exec });
+
+      await assert.rejects(
+        () => client.createIssue('bad', { title: 't', body: 'b' }),
+        (err: unknown) => {
+          assert.ok(err instanceof ExecutionError);
+          assert.ok(err.message.includes('Invalid repo format'));
+          return true;
+        },
+      );
+    });
+
+    it('throws on empty title', async () => {
+      const { exec } = createMockExec();
+      const client = createGitHubClient({ exec });
+
+      await assert.rejects(
+        () => client.createIssue('owner/repo', { title: '', body: 'b' }),
+        (err: unknown) => {
+          assert.ok(err instanceof ExecutionError);
+          assert.ok(err.message.includes('title'));
+          return true;
+        },
+      );
+    });
+
+    it('throws ExecutionError on exec failure', async () => {
+      const exec = createFailingExec('issue creation failed');
+      const client = createGitHubClient({ exec });
+
+      await assert.rejects(
+        () => client.createIssue('owner/repo', { title: 't', body: 'b' }),
+        (err: unknown) => {
+          assert.ok(err instanceof ExecutionError);
+          assert.ok(err.message.includes('issue creation failed'));
+          return true;
+        },
+      );
+    });
+  });
 });

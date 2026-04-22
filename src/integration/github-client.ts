@@ -50,6 +50,34 @@ export interface GitHubClient {
   issueView(repoFullName: string, issueNumber: number): Promise<string>;
   /** P20: Read PR checks (`gh pr checks`). */
   prChecks(repoFullName: string, prNumber: number): Promise<string>;
+  /** Create a pull request. Returns the PR number and URL. */
+  createPR(repo: string, opts: CreatePROpts): Promise<CreatePRResult>;
+  /** Create a GitHub issue. Returns the issue number and URL. */
+  createIssue(repo: string, opts: CreateIssueOpts): Promise<CreateIssueResult>;
+}
+
+export interface CreatePROpts {
+  head: string;
+  base: string;
+  title: string;
+  body: string;
+  draft?: boolean;
+}
+
+export interface CreatePRResult {
+  number: number;
+  url: string;
+}
+
+export interface CreateIssueOpts {
+  title: string;
+  body: string;
+  labels?: string[];
+}
+
+export interface CreateIssueResult {
+  number: number;
+  url: string;
 }
 
 export interface PushOpts {
@@ -107,6 +135,21 @@ function validateBody(body: string): void {
   if (!body || body.trim().length === 0) {
     throw new ExecutionError('Comment body must not be empty.');
   }
+}
+
+function validateTitle(title: string): void {
+  if (!title || title.trim().length === 0) {
+    throw new ExecutionError('PR/issue title must not be empty.');
+  }
+}
+
+/** Extract a number from a GitHub URL like https://github.com/owner/repo/pull/42 */
+function extractNumberFromUrl(url: string, type: 'pull' | 'issues'): number {
+  const match = url.match(new RegExp(`/${type}/(\\d+)`));
+  if (!match) {
+    throw new ExecutionError(`Could not extract ${type} number from URL: ${url}`);
+  }
+  return parseInt(match[1], 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +321,50 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
         '--repo', repoFullName,
       ]);
       return stdout;
+    },
+
+    async createPR(repo, opts) {
+      validateRepo(repo);
+      validateTitle(opts.title);
+
+      const args = [
+        'pr', 'create',
+        '--repo', repo,
+        '--head', opts.head,
+        '--base', opts.base,
+        '--title', opts.title,
+        '--body', opts.body,
+      ];
+      if (opts.draft) {
+        args.push('--draft');
+      }
+
+      const { stdout } = await run('gh', args);
+      const url = stdout.trim();
+      const number = extractNumberFromUrl(url, 'pull');
+      return { number, url };
+    },
+
+    async createIssue(repo, opts) {
+      validateRepo(repo);
+      validateTitle(opts.title);
+
+      const args = [
+        'issue', 'create',
+        '--repo', repo,
+        '--title', opts.title,
+        '--body', opts.body,
+      ];
+      if (opts.labels && opts.labels.length > 0) {
+        for (const label of opts.labels) {
+          args.push('--label', label);
+        }
+      }
+
+      const { stdout } = await run('gh', args);
+      const url = stdout.trim();
+      const number = extractNumberFromUrl(url, 'issues');
+      return { number, url };
     },
   };
 }

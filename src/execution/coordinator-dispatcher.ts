@@ -33,12 +33,12 @@ import type { LinearClient } from '../integration/linear/linear-client';
 import type { Logger } from '../shared/logger';
 import type { EventBus } from '../kernel/event-bus';
 import { createDomainEvent } from '../kernel/event-bus';
-import { formatAgentComment, getBotMarker } from '../kernel/agent-identity';
-import { trackAgentCommit } from './agent-commit-tracker';
 import { getCoordinatorSystemPrompt, getCoordinatorUserContext } from '../coordinator/coordinatorPrompt';
-import { postAgentResponse, emitThought } from '../integration/linear/activity-router';
+import { emitThought } from '../integration/linear/activity-router';
 import { createTask, TaskType, TaskStatus, transition } from './task';
 import type { TaskRegistry } from './task';
+import { runPostExecutionActions } from './post-execution-actions';
+import type { ReviewGate } from '../review/review-gate';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -59,6 +59,8 @@ export interface CoordinatorDispatcherDeps {
   mcpClients?: Array<{ name: string }>;
   /** Provides a fresh GitHub token for the agent's gh CLI (bot identity). */
   getGitHubToken?: () => Promise<string>;
+  /** Optional ReviewGate for producing findings on PR diffs. */
+  reviewGate?: ReviewGate;
 }
 
 export interface CoordinatorDispatcher {
@@ -275,100 +277,48 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             continue;
           }
 
-          // 7. No review gate / fix-it loop in coordinator mode — the
-          //    coordinator handles its own correction loop via
-          //    decideContinueOrSpawn (P9).
-          const findings: Finding[] = [];
-
-          // 7b. Track agent commit SHA for feedback loop prevention
-          if (applyResult.commitSha) {
-            trackAgentCommit(applyResult.commitSha);
-          }
-
-          // 8. Push commits to remote
-          if (deps.githubClient && applyResult.commitSha) {
-            const targetBranch = intakeEvent.entities.branch ?? handle.branch;
+          // 7. Run ReviewGate for findings (when available and PR context exists)
+          let findings: Finding[] = [];
+          if (deps.reviewGate && applyResult.commitSha && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
             try {
-              await deps.githubClient.pushBranch(handle.path, handle.branch, {
-                remoteBranch: targetBranch,
-                repo: intakeEvent.entities.repo,
-              });
-              deps.logger.info('Branch pushed', { planId: plan.id, localBranch: handle.branch, remoteBranch: targetBranch });
-            } catch (pushErr) {
-              deps.logger.warn('Failed to push branch', {
+              const verdict = await deps.reviewGate.review({
                 planId: plan.id,
-                localBranch: handle.branch,
-                remoteBranch: targetBranch,
-                error: pushErr instanceof Error ? pushErr.message : String(pushErr),
+                workItemId: plan.workItemId,
+                commitSha: applyResult.commitSha,
+                branch: handle.branch,
+                worktreePath: handle.path,
+                diff: '', // ReviewGate's test runner and security scanner use worktreePath directly
+                artifacts: [],
+                context: { attempt: 1, commitSha: applyResult.commitSha },
+              });
+              findings = verdict.findings;
+            } catch (reviewErr) {
+              deps.logger.warn('ReviewGate failed, continuing without findings', {
+                planId: plan.id,
+                error: reviewErr instanceof Error ? reviewErr.message : String(reviewErr),
               });
             }
           }
 
-          // 9. Post PR/issue comment with work summary
-          //    Skip for GitHub-sourced events — the skill handles its own PR comments
-          //    via gh pr review/comment. Posting here creates duplicate noise.
-          if (deps.githubClient && intakeEvent.source !== 'github' && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
-            const changedFiles = applyResult.changedFiles ?? [];
-            const duration = Math.round((Date.now() - agentStart) / 1000);
-            const findingLines = findings.length > 0
-              ? `\n\n**Findings (${findings.length}):**\n${findings.map(f => `- [${f.severity}] ${f.message}`).join('\n')}`
-              : '';
-            const fileLines = changedFiles.length > 0
-              ? `\n\n**Files (${changedFiles.length}):**\n${changedFiles.slice(0, 10).map(f => `- \`${f}\``).join('\n')}${changedFiles.length > 10 ? `\n- ... and ${changedFiles.length - 10} more` : ''}`
-              : '';
-            const maxOutputLen = 2000;
-            let outputText = execResult.output ?? '';
-            if (outputText.length > maxOutputLen) {
-              const truncated = outputText.slice(0, maxOutputLen);
-              const lastNewline = truncated.lastIndexOf('\n');
-              outputText = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
-              outputText += '\n\n_(truncated)_';
-            }
-            const outputPreview = outputText ? `\n\n**Output:**\n${outputText}` : '';
-
-            const summary = [
-              `**${agent.type}** completed in ${duration}s`,
-              applyResult.commitSha ? `Commit: \`${applyResult.commitSha.slice(0, 7)}\`` : '',
-              fileLines,
-              outputPreview,
-              findingLines,
-            ].filter(Boolean).join('\n');
-
-            await deps.githubClient.postPRComment(
-              intakeEvent.entities.repo,
-              intakeEvent.entities.prNumber,
-              formatAgentComment(summary),
-            ).catch((err: unknown) => deps.logger.warn('Failed to post PR comment', {
-              error: err instanceof Error ? err.message : String(err),
-            }));
-          }
-
-          const responseMeta = intakeEvent.sourceMetadata;
-          if (deps.linearClient && isLinearMeta(responseMeta) && responseMeta.linearIssueId) {
-            const linearIssueId = responseMeta.linearIssueId;
-            const agentSessionId = responseMeta.agentSessionId;
-            const linearSummary = formatLinearAgentSummary({
-              agentType: agent.type,
-              durationMs: Date.now() - agentStart,
-              commitSha: applyResult.commitSha,
-              changedFiles: applyResult.changedFiles ?? [],
-              output: execResult.output ?? '',
+          // 8. Run post-execution actions (push, PR creation, review, comments)
+          await runPostExecutionActions(
+            {
+              githubClient: deps.githubClient,
+              linearClient: deps.linearClient,
+              logger: deps.logger,
+            },
+            {
+              agent: { type: agent.type, role: agent.role },
+              planId: plan.id,
+              workItemId: plan.workItemId,
+              agentStart,
+              apply: { commitSha: applyResult.commitSha, changedFiles: applyResult.changedFiles },
+              exec: { output: execResult.output, status: execResult.status },
+              intake: intakeEvent,
+              worktree: { path: handle.path, branch: handle.branch, baseBranch: lastCommitRef },
               findings,
-              includeMarker: !agentSessionId,
-            });
-            await postAgentResponse(
-              intakeEvent.source,
-              agentSessionId,
-              linearSummary,
-              deps.linearClient,
-              deps.githubClient,
-              { issueId: linearIssueId, repo: intakeEvent.entities.repo, prNumber: intakeEvent.entities.prNumber },
-            ).catch((err: unknown) => deps.logger.warn('Failed to post Linear response', {
-              issueId: linearIssueId,
-              agentSessionId,
-              error: err instanceof Error ? err.message : String(err),
-            }));
-          }
+            },
+          );
 
           // P6: Transition task to completed
           if (deps.taskRegistry && task && taskId) {
@@ -448,49 +398,4 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
   };
 }
 
-// ---------------------------------------------------------------------------
-// Linear summary formatter (private to LocalAgentTask)
-// ---------------------------------------------------------------------------
-
-function formatLinearAgentSummary(params: {
-  agentType: string;
-  durationMs: number;
-  commitSha?: string;
-  changedFiles: string[];
-  output: string;
-  findings: Finding[];
-  includeMarker?: boolean;
-}): string {
-  const durationSeconds = Math.max(1, Math.round(params.durationMs / 1000));
-  const changedFiles = params.changedFiles.length > 0
-    ? `\n\nFiles changed (${params.changedFiles.length}):\n${params.changedFiles.slice(0, 10).map((file) => `- \`${file}\``).join('\n')}${params.changedFiles.length > 10 ? `\n- ... and ${params.changedFiles.length - 10} more` : ''}`
-    : '';
-  const findings = params.findings.length > 0
-    ? `\n\nFindings (${params.findings.length}):\n${params.findings.map((finding) => `- [${finding.severity}] ${finding.message}`).join('\n')}`
-    : '';
-  const output = params.output.trim()
-    ? `\n\nOutput:\n${truncatePreview(params.output, 2000)}`
-    : '';
-
-  const parts = [
-    `**${params.agentType}** completed in ${durationSeconds}s`,
-    params.commitSha ? `Commit: \`${params.commitSha.slice(0, 7)}\`` : '',
-    changedFiles,
-    output,
-    findings,
-  ];
-  if (params.includeMarker !== false) {
-    parts.push(getBotMarker());
-  }
-  return parts.filter(Boolean).join('\n');
-}
-
-function truncatePreview(text: string, maxLength: number): string {
-  if (text.length <= maxLength) {
-    return text;
-  }
-  const truncated = text.slice(0, maxLength);
-  const lastNewline = truncated.lastIndexOf('\n');
-  const preview = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
-  return `${preview}\n\n_(truncated)_`;
-}
+// Post-execution formatting has been extracted to src/execution/post-execution-actions.ts
