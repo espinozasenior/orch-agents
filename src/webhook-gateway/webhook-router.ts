@@ -169,6 +169,13 @@ export async function webhookRouter(
           return reply.status(202).send({ id: deliveryId, status: 'skipped' });
         }
 
+        // Skip PR opened/reopened events from bot (prevents feedback loop
+        // when agent creates a PR via gh pr create)
+        if (eventType === 'pull_request' && (parsed.action === 'opened' || parsed.action === 'reopened') && parsed.senderIsBot) {
+          log.info('Skipping bot-opened PR', { sender: parsed.sender, prNumber: parsed.prNumber, deliveryId });
+          return reply.status(202).send({ id: deliveryId, status: 'skipped' });
+        }
+
         // Step 2.5: Self-comment loop prevention for issue_comment events
         if (eventType === 'issue_comment' && parsed.commentBody) {
           const commentAuthor = (

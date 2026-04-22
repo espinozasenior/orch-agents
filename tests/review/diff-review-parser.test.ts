@@ -156,6 +156,59 @@ describe('toFinding', () => {
     const finding = toFinding({});
     assert.strictEqual(finding.message, '');
   });
+
+  it('extracts structured filePath and lineNumber from explicit fields', () => {
+    const finding = toFinding({
+      severity: 'warning',
+      message: 'Unused variable',
+      filePath: 'src/foo.ts',
+      lineNumber: 42,
+    });
+    assert.strictEqual(finding.filePath, 'src/foo.ts');
+    assert.strictEqual(finding.lineNumber, 42);
+  });
+
+  it('extracts file_path and line_number (snake_case variants)', () => {
+    const finding = toFinding({
+      severity: 'error',
+      message: 'Bug',
+      file_path: 'src/bar.ts',
+      line_number: 10,
+    });
+    assert.strictEqual(finding.filePath, 'src/bar.ts');
+    assert.strictEqual(finding.lineNumber, 10);
+  });
+
+  it('parses filePath and lineNumber from location string "path:line"', () => {
+    const finding = toFinding({
+      severity: 'error',
+      message: 'SQL injection',
+      location: 'src/db.ts:42',
+    });
+    assert.strictEqual(finding.filePath, 'src/db.ts');
+    assert.strictEqual(finding.lineNumber, 42);
+  });
+
+  it('prefers explicit filePath over location parsing', () => {
+    const finding = toFinding({
+      severity: 'error',
+      message: 'Bug',
+      location: 'src/old.ts:1',
+      filePath: 'src/new.ts',
+      lineNumber: 99,
+    });
+    assert.strictEqual(finding.filePath, 'src/new.ts');
+    assert.strictEqual(finding.lineNumber, 99);
+  });
+
+  it('extracts commitSha from raw object', () => {
+    const finding = toFinding({
+      severity: 'info',
+      message: 'Note',
+      commitSha: 'abc123',
+    });
+    assert.strictEqual(finding.commitSha, 'abc123');
+  });
 });
 
 // ---------------------------------------------------------------------------

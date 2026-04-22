@@ -205,4 +205,166 @@ describe('sdk-executor — P11 wiring', () => {
       assert.equal(result.output, 'hello');
     });
   });
+
+  describe('AgentTool event interception (Step 2)', () => {
+    it('emits agentSpawn event when Agent tool_use event is yielded', async () => {
+      const wt = makeWorktree();
+      const events: Array<Record<string, unknown>> = [];
+      const agentToolStream = (async function* () {
+        yield {
+          type: 'tool_use',
+          name: 'Agent',
+          input: {
+            prompt: 'Implement the auth middleware in src/auth.ts with JWT validation',
+            subagent_type: 'coder',
+            description: 'Auth implementation worker',
+          },
+        };
+        yield { type: 'text', text: 'spawned worker' };
+        yield {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: 'done',
+          session_id: 'sess-agent-1',
+        };
+      })();
+
+      const exec = createSdkExecutor({
+        queryFactory: () => agentToolStream,
+        eventSink: (payload) => events.push(payload),
+      });
+      await exec.execute(makeRequest(wt));
+
+      const spawnEvents = events.filter((e) => e.type === 'agentSpawn');
+      assert.equal(spawnEvents.length, 1, 'should emit exactly one agentSpawn event');
+      assert.equal(spawnEvents[0].agentRole, 'coder');
+      assert.ok(
+        (spawnEvents[0].childPrompt as string).startsWith('Implement the auth middleware'),
+        'childPrompt should be truncated prefix of the prompt',
+      );
+      assert.equal(spawnEvents[0].childSubagentType, 'coder');
+    });
+
+    it('emits agentSpawn for AgentTool name variant', async () => {
+      const wt = makeWorktree();
+      const events: Array<Record<string, unknown>> = [];
+      const agentToolStream = (async function* () {
+        yield {
+          type: 'tool_call',
+          tool: 'AgentTool',
+          arguments: {
+            prompt: 'Research the codebase structure',
+          },
+        };
+        yield {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: 'done',
+        };
+      })();
+
+      const exec = createSdkExecutor({
+        queryFactory: () => agentToolStream,
+        eventSink: (payload) => events.push(payload),
+      });
+      await exec.execute(makeRequest(wt));
+
+      const spawnEvents = events.filter((e) => e.type === 'agentSpawn');
+      assert.equal(spawnEvents.length, 1);
+      assert.ok(
+        (spawnEvents[0].childPrompt as string).startsWith('Research the codebase'),
+      );
+    });
+
+    it('does not emit agentSpawn for non-Agent tool events', async () => {
+      const wt = makeWorktree();
+      const events: Array<Record<string, unknown>> = [];
+      const stream = (async function* () {
+        yield {
+          type: 'tool_use',
+          name: 'Edit',
+          input: { file: 'src/foo.ts' },
+        };
+        yield {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: 'done',
+        };
+      })();
+
+      const exec = createSdkExecutor({
+        queryFactory: () => stream,
+        eventSink: (payload) => events.push(payload),
+      });
+      await exec.execute(makeRequest(wt));
+
+      const spawnEvents = events.filter((e) => e.type === 'agentSpawn');
+      assert.equal(spawnEvents.length, 0, 'should not emit agentSpawn for non-Agent tools');
+    });
+  });
+
+  describe('depth limiting (Step 5)', () => {
+    it('removes Agent from allowedTools when ORCH_AGENT_DEPTH is at max', async () => {
+      const wt = makeWorktree();
+      let capturedAllowedTools: string[] = [];
+      const exec = createSdkExecutor({
+        allowedTools: ['Edit', 'Write', 'Read', 'Bash', 'Agent'],
+        queryFactory: async (params) => {
+          capturedAllowedTools = params.allowedTools;
+          return makeOkStream();
+        },
+        agentDepth: 3,
+      });
+      await exec.execute(makeRequest(wt));
+
+      assert.ok(
+        !capturedAllowedTools.includes('Agent'),
+        'Agent should be removed from allowedTools at max depth',
+      );
+      assert.ok(
+        !capturedAllowedTools.includes('AgentTool'),
+        'AgentTool should be removed from allowedTools at max depth',
+      );
+    });
+
+    it('keeps Agent in allowedTools when depth is below max', async () => {
+      const wt = makeWorktree();
+      let capturedAllowedTools: string[] = [];
+      const exec = createSdkExecutor({
+        allowedTools: ['Edit', 'Write', 'Read', 'Bash', 'Agent'],
+        queryFactory: async (params) => {
+          capturedAllowedTools = params.allowedTools;
+          return makeOkStream();
+        },
+        agentDepth: 1,
+      });
+      await exec.execute(makeRequest(wt));
+
+      assert.ok(
+        capturedAllowedTools.includes('Agent'),
+        'Agent should remain in allowedTools below max depth',
+      );
+    });
+
+    it('defaults agentDepth to 0 when not provided', async () => {
+      const wt = makeWorktree();
+      let capturedAllowedTools: string[] = [];
+      const exec = createSdkExecutor({
+        allowedTools: ['Edit', 'Write', 'Read', 'Bash', 'Agent'],
+        queryFactory: async (params) => {
+          capturedAllowedTools = params.allowedTools;
+          return makeOkStream();
+        },
+      });
+      await exec.execute(makeRequest(wt));
+
+      assert.ok(
+        capturedAllowedTools.includes('Agent'),
+        'Agent should remain when no agentDepth provided (defaults to 0)',
+      );
+    });
+  });
 });

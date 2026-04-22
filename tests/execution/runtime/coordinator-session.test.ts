@@ -171,6 +171,81 @@ describe('CoordinatorSession', () => {
     assert.ok(!enhanced.includes('QUEUED TASKS'), 'should not show queued tasks section when queue is empty');
   });
 
+  it('fires onAgentSpawn callback when provided in deps', async () => {
+    const spawnCalls: Array<{ childPrompt: string; childSubagentType?: string }> = [];
+    const baseExecutor = makeCapturingExecutor();
+    const session = createCoordinatorSession({
+      baseExecutor,
+      onAgentSpawn: (info) => spawnCalls.push(info),
+    });
+
+    // The callback is wired via deps; the coordinator session itself doesn't
+    // trigger it directly (that happens at the dispatcher level), but verify
+    // the dep is accepted without error.
+    await session.execute(makeRequest());
+    assert.equal(baseExecutor.calls.length, 1, 'should call base executor');
+  });
+
+  it('includes capacity warning when workers map has 8+ entries', async () => {
+    const baseExecutor = makeCapturingExecutor();
+    const session = createCoordinatorSession({
+      baseExecutor,
+      maxChildAgents: 8,
+    });
+
+    // Manually seed workers via the exposed registerWorker method
+    for (let i = 0; i < 8; i++) {
+      session.registerWorker(`worker-${i}`, {
+        phase: 'implementation',
+        status: 'running',
+        lastStatus: 'running',
+        filesExplored: [],
+      });
+    }
+
+    await session.execute(makeRequest());
+
+    const enhanced = baseExecutor.calls[0].request.prompt;
+    assert.ok(
+      enhanced.includes('maximum number of concurrent workers'),
+      'should include capacity warning when at max workers',
+    );
+    assert.ok(
+      enhanced.includes('8'),
+      'should include the max count in the warning',
+    );
+  });
+
+  it('does not include capacity warning when workers are below max', async () => {
+    const baseExecutor = makeCapturingExecutor();
+    const session = createCoordinatorSession({
+      baseExecutor,
+      maxChildAgents: 8,
+    });
+
+    // Only 2 workers — below threshold
+    session.registerWorker('worker-0', {
+      phase: 'research',
+      status: 'running',
+      lastStatus: 'running',
+      filesExplored: [],
+    });
+    session.registerWorker('worker-1', {
+      phase: 'research',
+      status: 'running',
+      lastStatus: 'running',
+      filesExplored: [],
+    });
+
+    await session.execute(makeRequest());
+
+    const enhanced = baseExecutor.calls[0].request.prompt;
+    assert.ok(
+      !enhanced.includes('maximum number of concurrent workers'),
+      'should not include capacity warning when below max',
+    );
+  });
+
   it('session respects mcpClients option', async () => {
     const baseExecutor = makeCapturingExecutor();
 

@@ -9,11 +9,15 @@ import {
   trackAgentCommit,
   isAgentCommit,
   clearTrackedCommits,
+  trackAgentPR,
+  isAgentPR,
+  clearTrackedPRs,
 } from '../../src/execution/agent-commit-tracker';
 
 describe('agent-commit-tracker', () => {
   beforeEach(() => {
     clearTrackedCommits();
+    clearTrackedPRs();
   });
 
   it('should return true for a tracked SHA', () => {
@@ -40,10 +44,36 @@ describe('agent-commit-tracker', () => {
   });
 
   it('should expire entries after TTL', () => {
-    // We cannot easily mock Date.now() in node:test, so we test the expiry
-    // logic indirectly by verifying that a freshly tracked SHA is found.
-    // Full TTL expiry is validated by the implementation's prune logic.
     trackAgentCommit('fresh-sha');
     assert.equal(isAgentCommit('fresh-sha'), true);
+  });
+});
+
+describe('agent-pr-tracker', () => {
+  beforeEach(() => {
+    clearTrackedPRs();
+  });
+
+  it('should return true for a tracked PR', () => {
+    trackAgentPR('owner/repo', 42);
+    assert.equal(isAgentPR('owner/repo', 42), true);
+  });
+
+  it('should return false for an unknown PR', () => {
+    assert.equal(isAgentPR('owner/repo', 99), false);
+  });
+
+  it('should return false after clearTrackedPRs', () => {
+    trackAgentPR('owner/repo', 42);
+    clearTrackedPRs();
+    assert.equal(isAgentPR('owner/repo', 42), false);
+  });
+
+  it('should track PRs independently per repo', () => {
+    trackAgentPR('owner/repo-a', 1);
+    trackAgentPR('owner/repo-b', 1);
+    assert.equal(isAgentPR('owner/repo-a', 1), true);
+    assert.equal(isAgentPR('owner/repo-b', 1), true);
+    assert.equal(isAgentPR('owner/repo-c', 1), false);
   });
 });

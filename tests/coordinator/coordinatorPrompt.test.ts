@@ -89,6 +89,31 @@ describe('getCoordinatorSystemPrompt', () => {
       'Missing post-launch rule',
     );
   });
+
+  it('should contain worktree isolation instructions for implementation workers', () => {
+    assert.ok(
+      prompt.includes('isolation'),
+      'Missing worktree isolation instruction',
+    );
+  });
+
+  it('should contain depth limit instructions', () => {
+    assert.ok(
+      prompt.includes('depth'),
+      'Missing depth limit instruction',
+    );
+    assert.ok(
+      prompt.includes('Maximum agent depth'),
+      'Missing maximum agent depth rule',
+    );
+  });
+
+  it('should contain maximum concurrent workers rule', () => {
+    assert.ok(
+      prompt.includes('Maximum concurrent'),
+      'Missing maximum concurrent workers rule',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

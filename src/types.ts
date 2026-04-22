@@ -221,6 +221,12 @@ export interface Finding {
   category: string;
   message: string;
   location?: string;
+  /** Structured file path for inline review comments. */
+  filePath?: string;
+  /** Structured line number for inline review comments. */
+  lineNumber?: number;
+  /** Commit SHA for anchoring inline review comments. */
+  commitSha?: string;
 }
 
 // ---------------------------------------------------------------------------
