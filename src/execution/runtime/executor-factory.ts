@@ -9,6 +9,13 @@
 import type { InteractiveTaskExecutor } from './interactive-executor';
 import { createEnhancedExecutor, type EnhancedExecutorDeps } from './enhanced-executor';
 import type { Logger } from '../../shared/logger';
+import type { AgentSpawnMode } from '../../shared/config';
+import type { SwarmDaemon } from './swarm-daemon';
+import type { WorktreeManager } from '../workspace/worktree-manager';
+import type { EventBus } from '../../kernel/event-bus';
+import type { DeferredToolRegistry } from '../../services/deferred-tools/registry.js';
+import { createDirectSpawnStrategy } from './direct-spawn-strategy';
+import { createDirectSpawnToolDef } from './direct-spawn-tool';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -29,6 +36,20 @@ export interface ExecutorFactoryDeps {
   mcpClients?: Array<{ name: string }>;
   /** Scratchpad directory for worker file exchange */
   scratchpadDir?: string;
+  /** Agent spawn mode: 'sdk' (default) or 'direct' (SwarmDaemon dispatch). */
+  agentSpawnMode?: AgentSpawnMode;
+  /** SwarmDaemon instance for direct spawn mode child dispatch. */
+  swarmDaemon?: SwarmDaemon;
+  /** WorktreeManager for creating isolated child worktrees. */
+  worktreeManager?: WorktreeManager;
+  /** EventBus for domain event emission. */
+  eventBus?: EventBus;
+  /** DeferredToolRegistry to override Agent tool in direct mode. */
+  deferredToolRegistry?: DeferredToolRegistry;
+  /** Parent plan ID for domain event correlation. */
+  parentPlanId?: string;
+  /** Parent AbortSignal for cancellation propagation. */
+  parentAbortSignal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +70,25 @@ export interface ExecutorFactoryDeps {
  * ```
  */
 export function buildExecutor(deps: ExecutorFactoryDeps): InteractiveTaskExecutor {
+  // Direct spawn mode: replace the NOOP Agent tool with real dispatch
+  if (
+    deps.agentSpawnMode === 'direct' &&
+    deps.swarmDaemon &&
+    deps.worktreeManager &&
+    deps.deferredToolRegistry
+  ) {
+    const strategy = createDirectSpawnStrategy({
+      swarmDaemon: deps.swarmDaemon,
+      worktreeManager: deps.worktreeManager,
+      logger: deps.logger ?? { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } } as unknown as Logger,
+      parentAbortSignal: deps.parentAbortSignal,
+      eventBus: deps.eventBus,
+      parentPlanId: deps.parentPlanId,
+    });
+
+    deps.deferredToolRegistry.override(createDirectSpawnToolDef(strategy));
+  }
+
   const enhancedDeps: EnhancedExecutorDeps = {
     baseExecutor: deps.baseExecutor,
     logger: deps.logger,

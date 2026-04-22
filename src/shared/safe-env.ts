@@ -28,6 +28,7 @@ export const SAFE_ENV_KEYS = new Set([
   'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
   'COLORTERM', 'TERM_PROGRAM', 'FORCE_COLOR',
   'CLAUDE_FLOW_V3_ENABLED', 'CLAUDE_FLOW_HOOKS_ENABLED',
+  'AGENT_SPAWN_MODE',
   // npm/pnpm runtime
   'npm_config_prefix', 'npm_config_cache',
 ]);

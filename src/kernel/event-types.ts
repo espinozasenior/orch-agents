@@ -265,6 +265,30 @@ export type TaskNotifiedEvent = DomainEvent<
 >;
 
 // ---------------------------------------------------------------------------
+// Child agent events (direct spawn mode)
+// ---------------------------------------------------------------------------
+
+export type ChildAgentRequestedEvent = DomainEvent<
+  'ChildAgentRequested',
+  { parentPlanId: string; childId: string; prompt: string; subagentType?: string }
+>;
+
+export type ChildAgentCompletedEvent = DomainEvent<
+  'ChildAgentCompleted',
+  { parentPlanId: string; childId: string; duration: number; output: string }
+>;
+
+export type ChildAgentFailedEvent = DomainEvent<
+  'ChildAgentFailed',
+  { parentPlanId: string; childId: string; duration: number; error: string }
+>;
+
+export type ChildAgentCancelledEvent = DomainEvent<
+  'ChildAgentCancelled',
+  { parentPlanId: string; childId: string; duration: number }
+>;
+
+// ---------------------------------------------------------------------------
 // Union of all domain event types
 // ---------------------------------------------------------------------------
 
@@ -306,7 +330,11 @@ export type AnyDomainEvent =
   | ContextPressureErrorEvent
   | BudgetContinuationEvent
   | TaskOutputDeltaEvent
-  | TaskNotifiedEvent;
+  | TaskNotifiedEvent
+  | ChildAgentRequestedEvent
+  | ChildAgentCompletedEvent
+  | ChildAgentFailedEvent
+  | ChildAgentCancelledEvent;
 
 // ---------------------------------------------------------------------------
 // Event type string literals for use with the event bus
@@ -357,4 +385,8 @@ export interface DomainEventMap {
   BudgetContinuation: BudgetContinuationEvent;
   TaskOutputDelta: TaskOutputDeltaEvent;
   TaskNotified: TaskNotifiedEvent;
+  ChildAgentRequested: ChildAgentRequestedEvent;
+  ChildAgentCompleted: ChildAgentCompletedEvent;
+  ChildAgentFailed: ChildAgentFailedEvent;
+  ChildAgentCancelled: ChildAgentCancelledEvent;
 }

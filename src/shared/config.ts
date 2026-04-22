@@ -7,6 +7,7 @@
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 export type NodeEnv = 'development' | 'production' | 'test';
+export type AgentSpawnMode = 'sdk' | 'direct';
 
 export interface AppConfig {
   /** HTTP server port */

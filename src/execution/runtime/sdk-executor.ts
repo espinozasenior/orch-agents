@@ -140,6 +140,9 @@ export interface SdkExecutorDeps {
   agentDepth?: number;
   /** Maximum agent depth before Agent tool is removed. Defaults to 3. */
   maxAgentDepth?: number;
+  /** Agent spawn mode: when 'direct', Agent is removed from SDK allowedTools
+   *  so the custom deferred tool handles it instead of the SDK. */
+  agentSpawnMode?: import('../../shared/config').AgentSpawnMode;
 }
 
 export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskExecutor {
@@ -156,6 +159,14 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
   if (currentDepth >= maxAgentDepth) {
     allowedTools = allowedTools.filter((t) => t !== 'Agent' && t !== 'AgentTool');
   }
+
+  // Direct spawn mode: remove Agent from SDK allowedTools so the SDK
+  // does not handle it internally. The custom deferred tool registered
+  // in the registry handles Agent calls instead.
+  if (deps.agentSpawnMode === 'direct') {
+    allowedTools = allowedTools.filter((t) => t !== 'Agent' && t !== 'AgentTool');
+  }
+
   const permissionPolicy: SessionPermissionPolicy = {
     permissionMode: 'default',
     allowDangerouslySkipPermissions: false,

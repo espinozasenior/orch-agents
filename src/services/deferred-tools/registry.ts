@@ -69,6 +69,15 @@ export class DeferredToolRegistry {
     this.tools.set(def.name, def);
   }
 
+  /**
+   * Replace an existing tool registration or insert if not present.
+   * Used by the direct-spawn feature to override the NOOP Agent tool
+   * with a real execute() implementation.
+   */
+  override(def: DeferredToolDef): void {
+    this.tools.set(def.name, def);
+  }
+
   /** Lookup by name. */
   get(name: string): DeferredToolDef | undefined {
     return this.tools.get(name);
