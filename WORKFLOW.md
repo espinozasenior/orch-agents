@@ -30,9 +30,20 @@ repos:
       - infra
     github:
       events:
+        # PR lifecycle — full Open-Inspect coverage
         pull_request.opened: .claude/skills/github-ops/SKILL.md
         pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+        # Review response — auto-address changes requested
+        pull_request_review.changes_requested: .claude/skills/github-ops/SKILL.md
+        # CI failure triage — diagnose and fix
+        workflow_run.failure: .claude/skills/ci-status/SKILL.md
+        # Issue management
         issues.opened: .claude/skills/github-deep-research/SKILL.md
+        issues.labeled.bug: .claude/skills/github-ops/SKILL.md
+        issues.labeled.enhancement: .claude/skills/github-ops/SKILL.md
+        # Comment interaction — respond to @mentions
+        issue_comment.created: .claude/skills/github-ops/SKILL.md
     tracker:
       team: AUT
   espinozasenior/orch-agents:

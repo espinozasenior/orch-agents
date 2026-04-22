@@ -29,6 +29,8 @@ export interface ServerDependencies {
   workflowConfig?: WorkflowConfig;
   onLinearIntake?: (intakeEvent: IntakeEvent, meta: { deliveryId: string }) => Promise<void> | void;
   getStatusSnapshot?: () => StatusSurfaceSnapshot;
+  /** Direct spawn strategy for child agent status API (optional, only in direct mode). */
+  directSpawnStrategy?: import('./execution/runtime/direct-spawn-strategy').DirectSpawnStrategy;
   /** OAuth auth strategy for Linear (optional, enables /oauth/* routes). */
   linearAuthStrategy?: LinearAuthStrategy;
   /** OAuth token store for Linear (optional, enables /oauth/* routes). */
@@ -67,6 +69,32 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
       timestamp: new Date().toISOString(),
     };
   });
+
+  // ── Child agent status API (direct spawn mode) ──────────────
+  if (deps.directSpawnStrategy) {
+    const strategy = deps.directSpawnStrategy;
+
+    server.get('/children', async (_request, _reply) => {
+      return {
+        paused: strategy.isPaused(),
+        active: strategy.getActiveChildren(),
+        all: strategy.getAllChildren(),
+      };
+    });
+
+    server.get<{ Params: { id: string } }>('/children/:id', async (request, reply) => {
+      const child = strategy.getChildStatus(request.params.id);
+      if (!child) return reply.status(404).send({ error: 'Child not found' });
+      return child;
+    });
+
+    server.post('/children/reset-pause', async (_request, _reply) => {
+      strategy.resetPause();
+      return { status: 'ok', paused: false };
+    });
+
+    logger.info('Child agent status API enabled', { routes: ['/children', '/children/:id', '/children/reset-pause'] });
+  }
 
   // ── Webhook gateway routes ──────────────────────────────────
   await server.register(webhookRouter, {

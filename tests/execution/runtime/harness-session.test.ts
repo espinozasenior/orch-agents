@@ -265,7 +265,7 @@ describe('buildExecutor', () => {
   it('should return a working InteractiveTaskExecutor', async () => {
     const expected = makeResult({ output: 'factory-built' });
     const base = makeStubExecutor(expected);
-    const executor = buildExecutor({ baseExecutor: base, enableCompaction: false });
+    const { executor } = buildExecutor({ baseExecutor: base, enableCompaction: false });
 
     const result = await executor.execute(makeRequest());
     assert.equal(result.output, 'factory-built');

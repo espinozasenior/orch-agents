@@ -257,6 +257,7 @@ async function main(): Promise<void> {
   let symphonyOrchestrator: SymphonyOrchestrator | undefined;
   let workpadReporter: WorkpadReporter | undefined;
   let linearExecutionMode: 'generic' | 'symphony' = 'generic';
+  let directSpawnStrategy: import('./execution/runtime/direct-spawn-strategy').DirectSpawnStrategy | undefined;
 
   if (useInteractiveAgents) {
     const execLogger = logger.child ? logger.child({ module: 'interactive' }) : logger;
@@ -301,7 +302,7 @@ async function main(): Promise<void> {
 
     // Apply harness enhancements: P0 compaction + P3 budget + P1 query loop + P2 coordinator
     const { buildExecutor } = await import('./execution/runtime/executor-factory');
-    const interactiveExecutor = buildExecutor({
+    const executorResult = buildExecutor({
       baseExecutor,
       logger: execLogger,
       contextWindowTokens: parseInt(process.env.CONTEXT_WINDOW_TOKENS ?? '200000', 10),
@@ -315,6 +316,8 @@ async function main(): Promise<void> {
       eventBus,
       deferredToolRegistry,
     });
+    const interactiveExecutor = executorResult.executor;
+    directSpawnStrategy = executorResult.directSpawnStrategy;
     const artifactApplier = createArtifactApplier({ logger: execLogger });
     const linearClient = linearAuthStrategy
       ? createLinearClient({ apiKey: linearApiKey, authStrategy: linearAuthStrategy, tokenStore: oauthTokenStore, logger: execLogger })
@@ -500,6 +503,7 @@ async function main(): Promise<void> {
       ? createLinearClient({ apiKey: linearApiKey, authStrategy: linearAuthStrategy, tokenStore: oauthTokenStore, logger })
       : undefined,
     tokenPersistence,
+    directSpawnStrategy,
   });
 
   try {
