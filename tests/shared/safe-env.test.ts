@@ -78,7 +78,20 @@ describe('buildSafeEnv', () => {
     assert.ok(SAFE_ENV_KEYS.has('HOME'));
     assert.ok(SAFE_ENV_KEYS.has('NODE_ENV'));
     assert.ok(SAFE_ENV_KEYS.has('TMPDIR'));
+    assert.ok(SAFE_ENV_KEYS.has('GH_TOKEN'), 'GH_TOKEN must be whitelisted for bot identity');
     assert.ok(!SAFE_ENV_KEYS.has('GITHUB_TOKEN'));
     assert.ok(!SAFE_ENV_KEYS.has('AWS_SECRET_ACCESS_KEY'));
+  });
+
+  it('passes GH_TOKEN through to child processes (bot identity)', () => {
+    const source = { GH_TOKEN: 'ghs_installation_token_abc123' };
+    const result = buildSafeEnv(source);
+    assert.strictEqual(result.GH_TOKEN, 'ghs_installation_token_abc123');
+  });
+
+  it('still blocks GITHUB_TOKEN (not the intentional passthrough)', () => {
+    const source = { GITHUB_TOKEN: 'ghp_personal_access_token' };
+    const result = buildSafeEnv(source);
+    assert.strictEqual(result.GITHUB_TOKEN, undefined);
   });
 });
