@@ -275,6 +275,19 @@ async function main(): Promise<void> {
     // and the ToolSearch meta-tool registered as alwaysLoad.
     const { createDefaultDeferredToolRegistry } = await import('./services/deferred-tools');
     const deferredToolRegistry = createDefaultDeferredToolRegistry();
+
+    // Direct spawn mode: read feature flag for agent spawn routing
+    const agentSpawnMode = (process.env.AGENT_SPAWN_MODE === 'direct' ? 'direct' : 'sdk') as import('./shared/config').AgentSpawnMode;
+
+    // When direct mode, create a SwarmDaemon for child agent dispatch
+    let childSwarmDaemon: import('./execution/runtime/swarm-daemon').SwarmDaemon | undefined;
+    if (agentSpawnMode === 'direct') {
+      const { SwarmDaemon } = await import('./execution/runtime/swarm-daemon');
+      childSwarmDaemon = new SwarmDaemon({ logger: execLogger, maxSlots: 8 });
+      childSwarmDaemon.start();
+      execLogger.info('Direct agent spawn mode enabled — child SwarmDaemon started');
+    }
+
     const baseExecutor = createSdkExecutor({
       logger: execLogger,
       // P11: pass eventBus so WorkCancelled domain events abort in-flight
@@ -282,6 +295,8 @@ async function main(): Promise<void> {
       eventBus,
       // P12: feed the registry so allowedTools is computed from it.
       deferredToolRegistry,
+      // Direct mode: remove Agent from SDK allowedTools
+      agentSpawnMode,
     });
 
     // Apply harness enhancements: P0 compaction + P3 budget + P1 query loop + P2 coordinator
@@ -293,6 +308,12 @@ async function main(): Promise<void> {
       tokenBudget: process.env.TOKEN_BUDGET ? parseInt(process.env.TOKEN_BUDGET, 10) : undefined,
       enableCompaction: process.env.ENABLE_COMPACTION !== 'false',
       mcpClients,
+      // Direct spawn mode wiring
+      agentSpawnMode,
+      swarmDaemon: childSwarmDaemon,
+      worktreeManager,
+      eventBus,
+      deferredToolRegistry,
     });
     const artifactApplier = createArtifactApplier({ logger: execLogger });
     const linearClient = linearAuthStrategy
