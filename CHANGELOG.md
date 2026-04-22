@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.2.0] - 2026-04-22
+
+### Added
+
+- **Direct Sub-Agent Spawning** — `AGENT_SPAWN_MODE=direct` feature flag routes AgentTool calls through SwarmDaemon instead of the SDK's built-in handler. Gives full programmatic control: status queries, cancellation, hard worktree isolation, capacity enforcement.
+- **DirectSpawnStrategy** — Core spawn logic with worktree creation, SwarmDaemon dispatch, block-until-complete pattern, and parent AbortSignal propagation for cancellation.
+- **DirectSpawnToolDef** — Custom `Agent` tool definition that replaces the SDK's NOOP registration when direct mode is active.
+- **Child Agent Domain Events** — `ChildAgentRequested`, `ChildAgentCompleted`, `ChildAgentFailed`, `ChildAgentCancelled` events for observability.
+- **DeferredToolRegistry.override()** — Clean tool replacement method for swapping the Agent tool implementation at runtime.
+- **TODOS.md** — Deferred items roadmap: sub-task spawning evolution, session state durability.
+
 ## [0.0.1.0] - 2026-04-22
 
 ### Added
