@@ -289,6 +289,25 @@ export type ChildAgentCancelledEvent = DomainEvent<
 >;
 
 // ---------------------------------------------------------------------------
+// Workspace lifecycle events (Phase 3 — repo lifecycle scripts)
+// ---------------------------------------------------------------------------
+
+export type WorkspaceSetupStartedEvent = DomainEvent<
+  'WorkspaceSetupStarted',
+  { planId: string; worktreePath: string; source: 'workflow' | 'repo' | 'none' }
+>;
+
+export type WorkspaceSetupCompletedEvent = DomainEvent<
+  'WorkspaceSetupCompleted',
+  { planId: string; worktreePath: string; setupDurationMs: number; startDurationMs: number }
+>;
+
+export type WorkspaceSetupFailedEvent = DomainEvent<
+  'WorkspaceSetupFailed',
+  { planId: string; worktreePath: string; phase: 'setup' | 'start'; error: string; exitCode: number }
+>;
+
+// ---------------------------------------------------------------------------
 // Union of all domain event types
 // ---------------------------------------------------------------------------
 
@@ -334,7 +353,10 @@ export type AnyDomainEvent =
   | ChildAgentRequestedEvent
   | ChildAgentCompletedEvent
   | ChildAgentFailedEvent
-  | ChildAgentCancelledEvent;
+  | ChildAgentCancelledEvent
+  | WorkspaceSetupStartedEvent
+  | WorkspaceSetupCompletedEvent
+  | WorkspaceSetupFailedEvent;
 
 // ---------------------------------------------------------------------------
 // Event type string literals for use with the event bus
@@ -389,4 +411,7 @@ export interface DomainEventMap {
   ChildAgentCompleted: ChildAgentCompletedEvent;
   ChildAgentFailed: ChildAgentFailedEvent;
   ChildAgentCancelled: ChildAgentCancelledEvent;
+  WorkspaceSetupStarted: WorkspaceSetupStartedEvent;
+  WorkspaceSetupCompleted: WorkspaceSetupCompletedEvent;
+  WorkspaceSetupFailed: WorkspaceSetupFailedEvent;
 }

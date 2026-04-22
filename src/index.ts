@@ -21,6 +21,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { cleanupAllSandboxes, cleanupStaleSandboxes } from './execution/runtime/agent-sandbox';
 import { createCoordinatorDispatcher, type CoordinatorDispatcher } from './execution/coordinator-dispatcher';
+import { createWorkspaceProvisioner } from './execution/workspace/workspace-provisioner';
 import type { WorkflowConfig } from './config';
 import { resolve as pathResolve } from 'node:path';
 import { createGitHubAppTokenProvider, type GitHubTokenProvider } from './integration/github-app-auth';
@@ -272,6 +273,12 @@ async function main(): Promise<void> {
     const maxFixAttempts = (isNaN(parsedAttempts) || parsedAttempts < 1 || parsedAttempts > 10) ? 3 : parsedAttempts;
 
     const worktreeManager = createWorktreeManager({ logger: execLogger, basePath: worktreeBasePath });
+    const workspaceProvisioner = createWorkspaceProvisioner({
+      worktreeManager,
+      logger: execLogger,
+      eventBus,
+      workflowConfig,
+    });
     // P12: deferred-tool registry — built-ins (Read/Edit/Write/Bash/Grep/Glob/Agent)
     // and the ToolSearch meta-tool registered as alwaysLoad.
     const { createDefaultDeferredToolRegistry } = await import('./services/deferred-tools');
@@ -372,6 +379,7 @@ async function main(): Promise<void> {
       agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
       mcpClients,
       getGitHubToken: tokenProvider ? () => tokenProvider!.getToken() : undefined,
+      workspaceProvisioner,
     });
 
     logger.info('Interactive agent execution enabled', {

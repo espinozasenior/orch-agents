@@ -27,6 +27,7 @@ import { phaseId } from '../kernel/branded-types';
 import type { PlanId } from '../kernel/branded-types';
 import type { InteractiveTaskExecutor } from './runtime/interactive-executor';
 import type { WorktreeManager } from './workspace/worktree-manager';
+import type { WorkspaceProvisioner } from './workspace/workspace-provisioner';
 import type { ArtifactApplier } from './workspace/artifact-applier';
 import type { GitHubClient } from '../integration/github-client';
 import type { LinearClient } from '../integration/linear/linear-client';
@@ -61,6 +62,8 @@ export interface CoordinatorDispatcherDeps {
   getGitHubToken?: () => Promise<string>;
   /** Optional ReviewGate for producing findings on PR diffs. */
   reviewGate?: ReviewGate;
+  /** Optional WorkspaceProvisioner for lifecycle scripts. Falls back to worktreeManager when absent. */
+  workspaceProvisioner?: WorkspaceProvisioner;
 }
 
 export interface CoordinatorDispatcher {
@@ -104,6 +107,14 @@ export interface AgentResult {
 // ---------------------------------------------------------------------------
 
 export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): CoordinatorDispatcher {
+  async function disposeHandle(handle: import('../types').WorktreeHandle): Promise<void> {
+    if (deps.workspaceProvisioner) {
+      await deps.workspaceProvisioner.dispose(handle);
+    } else {
+      await deps.worktreeManager.dispose(handle);
+    }
+  }
+
   function emitPhaseCompleted(pId: PlanId, status: 'completed' | 'failed', agentStart: number): void {
     if (!deps.eventBus) return;
     deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
@@ -152,9 +163,18 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
 
           // 1. Create worktree from base branch (coordinator runs from base —
           //    no inter-agent commit chaining since there's only one agent).
-          handle = await deps.worktreeManager.create(
-            plan.id, lastCommitRef, `agent/${plan.id}/${agent.role}`,
-          );
+          //    When a WorkspaceProvisioner is available, use it to also run
+          //    per-repo lifecycle scripts (setup.sh / start.sh).
+          const repoName = intakeEvent.entities.repo;
+          if (deps.workspaceProvisioner) {
+            handle = await deps.workspaceProvisioner.provision(
+              plan.id, lastCommitRef, `agent/${plan.id}/${agent.role}`, repoName,
+            );
+          } else {
+            handle = await deps.worktreeManager.create(
+              plan.id, lastCommitRef, `agent/${plan.id}/${agent.role}`,
+            );
+          }
 
           // 2. Build coordinator prompt: system prompt + worker tools + Linear context
           const coordinatorPrompt = getCoordinatorSystemPrompt();
@@ -246,7 +266,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
               taskId,
             });
             emitPhaseCompleted(plan.id, 'failed', agentStart);
-            await deps.worktreeManager.dispose(handle);
+            await disposeHandle(handle);
             continue;
           }
 
@@ -273,7 +293,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
               taskId,
             });
             emitPhaseCompleted(plan.id, 'failed', agentStart);
-            await deps.worktreeManager.dispose(handle);
+            await disposeHandle(handle);
             continue;
           }
 
@@ -344,7 +364,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
           emitPhaseCompleted(plan.id, 'completed', agentStart);
 
           // 10. Cleanup worktree
-          await deps.worktreeManager.dispose(handle);
+          await disposeHandle(handle);
 
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -352,7 +372,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             planId: plan.id, agent: agent.type, error: message,
           });
           if (handle) {
-            await deps.worktreeManager.dispose(handle).catch(err => deps.logger.warn('Worktree dispose failed', { error: err instanceof Error ? err.message : String(err) }));
+            await disposeHandle(handle).catch(err => deps.logger.warn('Worktree dispose failed', { error: err instanceof Error ? err.message : String(err) }));
           }
           if (deps.taskRegistry && taskId) {
             try {

@@ -13,6 +13,14 @@ export interface RepoConfig {
   tracker?: {
     team?: string;
   };
+  lifecycle?: LifecycleConfig;
+}
+
+export interface LifecycleConfig {
+  setup?: string;
+  start?: string;
+  setupTimeout?: number;  // ms, default 300_000
+  startTimeout?: number;  // ms, default 120_000
 }
 
 export interface WorkflowConfig {

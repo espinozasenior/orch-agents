@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { AppError } from '../kernel/errors';
 import { validateWorkflowPromptTemplate } from './workflow-prompt';
-import type { WorkflowConfig, RepoConfig } from './workflow-config';
+import type { WorkflowConfig, RepoConfig, LifecycleConfig } from './workflow-config';
 import { WORKFLOW_SAFE_ENV_VARS } from './workflow-config';
 
 // ---------------------------------------------------------------------------
@@ -211,6 +211,7 @@ function buildReposMap(repos: Record<string, unknown>): Record<string, RepoConfi
     const labels = entry.labels != null ? readStringArray(entry.labels, `repos.${repoFullName}.labels`, []) : undefined;
     const github = buildGitHubConfig(entry.github);
     const trackerOverride = asOptionalRecord(entry.tracker);
+    const lifecycle = buildLifecycleConfig(entry.lifecycle, repoFullName);
 
     result[repoFullName] = {
       url,
@@ -219,9 +220,37 @@ function buildReposMap(repos: Record<string, unknown>): Record<string, RepoConfi
       ...(labels && labels.length > 0 ? { labels } : {}),
       ...(github ? { github } : {}),
       ...(trackerOverride ? { tracker: { team: readOptionalString(trackerOverride.team) } } : {}),
+      ...(lifecycle ? { lifecycle } : {}),
     };
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle config builder
+// ---------------------------------------------------------------------------
+
+function buildLifecycleConfig(raw: unknown, repoFullName: string): LifecycleConfig | undefined {
+  const record = asOptionalRecord(raw);
+  if (!record) return undefined;
+
+  const setup = readOptionalString(record.setup);
+  const start = readOptionalString(record.start);
+  if (!setup && !start) return undefined;
+
+  const setupTimeout = record.setup_timeout != null
+    ? readNumber(record.setup_timeout, `repos.${repoFullName}.lifecycle.setup_timeout`, 300_000)
+    : undefined;
+  const startTimeout = record.start_timeout != null
+    ? readNumber(record.start_timeout, `repos.${repoFullName}.lifecycle.start_timeout`, 120_000)
+    : undefined;
+
+  return {
+    ...(setup ? { setup } : {}),
+    ...(start ? { start } : {}),
+    ...(setupTimeout != null ? { setupTimeout } : {}),
+    ...(startTimeout != null ? { startTimeout } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
