@@ -140,12 +140,12 @@ describe('buildExecutor — agentSpawnMode', () => {
   });
 
   it('returns an executor regardless of spawn mode', () => {
-    const executor = buildExecutor({
+    const result = buildExecutor({
       baseExecutor: createMockBaseExecutor(),
     });
 
-    assert.ok(executor, 'executor returned');
-    assert.equal(typeof executor.execute, 'function');
+    assert.ok(result.executor, 'executor returned');
+    assert.equal(typeof result.executor.execute, 'function');
   });
 
   it('direct mode Agent tool execute is a function wired to strategy', () => {

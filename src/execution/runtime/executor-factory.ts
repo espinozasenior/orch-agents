@@ -69,7 +69,15 @@ export interface ExecutorFactoryDeps {
  * const executor = buildExecutor({ baseExecutor: interactiveExecutor, logger });
  * ```
  */
-export function buildExecutor(deps: ExecutorFactoryDeps): InteractiveTaskExecutor {
+export interface BuildExecutorResult {
+  executor: InteractiveTaskExecutor;
+  /** Only available when agentSpawnMode is 'direct'. */
+  directSpawnStrategy?: import('./direct-spawn-strategy').DirectSpawnStrategy;
+}
+
+export function buildExecutor(deps: ExecutorFactoryDeps): BuildExecutorResult {
+  let directSpawnStrategy: import('./direct-spawn-strategy').DirectSpawnStrategy | undefined;
+
   // Direct spawn mode: replace the NOOP Agent tool with real dispatch
   if (
     deps.agentSpawnMode === 'direct' &&
@@ -77,7 +85,7 @@ export function buildExecutor(deps: ExecutorFactoryDeps): InteractiveTaskExecuto
     deps.worktreeManager &&
     deps.deferredToolRegistry
   ) {
-    const strategy = createDirectSpawnStrategy({
+    directSpawnStrategy = createDirectSpawnStrategy({
       swarmDaemon: deps.swarmDaemon,
       worktreeManager: deps.worktreeManager,
       logger: deps.logger ?? { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } } as unknown as Logger,
@@ -86,7 +94,7 @@ export function buildExecutor(deps: ExecutorFactoryDeps): InteractiveTaskExecuto
       parentPlanId: deps.parentPlanId,
     });
 
-    deps.deferredToolRegistry.override(createDirectSpawnToolDef(strategy));
+    deps.deferredToolRegistry.override(createDirectSpawnToolDef(directSpawnStrategy));
   }
 
   const enhancedDeps: EnhancedExecutorDeps = {
@@ -99,5 +107,8 @@ export function buildExecutor(deps: ExecutorFactoryDeps): InteractiveTaskExecuto
     scratchpadDir: deps.scratchpadDir,
   };
 
-  return createEnhancedExecutor(enhancedDeps);
+  return {
+    executor: createEnhancedExecutor(enhancedDeps),
+    directSpawnStrategy,
+  };
 }

@@ -50,6 +50,12 @@ export interface DirectSpawnStrategy {
   getChildStatus(childId: string): ChildStatus | undefined;
   cancelChild(childId: string): void;
   getActiveChildren(): ChildStatus[];
+  /** Get all children (including completed/failed/cancelled). */
+  getAllChildren(): ChildStatus[];
+  /** Check if auto-pause circuit breaker has tripped. */
+  isPaused(): boolean;
+  /** Reset the circuit breaker (allows spawning again after manual review). */
+  resetPause(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +74,9 @@ export function createDirectSpawnStrategy(deps: DirectSpawnStrategyDeps): Direct
   const logger = baseLogger.child ? baseLogger.child({ component: 'DirectSpawnStrategy' }) : baseLogger;
 
   const children = new Map<string, ChildStatus>();
+  let consecutiveFailures = 0;
+  let paused = false;
+  const MAX_CONSECUTIVE_FAILURES = 3;
 
   function updateChild(id: string, patch: Partial<ChildStatus>): void {
     const existing = children.get(id);
@@ -93,6 +102,15 @@ export function createDirectSpawnStrategy(deps: DirectSpawnStrategyDeps): Direct
     description?: string;
     isolation?: 'worktree';
   }): Promise<string> {
+    // Auto-pause circuit breaker: refuse to spawn after N consecutive failures
+    if (paused) {
+      logger.warn('Direct spawn paused (circuit breaker tripped)', {
+        consecutiveFailures,
+        maxConsecutiveFailures: MAX_CONSECUTIVE_FAILURES,
+      });
+      return `Agent spawning is paused after ${consecutiveFailures} consecutive failures. Call resetPause() to resume.`;
+    }
+
     const childId = `child-${randomUUID().slice(0, 8)}`;
     const startTime = Date.now();
 
@@ -155,10 +173,19 @@ export function createDirectSpawnStrategy(deps: DirectSpawnStrategyDeps): Direct
         updateChild(childId, { status, duration, output });
 
         if (status === 'completed') {
+          consecutiveFailures = 0; // Reset on success
           emitEvent('ChildAgentCompleted', { parentPlanId, childId, duration, output });
         } else if (status === 'cancelled') {
           emitEvent('ChildAgentCancelled', { parentPlanId, childId, duration });
         } else {
+          consecutiveFailures++;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            paused = true;
+            logger.warn('Circuit breaker tripped: auto-pausing agent spawning', {
+              consecutiveFailures,
+              maxConsecutiveFailures: MAX_CONSECUTIVE_FAILURES,
+            });
+          }
           emitEvent('ChildAgentFailed', { parentPlanId, childId, duration, error: output });
         }
 
@@ -277,5 +304,16 @@ export function createDirectSpawnStrategy(deps: DirectSpawnStrategyDeps): Direct
     getChildStatus,
     cancelChild,
     getActiveChildren,
+    getAllChildren(): ChildStatus[] {
+      return [...children.values()];
+    },
+    isPaused(): boolean {
+      return paused;
+    },
+    resetPause(): void {
+      paused = false;
+      consecutiveFailures = 0;
+      logger.info('Circuit breaker reset — agent spawning resumed');
+    },
   };
 }
