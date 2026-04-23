@@ -39,6 +39,7 @@ type QueryFactory = (params: {
   maxTurns: number;
   permissionPolicy: SessionPermissionPolicy;
   linearToolBridge?: LinearToolBridge;
+  model?: string;
 }) => Promise<AsyncIterable<unknown>> | AsyncIterable<unknown>;
 
 interface SessionPermissionPolicy {
@@ -274,6 +275,7 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
         // 529 / overloaded_error responses are retried with exponential
         // backoff (1s, 2s, 4s, 8s ±25%) up to 4 times. Non-overload
         // errors propagate immediately.
+        const metaModelOverride = (request.metadata as Record<string, unknown> | undefined)?.modelOverride as string | undefined;
         const stream = await callWithOverloadRetry(
           () => Promise.resolve(createQuery({
             prompt: effectivePrompt,
@@ -282,6 +284,7 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
             maxTurns: Math.max(1, Math.floor(request.timeout / 60_000)) || 20,
             permissionPolicy,
             linearToolBridge: deps.linearToolBridge,
+            model: metaModelOverride,
           })),
           {
             ...(deps.overloadRetry ?? {}),
@@ -551,8 +554,9 @@ async function resolveQueryFactory(): Promise<QueryFactory> {
     throw new Error('Unsupported @anthropic-ai/claude-agent-sdk API shape');
   }
 
-  return ({ prompt, cwd, allowedTools, maxTurns }) => queryFn({
+  return ({ prompt, cwd, allowedTools, maxTurns, model }) => queryFn({
     prompt,
+    ...(model ? { model } : {}),
     options: {
       cwd,
       allowedTools,

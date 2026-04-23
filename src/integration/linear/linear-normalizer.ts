@@ -219,6 +219,12 @@ export function normalizeLinearEvent(
     rawText: sanitize(issue.description ?? ''),
   };
 
+  // Scan labels for model:* override pattern
+  const modelLabel = issue.labels?.find((l) => l.name.toLowerCase().startsWith('model:'));
+  if (modelLabel) {
+    intakeEvent.modelOverride = modelLabel.name.split(':')[1].trim();
+  }
+
   return intakeEvent;
 }
 

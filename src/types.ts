@@ -101,6 +101,16 @@ export interface AutomationSourceMetadata {
 }
 
 /**
+ * Slack-source metadata, stamped by the Slack normalizer.
+ */
+export interface SlackSourceMetadata {
+  readonly source: 'slack';
+  channelId: string;
+  threadTs?: string;
+  userId: string;
+}
+
+/**
  * Discriminated union of all source metadata variants.
  *
  * Narrows on the `source` discriminant field — each variant only contains
@@ -109,6 +119,7 @@ export interface AutomationSourceMetadata {
 export type IntakeSourceMetadata =
   | GitHubSourceMetadata
   | LinearSourceMetadata
+  | SlackSourceMetadata
   | StagingSourceMetadata
   | SystemSourceMetadata
   | AutomationSourceMetadata;
@@ -129,6 +140,10 @@ export function isStagingMeta(meta: IntakeSourceMetadata): meta is StagingSource
   return meta.source === 'staging';
 }
 
+export function isSlackMeta(meta: IntakeSourceMetadata): meta is SlackSourceMetadata {
+  return meta.source === 'slack';
+}
+
 export function isAutomationMeta(meta: IntakeSourceMetadata): meta is AutomationSourceMetadata {
   return meta.source === 'automation';
 }
@@ -136,7 +151,7 @@ export function isAutomationMeta(meta: IntakeSourceMetadata): meta is Automation
 export interface IntakeEvent {
   id: string;
   timestamp: string;
-  source: 'github' | 'linear' | 'client' | 'schedule' | 'system' | 'automation';
+  source: 'github' | 'linear' | 'slack' | 'client' | 'schedule' | 'system' | 'automation';
   sourceMetadata: IntakeSourceMetadata;
   entities: {
     repo?: string;
@@ -151,6 +166,8 @@ export interface IntakeEvent {
     severity?: 'low' | 'medium' | 'high' | 'critical';
   };
   rawText?: string;
+  /** Model override extracted from issue labels (e.g., label "model:opus" → "opus"). */
+  modelOverride?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -392,6 +392,46 @@ describe('LinearNormalizer', () => {
     assert.equal(result.rawText, 'Detailed bug report here');
   });
 
+  // Phase 5: model:* label extraction
+  it('should extract modelOverride from model:* label', () => {
+    const payload = makeLinearPayload({}, {
+      labels: [
+        { id: 'label-m', name: 'model:opus' },
+        { id: 'label-b', name: 'bug' },
+      ],
+    });
+    const updatedFrom = { labelIds: ['old'] };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.modelOverride, 'opus');
+  });
+
+  it('should not set modelOverride when no model:* label present', () => {
+    const payload = makeLinearPayload({}, {
+      labels: [{ id: 'label-b', name: 'bug' }],
+    });
+    const updatedFrom = { labelIds: ['old'] };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.modelOverride, undefined);
+  });
+
+  it('should handle model label with whitespace after colon', () => {
+    const payload = makeLinearPayload({}, {
+      labels: [{ id: 'label-m', name: 'model: sonnet' }],
+    });
+    const updatedFrom = { labelIds: ['old'] };
+
+    const result = normalizeLinearEvent(payload, updatedFrom);
+
+    assert.ok(result);
+    assert.equal(result.modelOverride, 'sonnet');
+  });
+
   it('should use general category when no labels match known categories', () => {
     const payload = makeLinearPayload({}, {
       labels: [{ id: 'label-x', name: 'unknown-label' }],

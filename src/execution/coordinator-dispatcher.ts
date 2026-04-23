@@ -64,6 +64,8 @@ export interface CoordinatorDispatcherDeps {
   reviewGate?: ReviewGate;
   /** Optional WorkspaceProvisioner for lifecycle scripts. Falls back to worktreeManager when absent. */
   workspaceProvisioner?: WorkspaceProvisioner;
+  /** Optional SecretStore for injecting resolved secrets into agent environment. */
+  secretStore?: import('../security/secret-store').SecretStore;
 }
 
 export interface CoordinatorDispatcher {
@@ -232,6 +234,20 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             }
           }
 
+          // 5b. Resolve secrets from the store and inject into process.env
+          if (deps.secretStore && repoName) {
+            try {
+              const secrets = deps.secretStore.resolveSecrets(repoName);
+              for (const [k, v] of Object.entries(secrets)) {
+                process.env[k] = v;
+              }
+            } catch (err) {
+              deps.logger.warn('Failed to resolve secrets for agent', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+
           // 6. Run Claude Code session in worktree
           const execResult = await deps.interactiveExecutor.execute({
             prompt,
@@ -245,6 +261,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
               planId: plan.id,
               workItemId: plan.workItemId,
               taskId,
+              modelOverride: intakeEvent.modelOverride,
             },
           });
 
