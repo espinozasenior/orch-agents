@@ -261,6 +261,8 @@ export interface ApplyContext {
   commitMessage: string;
   expectedFiles?: string[];
   forbiddenPatterns?: RegExp[];
+  /** Git author string for commit attribution (e.g., "user <user@users.noreply.github.com>"). */
+  author?: string;
 }
 
 export interface ApplyResult {

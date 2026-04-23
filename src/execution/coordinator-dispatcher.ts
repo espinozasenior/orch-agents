@@ -271,8 +271,15 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
           }
 
           // 6. Validate & commit
+          // Build author string from webhook sender for commit attribution
+          const senderLogin = intakeEvent.entities.author;
+          const authorStr = senderLogin
+            ? `${senderLogin} <${senderLogin}@users.noreply.github.com>`
+            : undefined;
+
           const applyResult = await deps.artifactApplier.apply(plan.id, handle, {
             commitMessage: `${agent.role}: ${agent.type} work on ${plan.workItemId}`,
+            author: authorStr,
           });
 
           if (applyResult.status === 'rejected') {

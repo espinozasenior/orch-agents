@@ -28,7 +28,7 @@ import {
  * Known event types that have standard GitHub actions.
  */
 export const KNOWN_ACTION_EVENTS: Record<string, string[]> = {
-  pull_request: ['opened', 'synchronize', 'closed', 'ready_for_review'],
+  pull_request: ['opened', 'synchronize', 'closed', 'ready_for_review', 'review_requested'],
   issues: ['opened', 'labeled'],
   issue_comment: ['created'],
   pull_request_review: ['submitted'],
