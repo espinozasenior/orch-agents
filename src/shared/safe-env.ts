@@ -51,7 +51,10 @@ const INTENTIONAL_SECRET_KEYS = new Set(['GH_TOKEN']);
  * or appears in the explicit CI scrub set. This catches future whitelist
  * mistakes before they reach a subprocess.
  */
-export function buildSafeEnv(source: Record<string, string | undefined> = process.env): Record<string, string> {
+export function buildSafeEnv(
+  source: Record<string, string | undefined> = process.env,
+  extraAllowedKeys?: Set<string>,
+): Record<string, string> {
   const safe: Record<string, string> = {};
   for (const key of SAFE_ENV_KEYS) {
     if (
@@ -65,6 +68,14 @@ export function buildSafeEnv(source: Record<string, string | undefined> = proces
     }
     if (source[key] !== undefined) {
       safe[key] = source[key]!;
+    }
+  }
+  // Extra allowed keys bypass the whitelist (for injected secrets from the store)
+  if (extraAllowedKeys) {
+    for (const key of extraAllowedKeys) {
+      if (source[key] !== undefined) {
+        safe[key] = source[key]!;
+      }
     }
   }
   safe.FORCE_COLOR = '0';
