@@ -149,6 +149,16 @@ describe('SecretStore', () => {
     assert.equal(resolved.REPO_ONLY, 'only-repo', 'Repo-only should be present');
   });
 
+  it('should work with a non-hex master key via SHA-256 derivation', () => {
+    const plainTextKey = 'my-secret-password';
+    const persistence = createSecretPersistence(':memory:');
+    const nonHexStore = createSecretStore({ persistence, masterKey: plainTextKey });
+
+    nonHexStore.setSecret('TEST_KEY', 'test-value-123', 'global');
+    const value = nonHexStore.getSecret('TEST_KEY', 'global');
+    assert.equal(value, 'test-value-123');
+  });
+
   it('should resolve only global secrets for repo with no repo-scoped secrets', () => {
     store.setSecret('G1', 'global-1', 'global');
 

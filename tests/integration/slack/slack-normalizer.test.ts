@@ -132,6 +132,28 @@ describe('SlackNormalizer', () => {
     }
   });
 
+  it('should sanitize dangerous content from message text', () => {
+    // HTML comments and invisible Unicode are stripped by sanitize()
+    const event: SlackMessage = {
+      type: 'message',
+      user: 'U123',
+      text: 'Hello <!-- hidden injection -->world\u200Bfoo',
+      ts: '111.111',
+      channel: 'C789',
+    };
+    const config = makeWorkflowConfig({
+      'org/repo': { url: 'https://github.com/org/repo', defaultBranch: 'main' },
+    });
+
+    const result = normalizeSlackEvent(event, config);
+
+    assert.ok(!result.rawText.includes('<!--'), `rawText should not contain HTML comments, got: ${result.rawText}`);
+    assert.ok(!result.rawText.includes('hidden injection'), `rawText should strip comment content, got: ${result.rawText}`);
+    assert.ok(!result.rawText.includes('\u200B'), `rawText should strip zero-width spaces, got: ${result.rawText}`);
+    assert.ok(result.rawText.includes('Hello'), 'rawText should preserve safe content');
+    assert.ok(result.rawText.includes('worldfoo'), 'rawText should preserve visible content');
+  });
+
   it('should set author from Slack user ID', () => {
     const event: SlackMessage = {
       type: 'message',

@@ -137,6 +137,69 @@ describe('SlackWebhookHandler', () => {
     await app.close();
   });
 
+  it('should reject stale timestamp (>5 minutes old)', async () => {
+    const app = Fastify();
+    await app.register(slackWebhookHandler, {
+      logger: createTestLogger(),
+      eventBus,
+      slackSigningSecret: SIGNING_SECRET,
+    });
+
+    const staleTs = String(Math.floor(Date.now() / 1000) - 600); // 10 minutes ago
+    const body = JSON.stringify({
+      type: 'event_callback',
+      event: { type: 'app_mention', user: 'U1', text: 'hello', ts: '1.1', channel: 'C1' },
+    });
+    const { signature } = signPayload(body, SIGNING_SECRET, staleTs);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/slack',
+      headers: {
+        'content-type': 'application/json',
+        'x-slack-signature': signature,
+        'x-slack-request-timestamp': staleTs,
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 401);
+    const result = JSON.parse(response.body);
+    assert.ok(result.error.includes('stale'), 'Error message should mention stale timestamp');
+
+    await app.close();
+  });
+
+  it('should reject request missing signature and timestamp headers', async () => {
+    const app = Fastify();
+    await app.register(slackWebhookHandler, {
+      logger: createTestLogger(),
+      eventBus,
+      slackSigningSecret: SIGNING_SECRET,
+    });
+
+    const body = JSON.stringify({
+      type: 'event_callback',
+      event: { type: 'app_mention', user: 'U1', text: 'hello', ts: '1.1', channel: 'C1' },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/slack',
+      headers: {
+        'content-type': 'application/json',
+        // No x-slack-signature or x-slack-request-timestamp
+      },
+      payload: body,
+    });
+
+    assert.equal(response.statusCode, 401);
+    const result = JSON.parse(response.body);
+    assert.ok(result.error.includes('Missing'), 'Error message should mention missing signature');
+
+    await app.close();
+  });
+
   it('should skip bot_message subtypes', async () => {
     const app = Fastify();
     await app.register(slackWebhookHandler, {

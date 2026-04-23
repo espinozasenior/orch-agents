@@ -170,6 +170,91 @@ describe('SlackResponder', () => {
     responder.stop();
   });
 
+  it('should NOT call Slack API when source is not slack', async () => {
+    const responder = createSlackResponder({
+      eventBus,
+      logger: createTestLogger(),
+      slackBotToken: 'xoxb-test-token',
+    });
+    responder.start();
+
+    const pid = pId('plan-gh-1');
+
+    // PlanCreated with source='github' (not slack)
+    const githubIntake: IntakeEvent = {
+      id: 'gh-intake-id',
+      timestamp: new Date().toISOString(),
+      source: 'github',
+      sourceMetadata: {
+        source: 'github',
+        eventType: 'push',
+        deliveryId: 'delivery-1',
+        repoFullName: 'org/repo',
+      },
+      entities: { repo: 'org/repo' },
+      rawText: 'push event',
+    };
+
+    eventBus.publish(createDomainEvent('PlanCreated', {
+      workflowPlan: { id: pid, workItemId: wId('wi-gh'), agentTeam: [] },
+      intakeEvent: githubIntake,
+    }));
+
+    eventBus.publish(createDomainEvent('WorkCompleted', {
+      workItemId: wId('wi-gh'),
+      planId: pid,
+      phaseCount: 2,
+      totalDuration: 3000,
+      output: 'done',
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // fetch should NOT have been called for Slack API (no thread reply)
+    const slackApiCalls = fetchCalls.filter((c) => c.url.includes('slack.com/api/chat.postMessage'));
+    assert.equal(slackApiCalls.length, 0, 'Should NOT post to Slack API for non-slack source');
+
+    responder.stop();
+  });
+
+  it('should handle fetch failure gracefully without unhandled rejection', async () => {
+    // Mock fetch to throw
+    globalThis.fetch = mock.fn(async () => {
+      throw new Error('Network error');
+    }) as unknown as typeof fetch;
+
+    const responder = createSlackResponder({
+      eventBus,
+      logger: createTestLogger(),
+      slackBotToken: 'xoxb-test-token',
+      broadcastWebhookUrl: 'https://hooks.slack.com/fail',
+    });
+    responder.start();
+
+    const pid = pId('plan-fail');
+
+    eventBus.publish(createDomainEvent('PlanCreated', {
+      workflowPlan: { id: pid, workItemId: wId('wi-fail'), agentTeam: [] },
+      intakeEvent: makeSlackIntakeEvent(),
+    }));
+
+    eventBus.publish(createDomainEvent('WorkCompleted', {
+      workItemId: wId('wi-fail'),
+      planId: pid,
+      phaseCount: 1,
+      totalDuration: 1000,
+      output: 'result',
+    }));
+
+    // Allow async work to settle -- if .catch() is missing, this will throw unhandled rejection
+    await new Promise((r) => setTimeout(r, 100));
+
+    // If we got here without an unhandled rejection, the test passes
+    assert.ok(true, 'No unhandled rejection from fetch failure');
+
+    responder.stop();
+  });
+
   it('should clean up subscriptions on stop', () => {
     const responder = createSlackResponder({
       eventBus,

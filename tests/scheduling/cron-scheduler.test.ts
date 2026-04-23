@@ -261,6 +261,79 @@ describe('CronScheduler', () => {
     assert.equal(state.lastRunStatus, 'success');
   });
 
+  it('tick fires due automations whose cron expression matches the current minute', async () => {
+    // Dynamically build a cron expression that matches right now
+    const now = new Date();
+    const minute = now.getMinutes();
+    const hour = now.getHours();
+    const cronExpr = `${minute} ${hour} * * *`;
+
+    const config = makeConfig({
+      'acme/app': {
+        scheduled: { schedule: cronExpr, instruction: 'Run scheduled task' },
+      },
+    });
+
+    const triggered: string[] = [];
+    eventBus.subscribe('AutomationTriggered', (e) => {
+      triggered.push(e.payload.automationId);
+    });
+
+    // Use a very short tick interval and let it fire once
+    scheduler = createCronScheduler({
+      workflowConfigProvider: () => config,
+      eventBus,
+      logger: noopLogger,
+      persistence,
+      tickIntervalMs: 50,
+    });
+    scheduler.start();
+
+    // Wait long enough for at least one tick
+    await new Promise((r) => setTimeout(r, 200));
+    scheduler.stop();
+
+    assert.ok(triggered.includes('acme/app::scheduled'), `Expected tick to fire automation, got: ${JSON.stringify(triggered)}`);
+  });
+
+  it('tick skips paused automations', async () => {
+    const now = new Date();
+    const minute = now.getMinutes();
+    const hour = now.getHours();
+    const cronExpr = `${minute} ${hour} * * *`;
+
+    const config = makeConfig({
+      'acme/app': {
+        paused_auto: { schedule: cronExpr, instruction: 'Should be skipped' },
+      },
+    });
+
+    // Pre-set the automation state to paused via persistence
+    const { createInitialState } = await import('../../src/scheduling/automation-state-machine');
+    const initialState = createInitialState('acme/app::paused_auto');
+    const pausedState = { ...initialState, paused: true, pausedAt: new Date().toISOString() };
+    persistence.saveState(pausedState);
+
+    const triggered: string[] = [];
+    eventBus.subscribe('AutomationTriggered', (e) => {
+      triggered.push(e.payload.automationId);
+    });
+
+    scheduler = createCronScheduler({
+      workflowConfigProvider: () => config,
+      eventBus,
+      logger: noopLogger,
+      persistence,
+      tickIntervalMs: 50,
+    });
+    scheduler.start();
+
+    await new Promise((r) => setTimeout(r, 200));
+    scheduler.stop();
+
+    assert.equal(triggered.length, 0, 'Paused automation should NOT be triggered by tick');
+  });
+
   it('auto-pauses after 3 consecutive AutomationFailed events', () => {
     const config = makeConfig({
       'acme/app': {

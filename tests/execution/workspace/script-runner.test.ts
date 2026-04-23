@@ -109,4 +109,13 @@ describe('runLifecycleScript', () => {
     assert.ok(typeof result.durationMs === 'number');
     assert.ok(result.durationMs >= 0);
   });
+
+  it('runs real child_process.execFile when no mock exec is provided', async () => {
+    const result = await runLifecycleScript('echo hello', '/tmp', 60_000);
+
+    assert.strictEqual(result.exitCode, 0);
+    assert.ok(result.stdout.includes('hello'), `Expected stdout to contain "hello", got: ${result.stdout}`);
+    assert.strictEqual(result.timedOut, false);
+    assert.ok(result.durationMs >= 0);
+  });
 });

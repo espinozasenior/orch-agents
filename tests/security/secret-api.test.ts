@@ -117,6 +117,36 @@ describe('SecretApi', () => {
     assert.equal(response.statusCode, 400);
   });
 
+  it('should reject DELETE without scope query param', async () => {
+    store.setSecret('SOME_KEY', 'value', 'global');
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/secrets/SOME_KEY',
+    });
+
+    assert.equal(response.statusCode, 400);
+    const body = JSON.parse(response.body);
+    assert.ok(body.error.includes('scope'), 'Error should mention scope parameter');
+  });
+
+  it('should filter GET /secrets by scope query param', async () => {
+    store.setSecret('GLOBAL_ONE', 'g1', 'global');
+    store.setSecret('GLOBAL_TWO', 'g2', 'global');
+    store.setSecret('REPO_ONE', 'r1', 'repo', 'org/repo');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/secrets?scope=global',
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.secrets.length, 2, 'Should return only global secrets');
+    const keys = body.secrets.map((s: { key: string }) => s.key).sort();
+    assert.deepEqual(keys, ['GLOBAL_ONE', 'GLOBAL_TWO']);
+  });
+
   it('should create repo-scoped secret', async () => {
     const response = await app.inject({
       method: 'PUT',
