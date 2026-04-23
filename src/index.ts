@@ -31,6 +31,8 @@ import { createOAuthTokenStore, type OAuthTokenStore } from './integration/linea
 import { createSymphonyOrchestrator, type SymphonyOrchestrator } from './execution/orchestrator/symphony-orchestrator';
 import { createCoordinatorSession } from './execution/runtime/coordinator-session';
 import { createWorkpadReporter, type WorkpadReporter } from './integration/linear/workpad-reporter';
+import { createSlackResponder, type SlackResponder } from './integration/slack/slack-responder';
+import type { SecretStore } from './security/secret-store';
 import { createWorkflowConfigStore } from './integration/linear/workflow-config-store';
 import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 
@@ -250,6 +252,21 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── Encrypted secrets store ──────────────────────────────────
+  let secretStore: SecretStore | undefined;
+  if (config.secretsMasterKey) {
+    const { createSecretPersistence } = await import('./security/secret-persistence');
+    const { createSecretStore: makeSecretStore } = await import('./security/secret-store');
+    const secretPersistence = createSecretPersistence(
+      process.env.SECRETS_DB_PATH ?? './data/secrets.db',
+    );
+    secretStore = makeSecretStore({
+      persistence: secretPersistence,
+      masterKey: config.secretsMasterKey,
+    });
+    logger.info('Encrypted secrets store initialized');
+  }
+
   // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
   const useInteractiveAgents = process.env.ENABLE_INTERACTIVE_AGENTS === 'true';
 
@@ -257,6 +274,7 @@ async function main(): Promise<void> {
   let reviewGate: ReturnType<typeof createReviewGate> | undefined;
   let symphonyOrchestrator: SymphonyOrchestrator | undefined;
   let workpadReporter: WorkpadReporter | undefined;
+  let slackResponder: SlackResponder | undefined;
   let linearExecutionMode: 'generic' | 'symphony' = 'generic';
   let directSpawnStrategy: import('./execution/runtime/direct-spawn-strategy').DirectSpawnStrategy | undefined;
 
@@ -380,6 +398,7 @@ async function main(): Promise<void> {
       mcpClients,
       getGitHubToken: tokenProvider ? () => tokenProvider!.getToken() : undefined,
       workspaceProvisioner,
+      secretStore,
     });
 
     logger.info('Interactive agent execution enabled', {
@@ -449,6 +468,18 @@ async function main(): Promise<void> {
       });
       workpadReporter.start();
       logger.info('Linear workpad reporter enabled');
+    }
+
+    // Slack responder — thread replies + broadcast notifications
+    if (config.slackEnabled && config.slackBotToken) {
+      slackResponder = createSlackResponder({
+        eventBus,
+        logger: execLogger,
+        slackBotToken: config.slackBotToken,
+        broadcastWebhookUrl: config.slackWebhookUrl,
+      });
+      slackResponder.start();
+      logger.info('Slack responder enabled');
     }
   }
 
@@ -529,6 +560,7 @@ async function main(): Promise<void> {
     tokenPersistence,
     directSpawnStrategy,
     cronScheduler,
+    secretStore,
   });
 
   try {
@@ -625,6 +657,9 @@ async function main(): Promise<void> {
 
       logger.info('Shutdown step: stopping workpad reporter');
       workpadReporter?.stop();
+
+      logger.info('Shutdown step: stopping slack responder');
+      slackResponder?.stop();
 
       logger.info('Shutdown step: shutting down pipeline');
       pipeline.shutdown();
