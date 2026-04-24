@@ -28,6 +28,7 @@ All notable changes to this project will be documented in this file.
 - **Slack Notifier Retired** — `src/notification/slack-notifier.ts` deleted, superseded by `src/integration/slack/slack-responder.ts`.
 - **Workflow Config Store Moved** — From `src/integration/linear/` to `src/config/` where it belongs.
 - **buildSafeEnv() Gains extraAllowedKeys** — For injecting repo secrets into child process environments without modifying the global allowlist.
+- **SQLite Stores Harden PRAGMAs** — All three SQLite stores (OAuth tokens, automation runs, encrypted secrets) now open via a shared `src/shared/sqlite.ts` helper that sets `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, and `foreign_keys=ON`. Readers no longer block the writer, and `SQLITE_BUSY` is handled internally by SQLite's sleep-and-retry before surfacing.
 
 ## [0.0.2.0] - 2026-04-22
 
