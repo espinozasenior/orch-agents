@@ -1,6 +1,6 @@
 {
   "name": "orch-agents",
-  "version": "0.1.0.0",
+  "version": "0.1.0.1",
   "description": "Autonomous Development Agency System - orchestrates AI agent swarms for software development workflows",
   "type": "commonjs",
   "main": "dist/lib/index.js",

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.0.1] - 2026-04-24
+
+### Fixed
+
+- **Cron Scheduler Double-Fire Guard** — `cron-scheduler.ts` now tracks the last-fired calendar minute per automation and skips duplicate dispatches within the same minute. Fixes #37 — under timer jitter (GC pause, event-loop stall, CI contention), the 60s tick loop could land in the same wall-clock minute twice and fire an automation twice.
+
 ## [0.1.0.0] - 2026-04-24 — Open-Inspect Parity Release
 
 ### Added
