@@ -123,6 +123,10 @@ export function createCronScheduler(deps: CronSchedulerDeps): CronScheduler {
   // In-memory state cache keyed by `repoName::automationName`
   const stateCache = new Map<string, AutomationState>();
 
+  // Track the last minute-key each automation was fired to prevent
+  // double-firing within the same calendar minute.
+  const lastFiredMinuteKey = new Map<string, string>();
+
   function automationKey(repoName: string, name: string): string {
     return `${repoName}::${name}`;
   }
@@ -228,6 +232,11 @@ export function createCronScheduler(deps: CronSchedulerDeps): CronScheduler {
         }
 
         if (!matchesCronExpression(automationConfig.schedule, now)) continue;
+
+        // Deduplicate: skip if already fired in this calendar minute
+        const minuteKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+        if (lastFiredMinuteKey.get(key) === minuteKey) continue;
+        lastFiredMinuteKey.set(key, minuteKey);
 
         try {
           fireAutomation(key, repoName, name, 'cron');

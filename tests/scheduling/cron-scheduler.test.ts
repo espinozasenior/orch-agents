@@ -334,6 +334,40 @@ describe('CronScheduler', () => {
     assert.equal(triggered.length, 0, 'Paused automation should NOT be triggered by tick');
   });
 
+  it('tick does not double-fire an automation in the same minute', async () => {
+    const now = new Date();
+    const minute = String(now.getMinutes()).padStart(2, '0');
+    const hour = String(now.getHours()).padStart(2, '0');
+
+    const config = makeConfig({
+      'test-repo': {
+        'double-fire-check': { schedule: `${minute} ${hour} * * *` },
+      },
+    });
+
+    const triggered: string[] = [];
+    eventBus.subscribe('AutomationTriggered', (e) => {
+      triggered.push(e.payload.automationId);
+    });
+
+    scheduler = createCronScheduler({
+      workflowConfigProvider: () => config,
+      eventBus,
+      persistence,
+      logger: noopLogger,
+      tickIntervalMs: 20,
+    });
+    scheduler.start();
+
+    // Wait long enough for multiple ticks to fire within the same minute
+    await new Promise((r) => setTimeout(r, 300));
+    scheduler.stop();
+
+    // Despite multiple ticks, the automation should have fired exactly once
+    const fires = triggered.filter((id) => id === 'test-repo::double-fire-check');
+    assert.equal(fires.length, 1, `Expected 1 fire but got ${fires.length}`);
+  });
+
   it('auto-pauses after 3 consecutive AutomationFailed events', () => {
     const config = makeConfig({
       'acme/app': {
