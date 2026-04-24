@@ -281,6 +281,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
         eventBus.publish(
           createDomainEvent('WorkFailed', {
             workItemId: toWorkItemId(executionKey),
+            planId: taskPlanId,
             failureReason: reason,
             retryCount: 0,
           }, correlationId),
@@ -320,6 +321,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       eventBus.publish(
         createDomainEvent('WorkFailed', {
           workItemId: toWorkItemId(executionKey),
+          planId: taskPlanId,
           failureReason: reason,
           retryCount: 0,
         }, correlationId),
@@ -447,6 +449,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
         tracker.fail(promptPlanId, 'Coordinator session failed');
         eventBus.publish(createDomainEvent('WorkFailed', {
           workItemId: toWorkItemId(executionKey),
+          planId: promptPlanId,
           failureReason: 'Coordinator session failed',
           retryCount: 0,
         }, correlationId));
@@ -476,6 +479,7 @@ export function startExecutionEngine(deps: ExecutionEngineDeps): () => void {
       logger.error('AgentPrompted coordinator error', { planId: promptPlanId, error: reason });
       eventBus.publish(createDomainEvent('WorkFailed', {
         workItemId: toWorkItemId(executionKey),
+        planId: promptPlanId,
         failureReason: reason,
         retryCount: 0,
       }, correlationId));

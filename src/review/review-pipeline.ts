@@ -137,6 +137,7 @@ export function startReviewPipeline(deps: ReviewPipelineDeps): () => void {
       eventBus.publish(
         createDomainEvent('WorkFailed', {
           workItemId,
+          planId,
           failureReason: reviewErr.message,
           retryCount: 0,
         }, correlationId),

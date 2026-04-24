@@ -74,7 +74,7 @@ export type ReviewCompletedEvent = DomainEvent<
 
 export type WorkFailedEvent = DomainEvent<
   'WorkFailed',
-  { workItemId: WorkItemId; failureReason: string; retryCount: number }
+  { workItemId: WorkItemId; planId?: PlanId; failureReason: string; retryCount: number }
 >;
 
 export type WorkCancelledEvent = DomainEvent<

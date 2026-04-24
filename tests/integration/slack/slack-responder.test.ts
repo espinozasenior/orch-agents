@@ -1,7 +1,8 @@
 /**
  * Tests for Slack responder — London School TDD.
  *
- * Covers: thread reply on WorkCompleted, broadcast on PlanCreated.
+ * Covers: thread reply on WorkCompleted, broadcast on PlanCreated,
+ * correct thread routing on WorkFailed (including concurrent plans).
  */
 
 import { describe, it, beforeEach, afterEach, mock } from 'node:test';
@@ -151,9 +152,10 @@ describe('SlackResponder', () => {
       intakeEvent: makeSlackIntakeEvent(),
     }));
 
-    // Simulate WorkFailed
+    // Simulate WorkFailed with planId
     eventBus.publish(createDomainEvent('WorkFailed', {
       workItemId: wId('wi-3'),
+      planId: pid,
       failureReason: 'Timeout exceeded',
       retryCount: 0,
     }));
@@ -164,6 +166,50 @@ describe('SlackResponder', () => {
     assert.ok(slackApiCalls.length > 0, 'Should have posted failure to Slack API');
     assert.ok(
       (slackApiCalls[0].body.text as string).includes('Timeout exceeded'),
+      'Should include failure reason',
+    );
+
+    responder.stop();
+  });
+
+  it('should route WorkFailed to the correct thread under concurrency (regression #38)', async () => {
+    const responder = createSlackResponder({
+      eventBus,
+      logger: createTestLogger(),
+      slackBotToken: 'xoxb-test-token',
+    });
+    responder.start();
+
+    const pidA = pId('plan-concurrent-A');
+    const pidB = pId('plan-concurrent-B');
+
+    // Two slack threads start plans at roughly the same time
+    eventBus.publish(createDomainEvent('PlanCreated', {
+      workflowPlan: { id: pidA, workItemId: wId('wi-A'), agentTeam: [] },
+      intakeEvent: makeSlackIntakeEvent({ channelId: 'C-thread-A', threadTs: '100.001' }),
+    }));
+    eventBus.publish(createDomainEvent('PlanCreated', {
+      workflowPlan: { id: pidB, workItemId: wId('wi-B'), agentTeam: [] },
+      intakeEvent: makeSlackIntakeEvent({ channelId: 'C-thread-B', threadTs: '200.002' }),
+    }));
+
+    // The SECOND plan fails — before the fix, this would route to the FIRST thread
+    eventBus.publish(createDomainEvent('WorkFailed', {
+      workItemId: wId('wi-B'),
+      planId: pidB,
+      failureReason: 'OOM killed',
+      retryCount: 0,
+    }));
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const slackApiCalls = fetchCalls.filter((c) => c.url.includes('slack.com/api/chat.postMessage'));
+    assert.equal(slackApiCalls.length, 1, 'Should post exactly one failure message');
+    // Must route to thread B (the one that actually failed), NOT thread A
+    assert.equal(slackApiCalls[0].body.channel, 'C-thread-B', 'Should post to the correct channel (B)');
+    assert.equal(slackApiCalls[0].body.thread_ts, '200.002', 'Should post to the correct thread (B)');
+    assert.ok(
+      (slackApiCalls[0].body.text as string).includes('OOM killed'),
       'Should include failure reason',
     );
 

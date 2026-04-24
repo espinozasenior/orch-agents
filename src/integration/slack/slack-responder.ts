@@ -157,22 +157,24 @@ export function createSlackResponder(deps: SlackResponderDeps): SlackResponder {
 
       // WorkFailed: thread reply for Slack source, broadcast for all
       unsubscribers.push(eventBus.subscribe('WorkFailed', (event) => {
-        const { workItemId, failureReason } = event.payload;
+        const { planId, workItemId, failureReason } = event.payload;
 
-        // Check all plan contexts for slack source
-        for (const [pid, ctx] of planContext) {
-          if (ctx.intakeEvent && isSlackMeta(ctx.intakeEvent.sourceMetadata)) {
-            const meta = ctx.intakeEvent.sourceMetadata;
-            postSlackMessage(
-              slackBotToken,
-              meta.channelId,
-              `Failed: ${failureReason}`,
-              meta.threadTs,
-              log,
-            );
-            planContext.delete(pid);
-            break;
-          }
+        // Direct lookup by planId when available (correct under concurrency)
+        const ctx = planId ? planContext.get(planId) : undefined;
+
+        if (ctx?.intakeEvent && isSlackMeta(ctx.intakeEvent.sourceMetadata)) {
+          const meta = ctx.intakeEvent.sourceMetadata;
+          postSlackMessage(
+            slackBotToken,
+            meta.channelId,
+            `Failed: ${failureReason}`,
+            meta.threadTs,
+            log,
+          );
+        }
+
+        if (planId) {
+          planContext.delete(planId);
         }
 
         // Broadcast notification
