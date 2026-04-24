@@ -43,6 +43,14 @@ export interface ParsedGitHubEvent {
   commentBody: string | null;
   /** Review state for pull_request_review events */
   reviewState: string | null;
+  /** Comment ID for reaction posting */
+  commentId: number | null;
+  /** File path from review thread comments */
+  commentPath: string | null;
+  /** Diff hunk from review thread comments */
+  commentDiffHunk: string | null;
+  /** Line number from review thread comments */
+  commentLine: number | null;
   /** Raw payload for downstream use */
   rawPayload: Record<string, unknown>;
 }
@@ -71,7 +79,11 @@ interface GitHubPayload {
     labels?: Array<{ name?: string }>;
   };
   comment?: {
+    id?: number;
     body?: string;
+    path?: string;
+    diff_hunk?: string;
+    line?: number;
   };
   review?: {
     state?: string;
@@ -136,6 +148,10 @@ export function parseGitHubEvent(
     conclusion: null,
     commentBody: null,
     reviewState: null,
+    commentId: null,
+    commentPath: null,
+    commentDiffHunk: null,
+    commentLine: null,
     rawPayload,
   };
 
@@ -220,6 +236,10 @@ function parseIssueComment(
     ...base,
     issueNumber: payload.issue?.number ?? null,
     commentBody: payload.comment?.body ?? null,
+    commentId: payload.comment?.id ?? null,
+    commentPath: payload.comment?.path ?? null,
+    commentDiffHunk: payload.comment?.diff_hunk ?? null,
+    commentLine: payload.comment?.line ?? null,
   };
 }
 

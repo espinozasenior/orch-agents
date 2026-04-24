@@ -13,6 +13,7 @@ import type { Logger } from './shared/logger';
 import type { EventBus } from './kernel/event-bus';
 import { webhookRouter } from './webhook-gateway/webhook-router';
 import { linearWebhookHandler } from './integration/linear/linear-webhook-handler';
+import { slackWebhookHandler } from './integration/slack/slack-webhook-handler';
 import { setBotUsername } from './intake/github-workflow-normalizer';
 import { setBotName } from './kernel/agent-identity';
 import type { WorkflowConfig } from './config';
@@ -21,6 +22,9 @@ import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 import type { LinearAuthStrategy } from './integration/linear/linear-client';
 import type { OAuthTokenStore } from './integration/linear/oauth-token-store';
 import type { OAuthTokenPersistence } from './integration/linear/oauth-token-persistence';
+import type { CronScheduler } from './scheduling/cron-scheduler';
+import type { SecretStore } from './security/secret-store';
+import { secretApi } from './security/secret-api';
 
 export interface ServerDependencies {
   config: AppConfig;
@@ -39,6 +43,10 @@ export interface ServerDependencies {
   linearClient?: import('./integration/linear/linear-client').LinearClient;
   /** Token persistence for cleanup on OAuth revocation. */
   tokenPersistence?: OAuthTokenPersistence;
+  /** Cron scheduler for automation routes (optional). */
+  cronScheduler?: CronScheduler;
+  /** Secret store for the secrets management API (optional). */
+  secretStore?: SecretStore;
 }
 
 /**
@@ -69,6 +77,46 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
       timestamp: new Date().toISOString(),
     };
   });
+
+  // ── Automation scheduling API ────────────────────────────────
+  if (deps.cronScheduler) {
+    const cronScheduler = deps.cronScheduler;
+
+    server.get('/automations', async () => {
+      return cronScheduler.getSnapshot();
+    });
+
+    server.post<{ Params: { id: string } }>('/automations/:id/trigger', async (request, reply) => {
+      try {
+        const runId = await cronScheduler.triggerManually(request.params.id);
+        return { runId };
+      } catch (err) {
+        return reply.status(404).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    });
+
+    server.post<{ Params: { id: string } }>('/automations/:id/resume', async (request, reply) => {
+      try {
+        cronScheduler.resumeAutomation(request.params.id);
+        return { ok: true };
+      } catch (err) {
+        return reply.status(404).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    });
+
+    server.post<{ Params: { id: string } }>('/webhooks/automation/:id', async (request, reply) => {
+      try {
+        const runId = await cronScheduler.triggerWebhook(request.params.id);
+        return { runId };
+      } catch (err) {
+        return reply.status(404).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    });
+
+    logger.info('Automation routes registered', {
+      routes: ['/automations', '/automations/:id/trigger', '/automations/:id/resume', '/webhooks/automation/:id'],
+    });
+  }
 
   // ── Child agent status API (direct spawn mode) ──────────────
   if (deps.directSpawnStrategy) {
@@ -114,6 +162,25 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
       tokenPersistence: deps.tokenPersistence,
     });
     logger.info('Linear webhook route registered', { path: '/webhooks/linear' });
+  }
+
+  // ── Slack webhook route ──────────────────────────────────
+  if (config.slackEnabled) {
+    await server.register(slackWebhookHandler, {
+      logger,
+      eventBus: deps.eventBus,
+      slackSigningSecret: config.slackSigningSecret,
+      workflowConfig: deps.workflowConfig,
+    });
+    logger.info('Slack webhook route registered', { path: '/webhooks/slack' });
+  }
+
+  // ── Secrets management API ──────────────────────────────────
+  if (deps.secretStore) {
+    await server.register(secretApi, {
+      secretStore: deps.secretStore,
+    });
+    logger.info('Secrets API routes registered', { routes: ['/secrets', '/secrets/:key'] });
   }
 
   // ── OAuth routes (Phase 7A) ──────────────────────────────────

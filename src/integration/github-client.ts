@@ -54,6 +54,8 @@ export interface GitHubClient {
   createPR(repo: string, opts: CreatePROpts): Promise<CreatePRResult>;
   /** Create a GitHub issue. Returns the issue number and URL. */
   createIssue(repo: string, opts: CreateIssueOpts): Promise<CreateIssueResult>;
+  /** Add a reaction to a comment (e.g., 'eyes', '+1', 'rocket'). */
+  addReaction(repo: string, commentId: number, reaction: string): Promise<void>;
 }
 
 export interface CreatePROpts {
@@ -365,6 +367,19 @@ export function createGitHubClient(deps: GitHubClientDeps = {}): GitHubClient {
       const url = stdout.trim();
       const number = extractNumberFromUrl(url, 'issues');
       return { number, url };
+    },
+
+    async addReaction(repo, commentId, reaction) {
+      validateRepo(repo);
+      if (!Number.isInteger(commentId) || commentId <= 0) {
+        throw new ExecutionError(`Invalid comment ID ${commentId}. Must be a positive integer.`);
+      }
+
+      await run('gh', [
+        'api', '-X', 'POST',
+        `repos/${repo}/issues/comments/${commentId}/reactions`,
+        '-f', `content=${reaction}`,
+      ]);
     },
   };
 }

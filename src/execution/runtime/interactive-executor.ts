@@ -45,6 +45,12 @@ export interface InteractiveExecutionRequest {
    * for prompt cache sharing).
    */
   forkContextPrefix?: string;
+  /**
+   * Extra environment variables to pass to the child Claude process.
+   * Used to inject per-execution secrets (e.g. GH_TOKEN, repo secrets)
+   * without mutating the global process.env.
+   */
+  extraEnv?: Record<string, string>;
 }
 
 export interface InteractiveTaskExecutor {

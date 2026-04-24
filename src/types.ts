@@ -90,6 +90,27 @@ export interface SystemSourceMetadata {
 }
 
 /**
+ * Automation-originated metadata, stamped by the scheduling bounded context.
+ */
+export interface AutomationSourceMetadata {
+  readonly source: 'automation';
+  automationId: string;
+  trigger: 'cron' | 'webhook' | 'manual';
+  /** Relative path to a skill file, if the automation config specifies one. */
+  skillPath?: string;
+}
+
+/**
+ * Slack-source metadata, stamped by the Slack normalizer.
+ */
+export interface SlackSourceMetadata {
+  readonly source: 'slack';
+  channelId: string;
+  threadTs?: string;
+  userId: string;
+}
+
+/**
  * Discriminated union of all source metadata variants.
  *
  * Narrows on the `source` discriminant field — each variant only contains
@@ -98,8 +119,10 @@ export interface SystemSourceMetadata {
 export type IntakeSourceMetadata =
   | GitHubSourceMetadata
   | LinearSourceMetadata
+  | SlackSourceMetadata
   | StagingSourceMetadata
-  | SystemSourceMetadata;
+  | SystemSourceMetadata
+  | AutomationSourceMetadata;
 
 // ---------------------------------------------------------------------------
 // Type guards for narrowing IntakeSourceMetadata
@@ -117,10 +140,18 @@ export function isStagingMeta(meta: IntakeSourceMetadata): meta is StagingSource
   return meta.source === 'staging';
 }
 
+export function isSlackMeta(meta: IntakeSourceMetadata): meta is SlackSourceMetadata {
+  return meta.source === 'slack';
+}
+
+export function isAutomationMeta(meta: IntakeSourceMetadata): meta is AutomationSourceMetadata {
+  return meta.source === 'automation';
+}
+
 export interface IntakeEvent {
   id: string;
   timestamp: string;
-  source: 'github' | 'linear' | 'client' | 'schedule' | 'system';
+  source: 'github' | 'linear' | 'slack' | 'client' | 'schedule' | 'system' | 'automation';
   sourceMetadata: IntakeSourceMetadata;
   entities: {
     repo?: string;
@@ -135,6 +166,8 @@ export interface IntakeEvent {
     severity?: 'low' | 'medium' | 'high' | 'critical';
   };
   rawText?: string;
+  /** Model override extracted from issue labels (e.g., label "model:opus" → "opus"). */
+  modelOverride?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +278,8 @@ export interface ApplyContext {
   commitMessage: string;
   expectedFiles?: string[];
   forbiddenPatterns?: RegExp[];
+  /** Git author string for commit attribution (e.g., "user <user@users.noreply.github.com>"). */
+  author?: string;
 }
 
 export interface ApplyResult {

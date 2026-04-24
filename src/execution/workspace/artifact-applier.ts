@@ -143,7 +143,11 @@ export function createArtifactApplier(deps: ArtifactApplierDeps = {}): ArtifactA
     await exec(handle.path, 'git', ['add', '-A']);
 
     // 8. Commit
-    await exec(handle.path, 'git', ['commit', '-m', context.commitMessage]);
+    const commitArgs = ['commit', '-m', context.commitMessage];
+    if (context.author) {
+      commitArgs.push('--author', context.author);
+    }
+    await exec(handle.path, 'git', commitArgs);
 
     // 9. Extract SHA
     const shaResult = await exec(handle.path, 'git', ['rev-parse', 'HEAD']);

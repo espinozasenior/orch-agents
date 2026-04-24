@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { AppError } from '../kernel/errors';
 import { validateWorkflowPromptTemplate } from './workflow-prompt';
-import type { WorkflowConfig, RepoConfig } from './workflow-config';
+import type { WorkflowConfig, RepoConfig, LifecycleConfig, AutomationConfig } from './workflow-config';
 import { WORKFLOW_SAFE_ENV_VARS } from './workflow-config';
 
 // ---------------------------------------------------------------------------
@@ -211,6 +211,8 @@ function buildReposMap(repos: Record<string, unknown>): Record<string, RepoConfi
     const labels = entry.labels != null ? readStringArray(entry.labels, `repos.${repoFullName}.labels`, []) : undefined;
     const github = buildGitHubConfig(entry.github);
     const trackerOverride = asOptionalRecord(entry.tracker);
+    const lifecycle = buildLifecycleConfig(entry.lifecycle, repoFullName);
+    const automations = buildAutomationsMap(entry.automations, repoFullName);
 
     result[repoFullName] = {
       url,
@@ -219,8 +221,88 @@ function buildReposMap(repos: Record<string, unknown>): Record<string, RepoConfi
       ...(labels && labels.length > 0 ? { labels } : {}),
       ...(github ? { github } : {}),
       ...(trackerOverride ? { tracker: { team: readOptionalString(trackerOverride.team) } } : {}),
+      ...(lifecycle ? { lifecycle } : {}),
+      ...(automations ? { automations } : {}),
     };
   }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle config builder
+// ---------------------------------------------------------------------------
+
+function buildLifecycleConfig(raw: unknown, repoFullName: string): LifecycleConfig | undefined {
+  const record = asOptionalRecord(raw);
+  if (!record) return undefined;
+
+  const setup = readOptionalString(record.setup);
+  const start = readOptionalString(record.start);
+  if (!setup && !start) return undefined;
+
+  const setupTimeout = record.setup_timeout != null
+    ? readNumber(record.setup_timeout, `repos.${repoFullName}.lifecycle.setup_timeout`, 300_000)
+    : undefined;
+  const startTimeout = record.start_timeout != null
+    ? readNumber(record.start_timeout, `repos.${repoFullName}.lifecycle.start_timeout`, 120_000)
+    : undefined;
+
+  return {
+    ...(setup ? { setup } : {}),
+    ...(start ? { start } : {}),
+    ...(setupTimeout != null ? { setupTimeout } : {}),
+    ...(startTimeout != null ? { startTimeout } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Automations config builder
+// ---------------------------------------------------------------------------
+
+function buildAutomationsMap(
+  raw: unknown,
+  repoFullName: string,
+): Record<string, AutomationConfig> | undefined {
+  const record = asOptionalRecord(raw);
+  if (!record) return undefined;
+
+  const result: Record<string, AutomationConfig> = {};
+  for (const [name, rawAutomation] of Object.entries(record)) {
+    const entry = asRecord(rawAutomation, `repos.${repoFullName}.automations.${name}`);
+    const prefix = `repos.${repoFullName}.automations.${name}`;
+
+    const instruction = readString(entry.instruction, `${prefix}.instruction`);
+    const schedule = readOptionalString(entry.schedule);
+    const triggerStr = readOptionalString(entry.trigger);
+    const events = entry.events != null
+      ? readStringArray(entry.events, `${prefix}.events`, [])
+      : undefined;
+    const skill = readOptionalString(entry.skill);
+    const model = readOptionalString(entry.model);
+    const timeout = entry.timeout != null
+      ? readNumber(entry.timeout, `${prefix}.timeout`, 5_400_000)
+      : undefined;
+
+    if (triggerStr && triggerStr !== 'webhook' && triggerStr !== 'sentry') {
+      throw new WorkflowParseError(`${prefix}.trigger must be 'webhook' or 'sentry', got '${triggerStr}'`);
+    }
+
+    if (!schedule && !triggerStr) {
+      throw new WorkflowParseError(`${prefix} must have either 'schedule' or 'trigger'`);
+    }
+
+    result[name] = {
+      instruction,
+      ...(schedule ? { schedule } : {}),
+      ...(triggerStr ? { trigger: triggerStr as 'webhook' | 'sentry' } : {}),
+      ...(events && events.length > 0 ? { events } : {}),
+      ...(skill ? { skill } : {}),
+      ...(model ? { model } : {}),
+      ...(timeout != null ? { timeout } : {}),
+    };
+  }
+
+  if (Object.keys(result).length === 0) return undefined;
   return result;
 }
 

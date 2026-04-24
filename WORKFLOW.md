@@ -34,6 +34,7 @@ repos:
         pull_request.opened: .claude/skills/github-ops/SKILL.md
         pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
         pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+        pull_request.review_requested: .claude/skills/github-ops/SKILL.md
         # Review response — auto-address changes requested
         pull_request_review.changes_requested: .claude/skills/github-ops/SKILL.md
         # CI failure triage — diagnose and fix

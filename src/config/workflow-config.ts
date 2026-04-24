@@ -2,6 +2,23 @@
 // SPEC-001: Multi-repo workflow config types
 // ---------------------------------------------------------------------------
 
+export interface AutomationConfig {
+  /** 5-field cron expression (for cron-triggered automations). */
+  schedule?: string;
+  /** Event-driven trigger type (for non-cron automations). */
+  trigger?: 'webhook' | 'sentry';
+  /** Sentry event types to listen for (when trigger is 'sentry'). */
+  events?: string[];
+  /** What the agent should do when this automation fires. */
+  instruction: string;
+  /** Optional skill file path (relative to repo root). */
+  skill?: string;
+  /** Optional model override for the agent. */
+  model?: string;
+  /** Execution timeout in ms. Default 5_400_000 (90 min). */
+  timeout?: number;
+}
+
 export interface RepoConfig {
   url: string;
   defaultBranch: string;
@@ -13,6 +30,15 @@ export interface RepoConfig {
   tracker?: {
     team?: string;
   };
+  lifecycle?: LifecycleConfig;
+  automations?: Record<string, AutomationConfig>;
+}
+
+export interface LifecycleConfig {
+  setup?: string;
+  start?: string;
+  setupTimeout?: number;  // ms, default 300_000
+  startTimeout?: number;  // ms, default 120_000
 }
 
 export interface WorkflowConfig {

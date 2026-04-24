@@ -21,6 +21,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { cleanupAllSandboxes, cleanupStaleSandboxes } from './execution/runtime/agent-sandbox';
 import { createCoordinatorDispatcher, type CoordinatorDispatcher } from './execution/coordinator-dispatcher';
+import { createWorkspaceProvisioner } from './execution/workspace/workspace-provisioner';
 import type { WorkflowConfig } from './config';
 import { resolve as pathResolve } from 'node:path';
 import { createGitHubAppTokenProvider, type GitHubTokenProvider } from './integration/github-app-auth';
@@ -30,7 +31,9 @@ import { createOAuthTokenStore, type OAuthTokenStore } from './integration/linea
 import { createSymphonyOrchestrator, type SymphonyOrchestrator } from './execution/orchestrator/symphony-orchestrator';
 import { createCoordinatorSession } from './execution/runtime/coordinator-session';
 import { createWorkpadReporter, type WorkpadReporter } from './integration/linear/workpad-reporter';
-import { createWorkflowConfigStore } from './integration/linear/workflow-config-store';
+import { createSlackResponder, type SlackResponder } from './integration/slack/slack-responder';
+import type { SecretStore } from './security/secret-store';
+import { createWorkflowConfigStore } from './config/workflow-config-store';
 import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 
 /**
@@ -249,6 +252,21 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── Encrypted secrets store ──────────────────────────────────
+  let secretStore: SecretStore | undefined;
+  if (config.secretsMasterKey) {
+    const { createSecretPersistence } = await import('./security/secret-persistence');
+    const { createSecretStore: makeSecretStore } = await import('./security/secret-store');
+    const secretPersistence = createSecretPersistence(
+      process.env.SECRETS_DB_PATH ?? './data/secrets.db',
+    );
+    secretStore = makeSecretStore({
+      persistence: secretPersistence,
+      masterKey: config.secretsMasterKey,
+    });
+    logger.info('Encrypted secrets store initialized');
+  }
+
   // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
   const useInteractiveAgents = process.env.ENABLE_INTERACTIVE_AGENTS === 'true';
 
@@ -256,6 +274,7 @@ async function main(): Promise<void> {
   let reviewGate: ReturnType<typeof createReviewGate> | undefined;
   let symphonyOrchestrator: SymphonyOrchestrator | undefined;
   let workpadReporter: WorkpadReporter | undefined;
+  let slackResponder: SlackResponder | undefined;
   let linearExecutionMode: 'generic' | 'symphony' = 'generic';
   let directSpawnStrategy: import('./execution/runtime/direct-spawn-strategy').DirectSpawnStrategy | undefined;
 
@@ -272,6 +291,12 @@ async function main(): Promise<void> {
     const maxFixAttempts = (isNaN(parsedAttempts) || parsedAttempts < 1 || parsedAttempts > 10) ? 3 : parsedAttempts;
 
     const worktreeManager = createWorktreeManager({ logger: execLogger, basePath: worktreeBasePath });
+    const workspaceProvisioner = createWorkspaceProvisioner({
+      worktreeManager,
+      logger: execLogger,
+      eventBus,
+      workflowConfig,
+    });
     // P12: deferred-tool registry — built-ins (Read/Edit/Write/Bash/Grep/Glob/Agent)
     // and the ToolSearch meta-tool registered as alwaysLoad.
     const { createDefaultDeferredToolRegistry } = await import('./services/deferred-tools');
@@ -371,7 +396,11 @@ async function main(): Promise<void> {
       eventBus,
       agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
       mcpClients,
-      getGitHubToken: tokenProvider ? () => tokenProvider!.getToken() : undefined,
+      getGitHubToken: tokenProvider
+        ? (repo?: string) => repo ? tokenProvider!.getTokenForRepo(repo) : tokenProvider!.getToken()
+        : undefined,
+      workspaceProvisioner,
+      secretStore,
     });
 
     logger.info('Interactive agent execution enabled', {
@@ -442,6 +471,18 @@ async function main(): Promise<void> {
       workpadReporter.start();
       logger.info('Linear workpad reporter enabled');
     }
+
+    // Slack responder — thread replies + broadcast notifications
+    if (config.slackEnabled && config.slackBotToken) {
+      slackResponder = createSlackResponder({
+        eventBus,
+        logger: execLogger,
+        slackBotToken: config.slackBotToken,
+        broadcastWebhookUrl: config.slackWebhookUrl,
+      });
+      slackResponder.start();
+      logger.info('Slack responder enabled');
+    }
   }
 
   if (!localAgentTask) {
@@ -460,9 +501,24 @@ async function main(): Promise<void> {
   // Assigned after server.listen() if ENABLE_TUNNEL is set.
   let tunnelManager: import('./tunnel/cloudflare-tunnel').TunnelManager | undefined;
 
+  // ── Automation scheduling (cron + webhook + auto-pause) ──────
+  const { createAutomationRunPersistence } = await import('./scheduling/automation-run-persistence');
+  const { createCronScheduler } = await import('./scheduling/cron-scheduler');
+
+  const automationPersistence = createAutomationRunPersistence({
+    dbPath: process.env.AUTOMATION_DB_PATH ?? './data/automation-runs.db',
+    logger,
+  });
+  const cronScheduler = createCronScheduler({
+    workflowConfigProvider: () => workflowConfigStore.requireConfig(),
+    eventBus,
+    logger,
+    persistence: automationPersistence,
+  });
+  cronScheduler.start();
+
   const pipeline = await startPipeline({
     eventBus, logger, reviewGate, localAgentTask, workflowConfig,
-    slackWebhookUrl: config.slackWebhookUrl,
     linearExecutionMode,
     githubClient: tokenProvider
       ? createGitHubClient({ logger, tokenProvider })
@@ -504,6 +560,8 @@ async function main(): Promise<void> {
       : undefined,
     tokenPersistence,
     directSpawnStrategy,
+    cronScheduler,
+    secretStore,
   });
 
   try {
@@ -583,6 +641,12 @@ async function main(): Promise<void> {
     forceExitTimer.unref();
 
     try {
+      logger.info('Shutdown step: stopping cron scheduler');
+      cronScheduler.stop();
+
+      logger.info('Shutdown step: closing automation persistence');
+      automationPersistence.close();
+
       logger.info('Shutdown step: stopping tunnel');
       tunnelManager?.stop();
 
@@ -594,6 +658,9 @@ async function main(): Promise<void> {
 
       logger.info('Shutdown step: stopping workpad reporter');
       workpadReporter?.stop();
+
+      logger.info('Shutdown step: stopping slack responder');
+      slackResponder?.stop();
 
       logger.info('Shutdown step: shutting down pipeline');
       pipeline.shutdown();

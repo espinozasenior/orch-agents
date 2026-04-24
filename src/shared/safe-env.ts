@@ -29,9 +29,19 @@ export const SAFE_ENV_KEYS = new Set([
   'COLORTERM', 'TERM_PROGRAM', 'FORCE_COLOR',
   'CLAUDE_FLOW_V3_ENABLED', 'CLAUDE_FLOW_HOOKS_ENABLED',
   'AGENT_SPAWN_MODE',
+  // GitHub App installation token — intentionally passed to child agents
+  // so the gh CLI authenticates as the bot, not the ambient user.
+  'GH_TOKEN',
   // npm/pnpm runtime
   'npm_config_prefix', 'npm_config_cache',
 ]);
+
+/**
+ * Keys that intentionally contain secrets and must bypass the SECRET_KEY_PATTERN
+ * defense-in-depth check. These are short-lived tokens injected by the orchestrator
+ * (e.g., GitHub App installation tokens), NOT long-lived credentials.
+ */
+const INTENTIONAL_SECRET_KEYS = new Set(['GH_TOKEN']);
 
 /**
  * Build a safe env object from a source (defaults to process.env).
@@ -41,18 +51,31 @@ export const SAFE_ENV_KEYS = new Set([
  * or appears in the explicit CI scrub set. This catches future whitelist
  * mistakes before they reach a subprocess.
  */
-export function buildSafeEnv(source: Record<string, string | undefined> = process.env): Record<string, string> {
+export function buildSafeEnv(
+  source: Record<string, string | undefined> = process.env,
+  extraAllowedKeys?: Set<string>,
+): Record<string, string> {
   const safe: Record<string, string> = {};
   for (const key of SAFE_ENV_KEYS) {
     if (
-      SECRET_KEY_PATTERN.test(key) ||
-      key.startsWith('INPUT_') ||
-      EXPLICIT_SCRUB_KEYS.has(key)
+      !INTENTIONAL_SECRET_KEYS.has(key) && (
+        SECRET_KEY_PATTERN.test(key) ||
+        key.startsWith('INPUT_') ||
+        EXPLICIT_SCRUB_KEYS.has(key)
+      )
     ) {
       continue; // defense-in-depth: reject even whitelisted dangerous keys
     }
     if (source[key] !== undefined) {
       safe[key] = source[key]!;
+    }
+  }
+  // Extra allowed keys bypass the whitelist (for injected secrets from the store)
+  if (extraAllowedKeys) {
+    for (const key of extraAllowedKeys) {
+      if (source[key] !== undefined) {
+        safe[key] = source[key]!;
+      }
     }
   }
   safe.FORCE_COLOR = '0';

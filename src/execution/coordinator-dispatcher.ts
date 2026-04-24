@@ -27,6 +27,7 @@ import { phaseId } from '../kernel/branded-types';
 import type { PlanId } from '../kernel/branded-types';
 import type { InteractiveTaskExecutor } from './runtime/interactive-executor';
 import type { WorktreeManager } from './workspace/worktree-manager';
+import type { WorkspaceProvisioner } from './workspace/workspace-provisioner';
 import type { ArtifactApplier } from './workspace/artifact-applier';
 import type { GitHubClient } from '../integration/github-client';
 import type { LinearClient } from '../integration/linear/linear-client';
@@ -57,10 +58,15 @@ export interface CoordinatorDispatcherDeps {
   taskRegistry?: TaskRegistry;
   /** MCP server descriptors passed through to coordinator prompt context. */
   mcpClients?: Array<{ name: string }>;
-  /** Provides a fresh GitHub token for the agent's gh CLI (bot identity). */
-  getGitHubToken?: () => Promise<string>;
+  /** Provides a fresh GitHub token for the agent's gh CLI (bot identity).
+   *  Accepts optional repo name to resolve the correct installation token. */
+  getGitHubToken?: (repo?: string) => Promise<string>;
   /** Optional ReviewGate for producing findings on PR diffs. */
   reviewGate?: ReviewGate;
+  /** Optional WorkspaceProvisioner for lifecycle scripts. Falls back to worktreeManager when absent. */
+  workspaceProvisioner?: WorkspaceProvisioner;
+  /** Optional SecretStore for injecting resolved secrets into agent environment. */
+  secretStore?: import('../security/secret-store').SecretStore;
 }
 
 export interface CoordinatorDispatcher {
@@ -104,6 +110,14 @@ export interface AgentResult {
 // ---------------------------------------------------------------------------
 
 export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): CoordinatorDispatcher {
+  async function disposeHandle(handle: import('../types').WorktreeHandle): Promise<void> {
+    if (deps.workspaceProvisioner) {
+      await deps.workspaceProvisioner.dispose(handle);
+    } else {
+      await deps.worktreeManager.dispose(handle);
+    }
+  }
+
   function emitPhaseCompleted(pId: PlanId, status: 'completed' | 'failed', agentStart: number): void {
     if (!deps.eventBus) return;
     deps.eventBus.publish(createDomainEvent('PhaseCompleted', {
@@ -152,9 +166,18 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
 
           // 1. Create worktree from base branch (coordinator runs from base —
           //    no inter-agent commit chaining since there's only one agent).
-          handle = await deps.worktreeManager.create(
-            plan.id, lastCommitRef, `agent/${plan.id}/${agent.role}`,
-          );
+          //    When a WorkspaceProvisioner is available, use it to also run
+          //    per-repo lifecycle scripts (setup.sh / start.sh).
+          const repoName = intakeEvent.entities.repo;
+          if (deps.workspaceProvisioner) {
+            handle = await deps.workspaceProvisioner.provision(
+              plan.id, lastCommitRef, `agent/${plan.id}/${agent.role}`, repoName,
+            );
+          } else {
+            handle = await deps.worktreeManager.create(
+              plan.id, lastCommitRef, `agent/${plan.id}/${agent.role}`,
+            );
+          }
 
           // 2. Build coordinator prompt: system prompt + worker tools + Linear context
           const coordinatorPrompt = getCoordinatorSystemPrompt();
@@ -201,12 +224,31 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             deps.taskRegistry.update(taskId, task);
           }
 
-          // 5. Set GH_TOKEN for bot identity in agent's gh CLI
+          // 5. Collect per-execution env vars (GH_TOKEN + repo secrets)
+          //    instead of mutating global process.env. Passed to the child
+          //    process via InteractiveExecutionRequest.extraEnv so concurrent
+          //    executions for different repos don't race on shared state.
+          const extraEnv: Record<string, string> = {};
           if (deps.getGitHubToken) {
             try {
-              process.env.GH_TOKEN = await deps.getGitHubToken();
+              const repoName = intakeEvent.entities.repo;
+              extraEnv.GH_TOKEN = await deps.getGitHubToken(repoName);
             } catch (err) {
-              deps.logger.warn('Failed to set GH_TOKEN for agent', {
+              deps.logger.warn('Failed to resolve GH_TOKEN for agent', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+
+          // 5b. Resolve secrets from the store into the local env record
+          if (deps.secretStore && repoName) {
+            try {
+              const secrets = deps.secretStore.resolveSecrets(repoName);
+              for (const [k, v] of Object.entries(secrets)) {
+                extraEnv[k] = v;
+              }
+            } catch (err) {
+              deps.logger.warn('Failed to resolve secrets for agent', {
                 error: err instanceof Error ? err.message : String(err),
               });
             }
@@ -225,7 +267,9 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
               planId: plan.id,
               workItemId: plan.workItemId,
               taskId,
+              modelOverride: intakeEvent.modelOverride,
             },
+            extraEnv: Object.keys(extraEnv).length > 0 ? extraEnv : undefined,
           });
 
           if (execResult.status === 'failed') {
@@ -246,13 +290,20 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
               taskId,
             });
             emitPhaseCompleted(plan.id, 'failed', agentStart);
-            await deps.worktreeManager.dispose(handle);
+            await disposeHandle(handle);
             continue;
           }
 
           // 6. Validate & commit
+          // Build author string from webhook sender for commit attribution
+          const senderLogin = intakeEvent.entities.author;
+          const authorStr = senderLogin
+            ? `${senderLogin} <${senderLogin}@users.noreply.github.com>`
+            : undefined;
+
           const applyResult = await deps.artifactApplier.apply(plan.id, handle, {
             commitMessage: `${agent.role}: ${agent.type} work on ${plan.workItemId}`,
+            author: authorStr,
           });
 
           if (applyResult.status === 'rejected') {
@@ -273,7 +324,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
               taskId,
             });
             emitPhaseCompleted(plan.id, 'failed', agentStart);
-            await deps.worktreeManager.dispose(handle);
+            await disposeHandle(handle);
             continue;
           }
 
@@ -344,7 +395,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
           emitPhaseCompleted(plan.id, 'completed', agentStart);
 
           // 10. Cleanup worktree
-          await deps.worktreeManager.dispose(handle);
+          await disposeHandle(handle);
 
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -352,7 +403,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             planId: plan.id, agent: agent.type, error: message,
           });
           if (handle) {
-            await deps.worktreeManager.dispose(handle).catch(err => deps.logger.warn('Worktree dispose failed', { error: err instanceof Error ? err.message : String(err) }));
+            await disposeHandle(handle).catch(err => deps.logger.warn('Worktree dispose failed', { error: err instanceof Error ? err.message : String(err) }));
           }
           if (deps.taskRegistry && taskId) {
             try {

@@ -60,6 +60,14 @@ export interface AppConfig {
   readonly enableTunnel: boolean;
   /** Slack incoming webhook URL for agent result notifications (optional) */
   readonly slackWebhookUrl?: string;
+  /** Enable Slack bot integration (opt-in, default false) */
+  readonly slackEnabled: boolean;
+  /** Slack signing secret for webhook signature verification */
+  readonly slackSigningSecret: string;
+  /** Slack bot token for posting messages */
+  readonly slackBotToken: string;
+  /** Master key for encrypting secrets store */
+  readonly secretsMasterKey: string;
 }
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = [
@@ -118,6 +126,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const linearRedirectUri = env.LINEAR_REDIRECT_URI ?? '';
   const enableTunnel = env.ENABLE_TUNNEL === 'true';
   const slackWebhookUrl = env.SLACK_WEBHOOK_URL || undefined;
+  const slackEnabled = env.SLACK_ENABLED === 'true';
+  const slackSigningSecret = env.SLACK_SIGNING_SECRET ?? '';
+  const slackBotToken = env.SLACK_BOT_TOKEN ?? '';
+  const secretsMasterKey = env.SECRETS_MASTER_KEY ?? '';
+
+  if (isProduction && slackEnabled && !slackSigningSecret) {
+    throw new Error('SLACK_SIGNING_SECRET is required when SLACK_ENABLED=true in production');
+  }
 
   if (isProduction && linearAuthMode === 'oauth' && (!linearClientId || !linearClientSecret)) {
     throw new Error('LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET are required when LINEAR_AUTH_MODE=oauth');
@@ -149,6 +165,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     linearRedirectUri,
     enableTunnel,
     slackWebhookUrl,
+    slackEnabled,
+    slackSigningSecret,
+    slackBotToken,
+    secretsMasterKey,
   });
 }
 
