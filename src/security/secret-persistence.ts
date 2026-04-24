@@ -7,7 +7,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openDatabase } from '../shared/sqlite';
 import type { SecretScope, SecretEntry } from './types';
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ export function createSecretPersistence(dbPath: string): SecretPersistence {
   // Ensure data directory exists
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  const db = new DatabaseSync(dbPath);
+  const db = openDatabase(dbPath);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS secrets (

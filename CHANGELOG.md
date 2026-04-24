@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.0.0] - 2026-04-24 — Open-Inspect Parity Release
+
+### Added
+
+- **Automations System** — New `src/scheduling/` bounded context with cron scheduling (5-field expressions), generic inbound webhooks, Sentry alert triggers, auto-pause after 3 consecutive failures, manual trigger API, and SQLite run history. Configured via WORKFLOW.md `automations:` block.
+- **Interactive Slack Bot** — New `src/integration/slack/` with bidirectional messaging: @mention to start sessions, in-thread replies with results, repo classification from message text, HMAC signature verification.
+- **Encrypted Secrets Store** — New `src/security/` with AES-256-GCM encryption, per-repo and global scoping, SQLite persistence, HTTP management API (GET/PUT/DELETE /secrets).
+- **Repo Lifecycle Scripts** — Two-layer resolution: WORKFLOW.md `lifecycle:` overrides, then `.orch-agents/setup.sh` and `start.sh` discovered in worktree. Setup failure aborts, start failure degrades gracefully.
+- **Model Override** — `model:opus` labels on Linear issues set `intakeEvent.modelOverride` flowing through to the SDK executor.
+- **GitHub Bot Parity** — Review on bot assignment (`review_requested`), eyes reaction on receipt, commit attribution (Author=user, Committer=bot), review thread context (file path, line, diff hunk).
+- **Child Agent Status API** — `GET /children`, `GET /children/:id`, `POST /children/reset-pause` for programmatic child agent management.
+- **Auto-Pause Circuit Breaker** — DirectSpawnStrategy pauses spawning after 3 consecutive failures. Manual reset via endpoint.
+- **Automation HTTP Routes** — `GET /automations`, `POST /automations/:id/trigger`, `POST /automations/:id/resume`, `POST /webhooks/automation/:id`.
+
+### Fixed
+
+- **Bot Identity** — `GH_TOKEN` now passes through `buildSafeEnv()` to child agents so `gh` CLI authenticates as `automata-ai-bot[bot]`, not the ambient user.
+- **Per-Repo Token Resolution** — `getGitHubToken(repo)` resolves the correct GitHub App installation token per-repo, fixing bot auth on org repos (somnio-projects).
+- **Concurrency Safety** — GH_TOKEN and repo secrets are now collected into per-execution `extraEnv` records passed via `InteractiveExecutionRequest`, not mutated on global `process.env`. Prevents cross-repo token leakage.
+
+### Changed
+
+- **Event Type Cleanup** — Pruned 20 declared-but-never-published event types from the architecture doc. 28 live events remain.
+- **Slack Notifier Retired** — `src/notification/slack-notifier.ts` deleted, superseded by `src/integration/slack/slack-responder.ts`.
+- **Workflow Config Store Moved** — From `src/integration/linear/` to `src/config/` where it belongs.
+- **buildSafeEnv() Gains extraAllowedKeys** — For injecting repo secrets into child process environments without modifying the global allowlist.
+- **SQLite Stores Harden PRAGMAs** — All three SQLite stores (OAuth tokens, automation runs, encrypted secrets) now open via a shared `src/shared/sqlite.ts` helper that sets `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, and `foreign_keys=ON`. Readers no longer block the writer, and `SQLITE_BUSY` is handled internally by SQLite's sleep-and-retry before surfacing.
+
 ## [0.0.2.0] - 2026-04-22
 
 ### Added

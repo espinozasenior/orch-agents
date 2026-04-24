@@ -7,7 +7,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openDatabase } from '../shared/sqlite';
 import type { Logger } from '../shared/logger';
 import type { AutomationState } from './automation-state-machine';
 
@@ -52,7 +52,7 @@ export function createAutomationRunPersistence(
 
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  const db = new DatabaseSync(dbPath);
+  const db = openDatabase(dbPath);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS automation_runs (

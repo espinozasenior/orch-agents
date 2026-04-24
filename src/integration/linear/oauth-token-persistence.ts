@@ -7,7 +7,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openDatabase } from '../../shared/sqlite';
 import type { Logger } from '../../shared/logger';
 import type { OAuthTokenSet } from './oauth-token-store';
 
@@ -43,7 +43,7 @@ export function createOAuthTokenPersistence(deps: OAuthTokenPersistenceDeps = {}
   // Ensure data directory exists
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  const db = new DatabaseSync(dbPath);
+  const db = openDatabase(dbPath);
 
   // Create table if not exists
   db.exec(`
