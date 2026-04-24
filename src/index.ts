@@ -33,7 +33,7 @@ import { createCoordinatorSession } from './execution/runtime/coordinator-sessio
 import { createWorkpadReporter, type WorkpadReporter } from './integration/linear/workpad-reporter';
 import { createSlackResponder, type SlackResponder } from './integration/slack/slack-responder';
 import type { SecretStore } from './security/secret-store';
-import { createWorkflowConfigStore } from './integration/linear/workflow-config-store';
+import { createWorkflowConfigStore } from './config/workflow-config-store';
 import type { StatusSurfaceSnapshot } from './webhook-gateway/webhook-router';
 
 /**
@@ -519,7 +519,6 @@ async function main(): Promise<void> {
 
   const pipeline = await startPipeline({
     eventBus, logger, reviewGate, localAgentTask, workflowConfig,
-    slackWebhookUrl: config.slackWebhookUrl,
     linearExecutionMode,
     githubClient: tokenProvider
       ? createGitHubClient({ logger, tokenProvider })

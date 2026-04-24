@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createWorkflowConfigStore } from '../../../src/integration/linear/workflow-config-store';
-import type { Logger } from '../../../src/shared/logger';
+import { createWorkflowConfigStore } from '../../src/config/workflow-config-store';
+import type { Logger } from '../../src/shared/logger';
 
 function makeLogger(): Logger {
   return {

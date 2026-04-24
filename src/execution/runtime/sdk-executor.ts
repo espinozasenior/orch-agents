@@ -40,6 +40,7 @@ type QueryFactory = (params: {
   permissionPolicy: SessionPermissionPolicy;
   linearToolBridge?: LinearToolBridge;
   model?: string;
+  env?: Record<string, string>;
 }) => Promise<AsyncIterable<unknown>> | AsyncIterable<unknown>;
 
 interface SessionPermissionPolicy {
@@ -285,6 +286,7 @@ export function createSdkExecutor(deps: SdkExecutorDeps = {}): InteractiveTaskEx
             permissionPolicy,
             linearToolBridge: deps.linearToolBridge,
             model: metaModelOverride,
+            env: request.extraEnv,
           })),
           {
             ...(deps.overloadRetry ?? {}),
@@ -554,7 +556,7 @@ async function resolveQueryFactory(): Promise<QueryFactory> {
     throw new Error('Unsupported @anthropic-ai/claude-agent-sdk API shape');
   }
 
-  return ({ prompt, cwd, allowedTools, maxTurns, model }) => queryFn({
+  return ({ prompt, cwd, allowedTools, maxTurns, model, env }) => queryFn({
     prompt,
     ...(model ? { model } : {}),
     options: {
@@ -566,6 +568,11 @@ async function resolveQueryFactory(): Promise<QueryFactory> {
         type: 'preset',
         preset: 'claude_code',
       },
+      // Merge extra env vars (e.g. GH_TOKEN, repo secrets) with process.env
+      // so each child process gets its own token without global mutation.
+      ...(env && Object.keys(env).length > 0
+        ? { env: { ...process.env, ...env } as Record<string, string | undefined> }
+        : {}),
     },
   });
 }

@@ -224,24 +224,28 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             deps.taskRegistry.update(taskId, task);
           }
 
-          // 5. Set GH_TOKEN for bot identity in agent's gh CLI
+          // 5. Collect per-execution env vars (GH_TOKEN + repo secrets)
+          //    instead of mutating global process.env. Passed to the child
+          //    process via InteractiveExecutionRequest.extraEnv so concurrent
+          //    executions for different repos don't race on shared state.
+          const extraEnv: Record<string, string> = {};
           if (deps.getGitHubToken) {
             try {
               const repoName = intakeEvent.entities.repo;
-              process.env.GH_TOKEN = await deps.getGitHubToken(repoName);
+              extraEnv.GH_TOKEN = await deps.getGitHubToken(repoName);
             } catch (err) {
-              deps.logger.warn('Failed to set GH_TOKEN for agent', {
+              deps.logger.warn('Failed to resolve GH_TOKEN for agent', {
                 error: err instanceof Error ? err.message : String(err),
               });
             }
           }
 
-          // 5b. Resolve secrets from the store and inject into process.env
+          // 5b. Resolve secrets from the store into the local env record
           if (deps.secretStore && repoName) {
             try {
               const secrets = deps.secretStore.resolveSecrets(repoName);
               for (const [k, v] of Object.entries(secrets)) {
-                process.env[k] = v;
+                extraEnv[k] = v;
               }
             } catch (err) {
               deps.logger.warn('Failed to resolve secrets for agent', {
@@ -265,6 +269,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
               taskId,
               modelOverride: intakeEvent.modelOverride,
             },
+            extraEnv: Object.keys(extraEnv).length > 0 ? extraEnv : undefined,
           });
 
           if (execResult.status === 'failed') {

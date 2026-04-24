@@ -46,8 +46,6 @@ export interface PipelineDeps {
   skillResolver?: SkillResolver;
   /** P20 — repository root used to resolve relative skill paths. */
   repoRoot?: string;
-  /** Slack incoming webhook URL for agent result notifications (optional). */
-  slackWebhookUrl?: string;
 }
 
 export interface PipelineHandle {
@@ -95,17 +93,6 @@ export async function startPipeline(deps: PipelineDeps): Promise<PipelineHandle>
     reviewGate: deps.reviewGate,
   });
 
-  // Wire Slack notifier (opt-in via SLACK_WEBHOOK_URL)
-  let unsubSlack: (() => void) | undefined;
-  if (deps.slackWebhookUrl) {
-    const { startSlackNotifier } = await import('./notification/slack-notifier');
-    unsubSlack = startSlackNotifier({
-      eventBus,
-      logger,
-      webhookUrl: deps.slackWebhookUrl,
-    });
-  }
-
   pipelineLogger.info('Pipeline engines started');
 
   return {
@@ -114,7 +101,6 @@ export async function startPipeline(deps: PipelineDeps): Promise<PipelineHandle>
       unsubTriage();
       unsubExecution();
       unsubReview();
-      unsubSlack?.();
       pipelineLogger.info('Pipeline engines stopped');
     },
   };
