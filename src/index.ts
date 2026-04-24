@@ -396,7 +396,9 @@ async function main(): Promise<void> {
       eventBus,
       agentTimeoutMs: workflowConfig.agentRunner.turnTimeoutMs,
       mcpClients,
-      getGitHubToken: tokenProvider ? () => tokenProvider!.getToken() : undefined,
+      getGitHubToken: tokenProvider
+        ? (repo?: string) => repo ? tokenProvider!.getTokenForRepo(repo) : tokenProvider!.getToken()
+        : undefined,
       workspaceProvisioner,
       secretStore,
     });

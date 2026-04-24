@@ -58,8 +58,9 @@ export interface CoordinatorDispatcherDeps {
   taskRegistry?: TaskRegistry;
   /** MCP server descriptors passed through to coordinator prompt context. */
   mcpClients?: Array<{ name: string }>;
-  /** Provides a fresh GitHub token for the agent's gh CLI (bot identity). */
-  getGitHubToken?: () => Promise<string>;
+  /** Provides a fresh GitHub token for the agent's gh CLI (bot identity).
+   *  Accepts optional repo name to resolve the correct installation token. */
+  getGitHubToken?: (repo?: string) => Promise<string>;
   /** Optional ReviewGate for producing findings on PR diffs. */
   reviewGate?: ReviewGate;
   /** Optional WorkspaceProvisioner for lifecycle scripts. Falls back to worktreeManager when absent. */
@@ -226,7 +227,8 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
           // 5. Set GH_TOKEN for bot identity in agent's gh CLI
           if (deps.getGitHubToken) {
             try {
-              process.env.GH_TOKEN = await deps.getGitHubToken();
+              const repoName = intakeEvent.entities.repo;
+              process.env.GH_TOKEN = await deps.getGitHubToken(repoName);
             } catch (err) {
               deps.logger.warn('Failed to set GH_TOKEN for agent', {
                 error: err instanceof Error ? err.message : String(err),
