@@ -1,331 +1,434 @@
 # orch-agents
 
-Autonomous AI agents for your GitHub repos and Linear boards.
+Autonomous AI agents for GitHub repos and Linear boards.
 
-orch-agents watches your GitHub repo and Linear board, then dispatches AI agents to do the work — code reviews, bug fixes, feature builds, security audits. You define what agents run for what tasks in one file: `WORKFLOW.md`.
+orch-agents watches your GitHub webhooks and Linear board, then dispatches Claude-powered agents to review PRs, fix bugs, build features, and run scheduled automations. Everything is configured in one file: `WORKFLOW.md`.
 
-Inspired by [OpenAI Symphony](https://github.com/openai/symphony) and [Linear's Agent Interaction Guidelines](https://linear.app/docs/agent-interaction-guidelines).
+## What It Does
+
+- **PR review on open** -- a webhook fires, an agent reads the diff, posts inline findings on the PR as `automata-ai-bot[bot]`
+- **Linear card moves to "In Progress"** -- a coordinator agent picks it up, spawns sub-agents, pushes a branch, and posts results on the issue workpad
+- **Cron fires at 6 AM** -- an automation agent runs your health check, reports failures to Slack
+- **@mention the bot in a PR comment** -- the agent reads context and responds in-thread
+
+Every agent runs in an **isolated git worktree**. Every change passes through a **ReviewGate** (AI diff review + test runner + security scanner) before being committed.
 
 ## Quick Start
 
 ```bash
-# 1. Clone and build
 git clone https://github.com/espinozasenior/orch-agents.git
 cd orch-agents
 npm install
 npm run build
 
-# 2. Set environment variables
-export ANTHROPIC_API_KEY="sk-ant-..."
-export GITHUB_TOKEN="ghp_..."
-export WEBHOOK_SECRET="your-secret"
+# Set environment
+cp .env.example .env   # edit with your keys
 
-# 3. Start
+# Start
 npm start
 ```
 
-Then add a webhook to your GitHub repo:
+The server starts on port 3000. To expose it publicly for webhooks:
 
-| Field | Value |
-|-------|-------|
-| Payload URL | `https://your-server/webhooks/github` |
-| Content type | `application/json` |
-| Secret | Same as `WEBHOOK_SECRET` |
-| Events | Push, Pull requests, Issues, Issue comments, Workflow runs |
+```bash
+# Built-in tunnel (set ENABLE_TUNNEL=true in .env)
+npm start
 
-## How It Works
-
-```
-YOU                                   ORCH-AGENTS
-━━━                                   ━━━━━━━━━━━
-Open a PR                         →   reviewer agent checks your code
-                                      posts findings on the PR
-
-Label an issue "bug"              →   coder + tester agents
-                                      fix the bug, write tests, push
-
-Move Linear card to "Todo"        →   agents from the matching template
-(with label "feature")                architect designs, coder builds,
-                                      reviewer checks
-
-CI fails on main                  →   coder agent reads the error
-                                      pushes a fix
-
-Comment "stop" on a PR            →   all agents stop immediately
+# Or manual
+npx cloudflared tunnel --url http://localhost:3000
 ```
 
-Every agent runs in an **isolated git worktree**. Every change goes through a **review gate** (automated code review + test runner + security scan) before being committed.
+## WORKFLOW.md Configuration
 
-## WORKFLOW.md — The Only Config You Need
-
-Create `WORKFLOW.md` in your repo root. This one file controls everything:
+`WORKFLOW.md` is the single source of truth. It uses YAML frontmatter to define repos, events, automations, and tracker config. The server watches the file and hot-reloads on save.
 
 ```yaml
 ---
-# Define your agent teams
-templates:
-  tdd-workflow: [coder, tester]
-  feature-build: [architect, coder, reviewer]
-  github-ops: [reviewer]
-  quick-fix: [coder]
-  security-audit: [security-architect]
+defaults:
+  agents:
+    max_concurrent: 8
+    max_concurrent_per_org: 4
+  stall:
+    timeout_ms: 300000
+  polling:
+    interval_ms: 30000
+    enabled: false
 
-# What GitHub events trigger which template
-github:
-  events:
-    pull_request.opened: github-ops
-    pull_request.synchronize: github-ops
-    issues.labeled.bug: tdd-workflow
-    issues.labeled.feature: feature-build
-    issue_comment.mentions_bot: quick-fix
-    workflow_run.failure: quick-fix
+repos:
+  owner/repo:
+    url: git@github.com:owner/repo.git
+    default_branch: main
+    teams:
+      - ENGINEERING
+    labels:
+      - backend
+    github:
+      events:
+        pull_request.opened: .claude/skills/github-ops/SKILL.md
+        pull_request.synchronize: .claude/skills/github-ops/SKILL.md
+        pull_request.ready_for_review: .claude/skills/github-ops/SKILL.md
+        pull_request.review_requested: .claude/skills/github-ops/SKILL.md
+        pull_request_review.changes_requested: .claude/skills/github-ops/SKILL.md
+        workflow_run.failure: .claude/skills/ci-status/SKILL.md
+        issues.opened: .claude/skills/github-deep-research/SKILL.md
+        issues.labeled.bug: .claude/skills/github-ops/SKILL.md
+        issue_comment.created: .claude/skills/github-ops/SKILL.md
+    automations:
+      health-check:
+        schedule: "0 */6 * * *"
+        instruction: "Run npm test and report failures"
+      deploy-check:
+        trigger: webhook
+        instruction: "Verify deployment health"
+      sentry-triage:
+        trigger: sentry
+        events: ["error"]
+        instruction: "Diagnose and suggest fix for this Sentry error"
+    lifecycle:
+      setup: "npm install"
+      start: "docker compose up -d"
+    tracker:
+      team: ENGINEERING
 
-# Route work by label (works for both GitHub and Linear)
-agents:
-  max_concurrent: 8
-  routing:
-    bug: tdd-workflow
-    feature: feature-build
-    security: security-audit
-    default: quick-fix
-
-# Linear board integration (optional)
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
   team: $LINEAR_TEAM_ID
-  active_types: [unstarted, started]       # Match by state type, not name
-  terminal_types: [completed, canceled]    # Resilient to renaming states
-
-# Timeouts
-stall:
-  timeout_ms: 300000
+  active_types:
+    - unstarted
+    - started
+  terminal_types:
+    - completed
+    - canceled
 ---
 ```
 
-### Templates
-
-A template is just a name and a list of agent types:
-
-```yaml
-templates:
-  tdd-workflow: [coder, tester]      # Bug fixes: write code + tests
-  feature-build: [architect, coder, reviewer]  # Features: design + build + review
-  quick-fix: [coder]                 # Simple stuff: one agent
-```
-
-Agents run **sequentially**. Each gets its own isolated workspace.
-
 ### GitHub Events
 
-Map events to templates with one line each:
+Each event maps to a skill file (a markdown file with agent instructions):
 
 ```yaml
 github:
   events:
-    pull_request.opened: github-ops        # PR opened → review
-    issues.labeled.bug: tdd-workflow       # Bug labeled → fix it
-    push.default_branch: cicd-pipeline     # Push to main → validate
-    workflow_run.failure: quick-fix        # CI failed → fix it
+    pull_request.opened: .claude/skills/github-ops/SKILL.md
+    issues.labeled.bug: .claude/skills/github-ops/SKILL.md
+    workflow_run.failure: .claude/skills/ci-status/SKILL.md
+    issue_comment.created: .claude/skills/github-ops/SKILL.md
 ```
 
-Format: `event.action.condition: template-name`
+Format: `event.action[.condition]: path/to/SKILL.md`
 
-Conditions: `default_branch`, `other` (non-default branch), `merged`, `mentions_bot`, `failure`, or any label name.
+### Automations
 
-### Label Routing
-
-The `agents.routing` section routes work by label — works for **both** GitHub issues and Linear cards:
+Three trigger types: `schedule` (cron), `webhook` (inbound HTTP), and `sentry`.
 
 ```yaml
-agents:
-  routing:
-    bug: tdd-workflow         # "bug" label → coder + tester
-    feature: feature-build    # "feature" label → architect + coder + reviewer
-    security: security-audit  # "security" label → security specialist
-    default: quick-fix        # No matching label → single coder
+automations:
+  nightly-tests:
+    schedule: "0 2 * * *"
+    instruction: "Run full test suite, open issues for failures"
+  deploy-hook:
+    trigger: webhook
+    instruction: "Verify deployment succeeded"
+  error-triage:
+    trigger: sentry
+    events: ["error"]
+    instruction: "Diagnose root cause"
 ```
 
-### Linear Integration
+Automations auto-pause after 3 consecutive failures (circuit breaker). Resume via API.
 
-Optional. When enabled, moving a Linear card to an active state triggers agents:
+### Lifecycle Scripts
+
+Control how a repo's workspace is provisioned and started:
+
+```yaml
+lifecycle:
+  setup: "npm install"        # runs once when worktree is created
+  start: "docker compose up -d"  # runs before agent execution
+```
+
+Two-layer resolution: WORKFLOW.md `lifecycle:` wins, then `.orch-agents/setup.sh` and `.orch-agents/start.sh` discovered in the repo, then skip.
+
+### Tracker (Linear)
 
 ```yaml
 tracker:
   kind: linear
-  api_key: $LINEAR_API_KEY             # $VAR syntax reads from env
+  api_key: $LINEAR_API_KEY    # $VAR reads from environment
   team: $LINEAR_TEAM_ID
-  active_types: [unstarted, started]    # Agents work on these (match by type, not name)
-  terminal_types: [completed, canceled] # Agents stop on these
+  active_types: [unstarted, started]
+  terminal_types: [completed, canceled]
 ```
 
-Set up the Linear webhook: Settings > API > Webhooks > URL: `https://your-server/webhooks/linear`
+Supports polling, webhooks, and Linear AgentSessionEvent for bidirectional communication. Agent activities (thought, action, response, error) are emitted on the Linear workpad.
 
-## Agent Definitions
+## GitHub App Setup
 
-Agents are markdown files in `.claude/agents/`. Each teaches the agent what to do:
-
-```markdown
-<!-- .claude/agents/coder.md -->
----
-name: coder
-category: development
-tier: 2
-description: Code implementation specialist
----
-
-You are a code implementation agent. Your job is to:
-1. Read the issue/PR description
-2. Write clean, tested code
-3. Follow the project's coding conventions
-```
-
-orch-agents ships with 18+ built-in agent definitions. Customize or add your own.
-
-## Commands
-
-### Stop an agent
-
-Comment on any GitHub PR or Linear issue:
-
-```
-stop
-```
-
-or
-
-```
-@orch-agents stop
-```
-
-All running agents for that work item cancel immediately.
-
-### Mention the bot
-
-```
-@orch-agents take a look at this
-```
-
-Triggers the `issue_comment.mentions_bot` event.
-
-## GitHub App Setup (Recommended)
-
-Using a GitHub App gives agents their own bot identity. Pushes and comments show as `orch-agents[bot]` instead of your personal account, which prevents feedback loops and looks professional on PRs.
-
-> **Without a GitHub App**, orch-agents falls back to your personal `GITHUB_TOKEN`. This works for dev/testing but agents' pushes appear as you, requiring extra loop-prevention logic.
+A GitHub App gives agents a bot identity. Pushes and comments show as `automata-ai-bot[bot]`, preventing feedback loops.
 
 ### 1. Create the App
 
-Go to **[github.com/settings/apps/new](https://github.com/settings/apps/new)** (or your org's settings for org repos).
+Go to [github.com/settings/apps/new](https://github.com/settings/apps/new).
 
 | Field | Value |
 |-------|-------|
-| **App name** | `orch-agents` (or your preferred name) |
-| **Homepage URL** | Your repo URL |
-| **Webhook URL** | `https://your-server/webhooks/github` |
-| **Webhook secret** | Generate with `openssl rand -hex 32` |
+| App name | Your preferred name |
+| Homepage URL | Your repo URL |
+| Webhook URL | `https://your-server/webhooks/github` |
+| Webhook secret | `openssl rand -hex 32` |
 
 **Permissions** (Repository):
 
 | Permission | Access | Why |
 |------------|--------|-----|
-| Contents | Read & Write | Push commits from agent worktrees |
-| Pull requests | Read & Write | Post review comments on PRs |
-| Issues | Read & Write | Post comments on issues |
-| Metadata | Read | Required by GitHub |
+| Contents | Read & Write | Push commits |
+| Pull requests | Read & Write | Post reviews and comments |
+| Issues | Read & Write | Post comments |
+| Metadata | Read | Required |
 
-**Subscribe to events**: Push, Pull request, Issues, Issue comment
+**Subscribe to events**: Pull request, Issues, Issue comment, Workflow run
 
-**Leave unchecked**: Callback URL, "Request user authorization during installation", "Enable Device Flow" — these are for OAuth login flows, not needed here.
+### 2. Get Credentials
 
-### 2. Get Your Credentials
+1. Note the **App ID** from the app settings page
+2. Generate a **private key** (.pem file) under Private keys
+3. Install the app on your repo and note the **Installation ID** from the URL
 
-After creating the app:
-
-1. Note the **App ID** (shown at the top of the app settings page)
-2. Scroll to **Private keys** → click **Generate a private key** → download the `.pem` file
-3. Go to **Install App** (left sidebar) → install on your repo
-4. Note the **Installation ID** from the URL: `github.com/settings/installations/XXXXXXXX`
-
-### 3. Configure Environment
-
-Add to your `.env`:
+### 3. Configure
 
 ```bash
 GITHUB_APP_ID=123456
 GITHUB_APP_PRIVATE_KEY_PATH=./github-app.pem
 GITHUB_APP_INSTALLATION_ID=78901234
-GITHUB_WEBHOOK_SECRET=<the-secret-from-step-1>
-BOT_USERNAME=orch-agents[bot]
+GITHUB_WEBHOOK_SECRET=your-webhook-secret
 ```
 
-Copy the downloaded `.pem` file to your project root. It's already in `.gitignore`.
-
-### 4. Verify
-
-Start the server and push to a PR branch. You should see:
-- Push webhook arrives and is **skipped** (bot sender = `orch-agents[bot]`)
-- PR synchronize webhook arrives and is **skipped** (same bot sender)
-- No cascading agent executions
-
-Agent comments on PRs will show as posted by your app, with the bot badge.
+The bot username is auto-resolved from the GitHub App slug at startup.
 
 ### Fallback: Personal Access Token
 
-If you don't want a GitHub App, use a personal access token instead:
-
 ```bash
 GITHUB_TOKEN=ghp_...
-WEBHOOK_SECRET=<your-webhook-secret>
+GITHUB_WEBHOOK_SECRET=your-webhook-secret
 BOT_USERNAME=your-github-username
 ```
 
-This works but agents' actions appear as you, and the system relies on SHA tracking for loop prevention instead of bot identity.
+Works for dev/testing. Agents' actions appear as you instead of a bot.
+
+## Automations Guide
+
+### List all automations
+
+```bash
+curl http://localhost:3000/automations
+```
+
+### Trigger manually
+
+```bash
+curl -X POST http://localhost:3000/automations/health-check/trigger
+```
+
+### Resume a paused automation (after 3 failures)
+
+```bash
+curl -X POST http://localhost:3000/automations/health-check/resume
+```
+
+### Inbound webhook trigger
+
+```bash
+curl -X POST http://localhost:3000/webhooks/automation/deploy-hook \
+  -H "Content-Type: application/json" \
+  -d '{"status": "success"}'
+```
+
+Webhook automations support JSONPath filters to match specific payloads. Run history is persisted in SQLite.
+
+## Slack Bot Setup
+
+The Slack bot receives @mentions and starts agent sessions in-thread.
+
+1. Create a Slack app with Event Subscriptions enabled
+2. Subscribe to `app_mention` events
+3. Set the request URL to `https://your-server/webhooks/slack`
+4. Configure environment:
+
+```bash
+SLACK_ENABLED=true
+SLACK_SIGNING_SECRET=your-signing-secret
+SLACK_BOT_TOKEN=xoxb-...
+```
+
+The bot classifies the mentioned repo from the message text, dispatches an agent, and replies in the same thread with results.
+
+## Secrets Management
+
+Encrypted secrets (AES-256-GCM) injected into agent environments per-execution.
+
+### Store a global secret
+
+```bash
+curl -X PUT http://localhost:3000/secrets/NPM_TOKEN \
+  -H "Content-Type: application/json" \
+  -d '{"value": "npm_...", "scope": "global"}'
+```
+
+### Store a repo-scoped secret
+
+```bash
+curl -X PUT http://localhost:3000/secrets/DATABASE_URL \
+  -H "Content-Type: application/json" \
+  -d '{"value": "postgres://...", "scope": "repo", "repo": "owner/repo"}'
+```
+
+### List secrets (keys only, values never returned)
+
+```bash
+curl http://localhost:3000/secrets
+curl "http://localhost:3000/secrets?scope=repo&repo=owner/repo"
+```
+
+### Delete a secret
+
+```bash
+curl -X DELETE http://localhost:3000/secrets/NPM_TOKEN
+```
+
+Requires `SECRETS_MASTER_KEY` in the environment. Secrets are persisted in SQLite with WAL mode.
+
+## Sub-Agent Spawning
+
+The coordinator agent can spawn child agents. Two modes controlled by `AGENT_SPAWN_MODE`:
+
+**SDK mode** (default): The Claude Agent SDK handles `AgentTool` calls natively. Sub-agents inherit the coordinator's context.
+
+**Direct mode** (`AGENT_SPAWN_MODE=direct`): A SwarmDaemon dispatches child agents with full programmatic control -- worktree isolation per child, status queries, cancellation, and capacity enforcement.
+
+```bash
+# Check child agent status (direct mode only)
+curl http://localhost:3000/children
+
+# Get specific child
+curl http://localhost:3000/children/child-abc123
+
+# Reset pause after 3 consecutive failures
+curl -X POST http://localhost:3000/children/reset-pause
+```
+
+Depth limiting enforces a max of 3 levels. `Agent`/`AgentTool` is removed from workers at max depth.
+
+### Model Override
+
+Add a `model:opus` label to a Linear issue to force that agent session to use a specific model.
+
+## Setup CLI
+
+Interactive CLI for configuring integrations:
+
+```bash
+npx orch-setup github          # GitHub App or PAT
+npx orch-setup repo add owner/repo   # Add repo + generate WORKFLOW.md entry
+npx orch-setup repo list       # List configured repos
+npx orch-setup repo edit owner/repo  # Edit repo config
+npx orch-setup repo remove owner/repo
+npx orch-setup slack           # Slack webhook config
+npx orch-setup linear          # Linear API key or OAuth
+```
+
+## API Reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check (status, version, uptime) |
+| POST | `/webhooks/github` | GitHub webhook ingestion (HMAC verified) |
+| POST | `/webhooks/linear` | Linear webhook ingestion |
+| POST | `/webhooks/slack` | Slack event ingestion (signature verified) |
+| GET | `/automations` | List all automations with state |
+| POST | `/automations/:id/trigger` | Manually trigger an automation |
+| POST | `/automations/:id/resume` | Resume a paused automation |
+| POST | `/webhooks/automation/:id` | Inbound webhook trigger |
+| GET | `/children` | List child agents (direct mode) |
+| GET | `/children/:id` | Get child agent status (direct mode) |
+| POST | `/children/reset-pause` | Reset spawn pause (direct mode) |
+| GET | `/secrets` | List secret keys (values never returned) |
+| PUT | `/secrets/:key` | Create or update a secret |
+| DELETE | `/secrets/:key` | Delete a secret |
+| GET | `/oauth/authorize` | Start Linear OAuth flow |
+| GET | `/oauth/callback` | Linear OAuth callback |
+| GET | `/status` | Orchestrator status snapshot |
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | — | Claude API key |
-| `GITHUB_TOKEN` | Fallback | — | GitHub PAT (if not using GitHub App) |
-| `GITHUB_APP_ID` | Recommended | — | GitHub App ID |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Recommended | — | Path to `.pem` private key |
-| `GITHUB_APP_INSTALLATION_ID` | Recommended | — | GitHub App installation ID |
-| `WEBHOOK_SECRET` | Yes | — | GitHub webhook HMAC secret |
+| `ANTHROPIC_API_KEY` | Yes | -- | Claude API key |
+| `GITHUB_WEBHOOK_SECRET` | Yes | -- | GitHub webhook HMAC secret |
+| `GITHUB_TOKEN` | Fallback | -- | GitHub PAT (if no GitHub App) |
+| `GITHUB_APP_ID` | Recommended | -- | GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | Recommended | -- | Path to `.pem` private key |
+| `GITHUB_APP_INSTALLATION_ID` | Recommended | -- | GitHub App installation ID |
+| `BOT_USERNAME` | No | Auto-resolved | Bot identity for loop prevention |
 | `PORT` | No | `3000` | HTTP server port |
-| `LOG_LEVEL` | No | `info` | `trace` `debug` `info` `warn` `error` |
-| `BOT_USERNAME` | No | `orch-agents` | Bot identity for loop prevention |
-| `NODE_ENV` | No | `development` | `development` or `production` |
+| `LOG_LEVEL` | No | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
+| `NODE_ENV` | No | `development` | `development` / `production` / `test` |
 | `LINEAR_ENABLED` | No | `false` | Enable Linear integration |
-| `LINEAR_API_KEY` | No | — | Linear API key |
-| `LINEAR_WEBHOOK_SECRET` | No | — | Linear webhook signing secret |
-| `LINEAR_TEAM_ID` | No | — | Linear team UUID |
-| `ENABLE_INTERACTIVE_AGENTS` | No | `false` | Enable agent execution (otherwise stub mode) |
-| `WORKFLOW_MD_GITHUB` | No | `false` | Use WORKFLOW.md for GitHub event routing |
+| `LINEAR_API_KEY` | No | -- | Linear API key |
+| `LINEAR_WEBHOOK_SECRET` | No | -- | Linear webhook signing secret |
+| `LINEAR_TEAM_ID` | No | -- | Linear team UUID |
+| `LINEAR_AUTH_MODE` | No | `apiKey` | `apiKey` or `oauth` |
+| `LINEAR_CLIENT_ID` | No | -- | Linear OAuth client ID |
+| `LINEAR_CLIENT_SECRET` | No | -- | Linear OAuth client secret |
+| `ENABLE_TUNNEL` | No | `false` | Start Cloudflare tunnel on boot |
+| `AGENT_SPAWN_MODE` | No | `sdk` | `sdk` or `direct` |
+| `SECRETS_MASTER_KEY` | No | -- | AES-256 master key for secrets store |
+| `SLACK_ENABLED` | No | `false` | Enable Slack bot |
+| `SLACK_SIGNING_SECRET` | No | -- | Slack request signing secret |
+| `SLACK_BOT_TOKEN` | No | -- | Slack bot token (`xoxb-`) |
+| `SLACK_WEBHOOK_URL` | No | -- | Slack incoming webhook URL |
+| `WORKTREE_BASE_PATH` | No | `/tmp/orch-agents` | Base path for git worktrees |
 
-## Deployment
+## Architecture
 
-### Local development
+```
+WORKFLOW.md                    # Single config file (hot-reloaded)
 
-```bash
-npm start                                          # Start on :3000
-npx cloudflared tunnel --url http://localhost:3000  # Expose publicly
-# Use the tunnel URL as your webhook URL
+src/
+  config/                      # WorkflowConfig store + hot-reload watcher
+  webhook-gateway/             # HTTP ingestion, HMAC verification, dedup
+  intake/                      # Event normalization (GitHub + Linear + Slack -> IntakeEvent)
+  triage/                      # Priority scoring (P0-P3)
+  execution/
+    coordinator-dispatcher.ts  # Single-agent coordinator with sub-agent spawning
+    runtime/                   # SDK executor, direct spawn, agent sandbox
+    workspace/                 # Git worktree isolation, artifact applier
+    orchestrator/              # Symphony orchestrator (event wiring)
+  review/                      # ReviewGate: diff review + test runner + security scanner
+  scheduling/                  # Cron scheduler, automation state machine, run persistence
+  security/                    # Encrypted secrets store (AES-256-GCM)
+  integration/
+    github-client.ts           # GitHub API (reviews, comments, PRs)
+    github-app-auth.ts         # GitHub App JWT + installation tokens
+    linear/                    # Linear client, polling, workpad, AgentSessionEvent
+    slack/                     # Slack webhook handler, normalizer, responder
+  coordinator/                 # Coordinator prompt builder
+  kernel/                      # Event bus, branded types, agent identity, errors
+  shared/                      # Logger, config, input sanitizer, SQLite helper
+  tunnel/                      # Cloudflare tunnel + webhook URL updater
+  setup/                       # Interactive CLI (Commander.js)
+
+tests/                         # London School TDD (node:test + node:assert)
 ```
 
-### Production
+## Build and Test
 
 ```bash
-# Any Node.js host (Fly.io, Railway, Render, EC2)
-# Set env vars in your platform's dashboard
-npm run build && npm start
-```
-
-### Docker
-
-```bash
-docker build -t orch-agents .
-docker run -p 3000:3000 --env-file .env orch-agents
+npm run build        # TypeScript compile
+npm test             # Run all tests
+npm run lint         # ESLint
+npm run typecheck    # tsc --noEmit
+npm run setup        # Interactive setup CLI
 ```
 
 ## Requirements
@@ -333,87 +436,7 @@ docker run -p 3000:3000 --env-file .env orch-agents
 - Node.js 22+
 - Claude CLI (`npm i -g @anthropic-ai/claude-code`)
 - git (for worktree isolation)
-- gh CLI (`brew install gh` or equivalent)
-
-## How It Works Internally
-
-```
-Webhook arrives (GitHub or Linear)
-    ↓
-Signature verified (HMAC-SHA256)
-    ↓
-Input sanitized (prompt injection defense)
-    ↓
-Event normalized → IntakeEvent
-    ↓
-WORKFLOW.md looked up → template → agent list
-    ↓
-For each agent (sequentially, isolated worktree):
-    1. Create git worktree
-    2. Run Claude Code with agent instructions
-    3. Review gate:
-       - Diff review (Claude-powered)
-       - Test runner (npm test)
-       - Security scanner (secret detection)
-    4. If review fails → fix-it loop (up to 3 attempts)
-    5. Commit and push
-    ↓
-Post results on GitHub PR / Linear issue
-    ↓
-Clean up worktree
-```
-
-## Project Structure
-
-```
-WORKFLOW.md              # Your project config (the only file you edit)
-
-src/
-  webhook-gateway/       # HTTP endpoints, HMAC verification, dedup
-  intake/                # Event normalization (GitHub + Linear → IntakeEvent)
-  triage/                # Priority scoring (P0-P3)
-  execution/
-    simple-executor.ts   # The executor — runs agents sequentially
-    orchestrator/        # Event wiring
-    runtime/             # Agent tracking, streaming, sandbox
-    workspace/           # Git worktree isolation
-    fix-it-loop.ts       # Review → fix → re-review cycle
-    prompt-builder.ts    # Prompt construction
-  review/                # Quality gates (diff review + tests + security)
-  integration/
-    github-client.ts     # GitHub API (PR comments, reviews)
-    linear/              # Linear API, polling, workpad, stall detection
-  agent-registry/        # Agent definition discovery
-  shared/                # Event bus, logger, errors, sanitizer, identity
-  setup/                 # Interactive setup wizard
-
-.claude/agents/          # Agent definitions (markdown files)
-tests/                   # 730+ tests (London School TDD)
-docs/                    # Research reports, SPARC specs, DDD analysis
-```
-
-## Build & Test
-
-```bash
-npm run build    # TypeScript compile
-npm test         # Run all 730+ tests
-npm run lint     # ESLint
-npm run setup    # Interactive setup wizard
-```
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| Webhook returns 401 | Check `WEBHOOK_SECRET` matches GitHub/Linear settings |
-| Agent doesn't start | Check WORKFLOW.md has a matching event/routing rule |
-| Agent times out | Increase `stall.timeout_ms` in WORKFLOW.md |
-| No PR comments | Check `GITHUB_TOKEN` has `repo` scope |
-| Linear not working | Set `LINEAR_ENABLED=true` and verify `LINEAR_API_KEY` |
-| "WORKFLOW.md not found" | Create WORKFLOW.md in your project root |
-| Bot responding to itself | Set up a GitHub App (recommended) or set `BOT_USERNAME` to match your bot's login |
-| Agent pushes trigger more agents | Set up a GitHub App so pushes come from `app[bot]` sender |
-| "Private key not found" | Check `GITHUB_APP_PRIVATE_KEY_PATH` points to your `.pem` file |
+- gh CLI (`brew install gh`)
 
 ## License
 
