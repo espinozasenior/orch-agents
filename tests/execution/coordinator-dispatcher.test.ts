@@ -22,6 +22,7 @@ import type { ArtifactApplier, ApplyResult } from '../../src/execution/workspace
 import type { GitHubClient } from '../../src/integration/github-client';
 import type { LinearClient } from '../../src/integration/linear/linear-client';
 import type { Logger } from '../../src/shared/logger';
+import type { ReviewGate } from '../../src/review/review-gate';
 import { clearTrackedCommits, isAgentCommit } from '../../src/execution/agent-commit-tracker';
 
 // ---------------------------------------------------------------------------
@@ -109,6 +110,7 @@ function createMocks(): Mocks {
       postInlineComment: mock.fn(async () => {}),
       pushBranch: mock.fn(async () => {}),
       submitReview: mock.fn(async () => {}),
+      createPR: mock.fn(async () => ({ number: 42, url: 'https://github.com/me/r/pull/42' })),
     },
     linearClient: {
       createComment: mock.fn(async () => 'comment-1'),
@@ -367,5 +369,114 @@ describe('CoordinatorDispatcher', () => {
 
     assert.equal(result.status, 'failed');
     assert.equal(result.agentResults.length, 0);
+  });
+
+  // -----------------------------------------------------------------------
+  // ReviewGate enforcement (verdict='fail' blocks push/PR)
+  // -----------------------------------------------------------------------
+
+  function makePREventIntake(): IntakeEvent {
+    return makeIntakeEvent({
+      entities: { requirementId: 'ENG-1', branch: 'main', repo: 'me/r', prNumber: 42 },
+    });
+  }
+
+  it('blocks push and PR creation when ReviewGate verdict is fail (default enforce)', async () => {
+    const reviewGate: ReviewGate = {
+      review: mock.fn(async () => ({
+        phaseResultId: 'work-1',
+        status: 'fail' as const,
+        findings: [
+          { id: 'f1', severity: 'critical' as const, category: 'security', message: 'hardcoded API key in src/foo.ts' },
+        ],
+        securityScore: 0,
+        testCoveragePercent: 80,
+        codeReviewApproval: false,
+        feedback: 'blocked',
+      })),
+    };
+    executor = buildExecutor({ reviewGate });
+
+    const result = await executor.execute(makeCoordinatorPlan(), makePREventIntake());
+
+    // The agent's commit was made locally but never pushed.
+    assert.equal(
+      (mocks.githubClient.pushBranch as ReturnType<typeof mock.fn>).mock.calls.length,
+      0,
+      'pushBranch must NOT be called when verdict=fail',
+    );
+    // PR creation must not run either (auto-skipped because !pushed).
+    assert.equal(
+      (mocks.githubClient.createPR as ReturnType<typeof mock.fn>).mock.calls.length,
+      0,
+      'createPR must NOT be called when push was skipped',
+    );
+    // Agent result reflects the failure.
+    assert.equal(result.agentResults[0].status, 'failed');
+    assert.equal(result.status, 'failed');
+  });
+
+  it('proceeds normally when ReviewGate verdict is conditional (warnings only)', async () => {
+    const reviewGate: ReviewGate = {
+      review: mock.fn(async () => ({
+        phaseResultId: 'work-1',
+        status: 'conditional' as const,
+        findings: [{ id: 'f1', severity: 'warning' as const, category: 'style', message: 'long line' }],
+        securityScore: 100,
+        testCoveragePercent: 80,
+        codeReviewApproval: true,
+        feedback: 'warnings only',
+      })),
+    };
+    executor = buildExecutor({ reviewGate });
+
+    const result = await executor.execute(makeCoordinatorPlan(), makePREventIntake());
+
+    assert.equal(
+      (mocks.githubClient.pushBranch as ReturnType<typeof mock.fn>).mock.calls.length,
+      1,
+      'pushBranch must run for conditional verdict',
+    );
+    assert.equal(result.agentResults[0].status, 'completed');
+  });
+
+  it('falls back to advisory mode when reviewGateEnforce=false (legacy behavior)', async () => {
+    const reviewGate: ReviewGate = {
+      review: mock.fn(async () => ({
+        phaseResultId: 'work-1',
+        status: 'fail' as const,
+        findings: [{ id: 'f1', severity: 'critical' as const, category: 'security', message: 'bad thing' }],
+        securityScore: 0,
+        testCoveragePercent: 0,
+        codeReviewApproval: false,
+        feedback: 'fail',
+      })),
+    };
+    executor = buildExecutor({ reviewGate, reviewGateEnforce: false });
+
+    const result = await executor.execute(makeCoordinatorPlan(), makePREventIntake());
+
+    assert.equal(
+      (mocks.githubClient.pushBranch as ReturnType<typeof mock.fn>).mock.calls.length,
+      1,
+      'pushBranch must still run when enforcement is off (advisory mode)',
+    );
+    assert.equal(result.agentResults[0].status, 'completed');
+  });
+
+  it('continues when ReviewGate throws (fail-open on infrastructure error)', async () => {
+    const reviewGate: ReviewGate = {
+      review: mock.fn(async () => { throw new Error('test runner crashed'); }),
+    };
+    executor = buildExecutor({ reviewGate });
+
+    const result = await executor.execute(makeCoordinatorPlan(), makePREventIntake());
+
+    assert.equal(
+      (mocks.githubClient.pushBranch as ReturnType<typeof mock.fn>).mock.calls.length,
+      1,
+      'pushBranch must run when ReviewGate fails (fail-open by design)',
+    );
+    assert.equal(result.agentResults[0].status, 'completed');
   });
 });
