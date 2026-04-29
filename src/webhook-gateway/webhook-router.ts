@@ -108,11 +108,6 @@ export async function webhookRouter(
     }
   });
 
-  fastify.get('/status', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const snapshot = deps.getStatusSnapshot?.() ?? buildEmptyStatusSnapshot(deps.workflowConfig);
-    return reply.status(200).send(projectStatusSurface(snapshot));
-  });
-
   fastify.post(
     '/webhooks/github',
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -280,6 +275,25 @@ export async function webhookRouter(
       }
     },
   );
+}
+
+/**
+ * Status route plugin — reads orchestrator state. Mounted on the admin
+ * surface only; never exposed via the Cloudflare tunnel.
+ */
+export interface StatusRouteDeps {
+  workflowConfig?: WorkflowConfig;
+  getStatusSnapshot?: () => StatusSurfaceSnapshot;
+}
+
+export async function statusRoute(
+  fastify: FastifyInstance,
+  deps: StatusRouteDeps,
+): Promise<void> {
+  fastify.get('/status', async (_request: FastifyRequest, reply: FastifyReply) => {
+    const snapshot = deps.getStatusSnapshot?.() ?? buildEmptyStatusSnapshot(deps.workflowConfig);
+    return reply.status(200).send(projectStatusSurface(snapshot));
+  });
 }
 
 function buildEmptyStatusSnapshot(workflowConfig?: WorkflowConfig): StatusSurfaceSnapshot {
