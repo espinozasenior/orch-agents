@@ -25,6 +25,8 @@ Thumbs.db
 .claude-flow
 vectors.db
 data/
+.gstack
+.claude
 
 # Logs
 *.log

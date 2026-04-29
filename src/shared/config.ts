@@ -10,8 +10,10 @@ export type NodeEnv = 'development' | 'production' | 'test';
 export type AgentSpawnMode = 'sdk' | 'direct';
 
 export interface AppConfig {
-  /** HTTP server port */
+  /** HTTP server port (public surface: webhooks, oauth, health) */
   readonly port: number;
+  /** Admin server port — bound to 127.0.0.1 only, never tunneled */
+  readonly adminPort: number;
   /** Node environment */
   readonly nodeEnv: NodeEnv;
   /** Structured log level */
@@ -68,6 +70,12 @@ export interface AppConfig {
   readonly slackBotToken: string;
   /** Master key for encrypting secrets store */
   readonly secretsMasterKey: string;
+  /**
+   * When true, ReviewGate verdict blocks push/PR creation on `fail`.
+   * Default true. Set REVIEW_GATE_ENFORCE=false to fall back to advisory
+   * mode (findings posted as comments, push proceeds anyway).
+   */
+  readonly reviewGateEnforce: boolean;
 }
 
 const VALID_LOG_LEVELS: readonly LogLevel[] = [
@@ -89,6 +97,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const isProduction = nodeEnv === 'production';
 
   const port = parsePort(env.PORT);
+  const adminPort = parsePort(env.ADMIN_PORT, 3001, 'ADMIN_PORT');
+  if (adminPort === port) {
+    throw new Error(`ADMIN_PORT (${adminPort}) must differ from PORT (${port})`);
+  }
   const logLevel = parseLogLevel(env.LOG_LEVEL);
 
   const webhookSecret = env.GITHUB_WEBHOOK_SECRET ?? env.WEBHOOK_SECRET ?? '';
@@ -130,6 +142,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const slackSigningSecret = env.SLACK_SIGNING_SECRET ?? '';
   const slackBotToken = env.SLACK_BOT_TOKEN ?? '';
   const secretsMasterKey = env.SECRETS_MASTER_KEY ?? '';
+  const reviewGateEnforce = env.REVIEW_GATE_ENFORCE !== 'false';
 
   if (isProduction && slackEnabled && !slackSigningSecret) {
     throw new Error('SLACK_SIGNING_SECRET is required when SLACK_ENABLED=true in production');
@@ -141,6 +154,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   return Object.freeze({
     port,
+    adminPort,
     nodeEnv,
     logLevel,
     webhookSecret,
@@ -169,14 +183,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     slackSigningSecret,
     slackBotToken,
     secretsMasterKey,
+    reviewGateEnforce,
   });
 }
 
-function parsePort(value: string | undefined): number {
-  if (!value) return 3000;
+function parsePort(value: string | undefined, defaultValue = 3000, name = 'PORT'): number {
+  if (!value) return defaultValue;
   const parsed = parseInt(value, 10);
   if (isNaN(parsed) || parsed < 1 || parsed > 65535) {
-    throw new Error(`Invalid PORT: '${value}'. Must be 1-65535.`);
+    throw new Error(`Invalid ${name}: '${value}'. Must be 1-65535.`);
   }
   return parsed;
 }

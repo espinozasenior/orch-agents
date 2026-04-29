@@ -401,6 +401,8 @@ async function main(): Promise<void> {
         : undefined,
       workspaceProvisioner,
       secretStore,
+      reviewGate,
+      reviewGateEnforce: config.reviewGateEnforce,
     });
 
     logger.info('Interactive agent execution enabled', {
@@ -530,7 +532,7 @@ async function main(): Promise<void> {
       : undefined,
   });
 
-  const server = await buildServer({
+  const sharedServerDeps = {
     config,
     logger,
     eventBus,
@@ -562,12 +564,24 @@ async function main(): Promise<void> {
     directSpawnStrategy,
     cronScheduler,
     secretStore,
-  });
+  };
+
+  // Public surface: webhooks (HMAC-protected), oauth callbacks, /health.
+  // Cloudflare Quick Tunnel (when ENABLE_TUNNEL=true) forwards this port.
+  const publicServer = await buildServer({ ...sharedServerDeps, surface: 'public' });
+
+  // Admin surface: /status, /secrets, /automations, /children, /health.
+  // ALWAYS bound to 127.0.0.1; never tunneled. Reach it via SSH tunnel.
+  const adminServer = await buildServer({ ...sharedServerDeps, surface: 'admin' });
 
   try {
-    const host = process.env.BIND_HOST ?? '127.0.0.1';
-    await server.listen({ port: config.port, host });
-    logger.info('Server listening', { port: config.port });
+    const publicHost = process.env.BIND_HOST ?? '127.0.0.1';
+    await publicServer.listen({ port: config.port, host: publicHost });
+    logger.info('Public server listening', { port: config.port, host: publicHost });
+
+    // Admin server is always 127.0.0.1 — do not respect BIND_HOST.
+    await adminServer.listen({ port: config.adminPort, host: '127.0.0.1' });
+    logger.info('Admin server listening (127.0.0.1 only)', { port: config.adminPort });
   } catch (err) {
     logger.fatal('Failed to start server', {
       error: err instanceof Error ? err.message : String(err),
@@ -668,8 +682,11 @@ async function main(): Promise<void> {
       logger.info('Shutdown step: removing event listeners');
       eventBus.removeAllListeners();
 
-      logger.info('Shutdown step: closing HTTP server');
-      await server.close();
+      logger.info('Shutdown step: closing public HTTP server');
+      await publicServer.close();
+
+      logger.info('Shutdown step: closing admin HTTP server');
+      await adminServer.close();
 
       logger.info('Shutdown step: cleaning up agent sandboxes');
       cleanupAllSandboxes();

@@ -11,7 +11,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { AppConfig } from './shared/config';
 import type { Logger } from './shared/logger';
 import type { EventBus } from './kernel/event-bus';
-import { webhookRouter } from './webhook-gateway/webhook-router';
+import { webhookRouter, statusRoute } from './webhook-gateway/webhook-router';
 import { linearWebhookHandler } from './integration/linear/linear-webhook-handler';
 import { slackWebhookHandler } from './integration/slack/slack-webhook-handler';
 import { setBotUsername } from './intake/github-workflow-normalizer';
@@ -47,6 +47,18 @@ export interface ServerDependencies {
   cronScheduler?: CronScheduler;
   /** Secret store for the secrets management API (optional). */
   secretStore?: SecretStore;
+  /**
+   * Which set of routes to register. Defaults to 'all' for backward
+   * compatibility (single-server deployments and tests).
+   *
+   * - 'public': webhooks (HMAC-protected), oauth callbacks, /health
+   * - 'admin':  /status, /secrets, /automations, /children, /health
+   * - 'all':    everything (legacy single-server mode)
+   *
+   * Production deployments should run two servers — one with surface 'public'
+   * bound to the tunneled port, one with surface 'admin' bound to 127.0.0.1.
+   */
+  surface?: 'public' | 'admin' | 'all';
 }
 
 /**
@@ -57,6 +69,9 @@ export interface ServerDependencies {
  */
 export async function buildServer(deps: ServerDependencies): Promise<FastifyInstance> {
   const { config, logger } = deps;
+  const surface = deps.surface ?? 'all';
+  const includePublic = surface === 'public' || surface === 'all';
+  const includeAdmin = surface === 'admin' || surface === 'all';
 
   if (config.botUsername) {
     setBotUsername(config.botUsername);
@@ -68,7 +83,7 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
     disableRequestLogging: true,
   });
 
-  // ── Health check ─────────────────────────────────────────────
+  // ── Health check (both surfaces — local probe and external LB) ─
   server.get('/health', async (_request, _reply) => {
     return {
       status: 'ok',
@@ -78,8 +93,16 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
     };
   });
 
-  // ── Automation scheduling API ────────────────────────────────
-  if (deps.cronScheduler) {
+  // ── Status (admin only — leaks orchestrator state) ───────────
+  if (includeAdmin) {
+    await server.register(statusRoute, {
+      workflowConfig: deps.workflowConfig,
+      getStatusSnapshot: deps.getStatusSnapshot,
+    });
+  }
+
+  // ── Automation scheduling API (admin only) ───────────────────
+  if (includeAdmin && deps.cronScheduler) {
     const cronScheduler = deps.cronScheduler;
 
     server.get('/automations', async () => {
@@ -118,8 +141,8 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
     });
   }
 
-  // ── Child agent status API (direct spawn mode) ──────────────
-  if (deps.directSpawnStrategy) {
+  // ── Child agent status API (admin only, direct spawn mode) ──
+  if (includeAdmin && deps.directSpawnStrategy) {
     const strategy = deps.directSpawnStrategy;
 
     server.get('/children', async (_request, _reply) => {
@@ -144,15 +167,17 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
     logger.info('Child agent status API enabled', { routes: ['/children', '/children/:id', '/children/reset-pause'] });
   }
 
-  // ── Webhook gateway routes ──────────────────────────────────
-  await server.register(webhookRouter, {
-    ...deps,
-    workflowConfig: deps.workflowConfig,
-    getStatusSnapshot: deps.getStatusSnapshot,
-  });
+  // ── Webhook gateway routes (public — HMAC-protected) ────────
+  if (includePublic) {
+    await server.register(webhookRouter, {
+      ...deps,
+      workflowConfig: deps.workflowConfig,
+      getStatusSnapshot: deps.getStatusSnapshot,
+    });
+  }
 
-  // ── Linear webhook route ──────────────────────────────────
-  if (config.linearEnabled) {
+  // ── Linear webhook route (public — HMAC-protected) ─────────
+  if (includePublic && config.linearEnabled) {
     await server.register(linearWebhookHandler, {
       config,
       logger,
@@ -164,8 +189,8 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
     logger.info('Linear webhook route registered', { path: '/webhooks/linear' });
   }
 
-  // ── Slack webhook route ──────────────────────────────────
-  if (config.slackEnabled) {
+  // ── Slack webhook route (public — HMAC-protected) ──────────
+  if (includePublic && config.slackEnabled) {
     await server.register(slackWebhookHandler, {
       logger,
       eventBus: deps.eventBus,
@@ -175,16 +200,16 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
     logger.info('Slack webhook route registered', { path: '/webhooks/slack' });
   }
 
-  // ── Secrets management API ──────────────────────────────────
-  if (deps.secretStore) {
+  // ── Secrets management API (admin only) ─────────────────────
+  if (includeAdmin && deps.secretStore) {
     await server.register(secretApi, {
       secretStore: deps.secretStore,
     });
     logger.info('Secrets API routes registered', { routes: ['/secrets', '/secrets/:key'] });
   }
 
-  // ── OAuth routes (Phase 7A) ──────────────────────────────────
-  if (config.linearAuthMode === 'oauth' && config.linearClientId) {
+  // ── OAuth routes (public — Linear redirects browsers here) ──
+  if (includePublic && config.linearAuthMode === 'oauth' && config.linearClientId) {
     // CSRF state store: state token → creation timestamp (ms)
     const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
     const oauthStateStore = new Map<string, number>();

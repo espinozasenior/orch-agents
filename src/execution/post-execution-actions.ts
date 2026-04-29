@@ -39,6 +39,14 @@ export interface PostExecutionContext {
   intake: IntakeEvent;
   worktree: { path: string; branch: string; baseBranch: string };
   findings: Finding[];
+  /**
+   * Set when ReviewGate returned a `fail` verdict and enforcement is on.
+   * Skips branch push and PR creation; the agent's local commit is left
+   * in the worktree which is disposed shortly after.
+   * Inline finding comments and Linear/PR summary comments still post,
+   * with a block notice prepended so the human reviewer sees what happened.
+   */
+  blockedByReview?: { reason: string };
 }
 
 export interface PostExecutionResult {
@@ -72,8 +80,8 @@ export async function runPostExecutionActions(
     trackAgentCommit(ctx.apply.commitSha);
   }
 
-  // 2. Push branch to remote
-  if (deps.githubClient && ctx.apply.commitSha) {
+  // 2. Push branch to remote (skipped when ReviewGate blocked the change)
+  if (deps.githubClient && ctx.apply.commitSha && !ctx.blockedByReview) {
     const targetBranch = ctx.intake.entities.branch ?? ctx.worktree.branch;
     try {
       await deps.githubClient.pushBranch(ctx.worktree.path, ctx.worktree.branch, {
@@ -272,9 +280,13 @@ function formatSummaryComment(ctx: PostExecutionContext): string {
   }
   const outputPreview = outputText ? `\n\n**Output:**\n${outputText}` : '';
 
+  const header = ctx.blockedByReview
+    ? `**${ctx.agent.type}** — **BLOCKED BY REVIEW GATE** after ${duration}s\n\n> ${ctx.blockedByReview.reason}\n\n_The agent's local commit was discarded; nothing was pushed._`
+    : `**${ctx.agent.type}** completed in ${duration}s`;
+
   return [
-    `**${ctx.agent.type}** completed in ${duration}s`,
-    ctx.apply.commitSha ? `Commit: \`${ctx.apply.commitSha.slice(0, 7)}\`` : '',
+    header,
+    ctx.blockedByReview ? '' : (ctx.apply.commitSha ? `Commit: \`${ctx.apply.commitSha.slice(0, 7)}\`` : ''),
     fileLines,
     outputPreview,
     findingLines,
@@ -303,9 +315,13 @@ function formatLinearSummary(ctx: PostExecutionContext): string {
   const meta = ctx.intake.sourceMetadata;
   const includeMarker = !(isLinearMeta(meta) && meta.agentSessionId);
 
+  const header = ctx.blockedByReview
+    ? `**${ctx.agent.type}** — **BLOCKED BY REVIEW GATE** after ${durationSeconds}s\n\n> ${ctx.blockedByReview.reason}\n\n_The agent's local commit was discarded; nothing was pushed._`
+    : `**${ctx.agent.type}** completed in ${durationSeconds}s`;
+
   const parts = [
-    `**${ctx.agent.type}** completed in ${durationSeconds}s`,
-    ctx.apply.commitSha ? `Commit: \`${ctx.apply.commitSha.slice(0, 7)}\`` : '',
+    header,
+    ctx.blockedByReview ? '' : (ctx.apply.commitSha ? `Commit: \`${ctx.apply.commitSha.slice(0, 7)}\`` : ''),
     changedFilesText,
     outputPreview,
     findingsText,

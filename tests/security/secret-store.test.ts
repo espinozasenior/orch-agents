@@ -55,7 +55,13 @@ describe('encrypt/decrypt', () => {
 
   it('should fail to decrypt with tampered ciphertext', () => {
     const encrypted = encrypt('secret', MASTER_KEY);
-    encrypted.ciphertext = encrypted.ciphertext.replace(/^./, 'f');
+    // Flip the high bit of the first hex nibble — guarantees a different
+    // character regardless of what the random ciphertext starts with.
+    // Previously this replaced the first char with literal 'f', which was a
+    // no-op 1-in-16 of the time and made the test flake on CI.
+    const firstNibble = parseInt(encrypted.ciphertext[0], 16);
+    const flipped = (firstNibble ^ 0x8).toString(16);
+    encrypted.ciphertext = flipped + encrypted.ciphertext.slice(1);
 
     assert.throws(() => decrypt(encrypted, MASTER_KEY));
   });

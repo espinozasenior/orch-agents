@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1.0] - 2026-04-28 — Security Hardening
+
+### Added
+
+- **Admin surface isolation** — Admin routes (`/secrets`, `/automations`, `/children`, `/status`, `/webhooks/staging-validate`) now run on a separate Fastify instance bound to `127.0.0.1:3001`. Public routes (`/webhooks/{github,linear,slack}`, `/oauth/*`, `/health`) stay on the tunneled port. The Cloudflare Quick Tunnel can no longer expose admin endpoints. New `ADMIN_PORT` env var (default 3001).
+- **ReviewGate verdict enforcement** — When a ReviewGate verdict returns `fail`, push and PR creation are now skipped; the agent's local commit dies with the worktree. Inline finding comments and Linear/PR summaries still post with a "BLOCKED BY REVIEW GATE" notice. New `REVIEW_GATE_ENFORCE` env var (default `true`; set `false` to fall back to advisory-only mode). ReviewGate is also now actually wired into the coordinator dispatcher path — previously the verdict-check code was dead.
+- **`statusRoute` plugin** — `/status` endpoint extracted from the public webhook router into its own admin-only Fastify plugin.
+
+### Changed
+
+- **GitHub Actions pinned to commit SHAs** — `softprops/action-gh-release@v2` (third-party, has access to `NPM_TOKEN`), `actions/checkout@v4`, and `actions/setup-node@v4` are now pinned to specific commit SHAs in `.github/workflows/{ci,release}.yml`. Closes a supply-chain risk on the npm release flow.
+
+### Fixed
+
+- **fastify CVE GHSA-247c-9743-5963 (CVSS 7.5)** — Body-schema validation bypass via leading-space Content-Type header. Patched by lockfile bump 5.8.4 → 5.8.5 (constraint `^5.8.2` unchanged).
+- **Transitive `hono` and `@hono/node-server` advisories** — Six advisories cleared via `npm audit fix`; `npm audit` now reports 0 vulnerabilities.
+
+### Security
+
+- Closes 7 of 9 findings from a /cso security audit. The remaining 2 (README rephrasing for ReviewGate semantics; expanded forbidden-pattern list in `artifact-applier.ts`) are deferred as separate scope.
+
 ## [0.1.0.1] - 2026-04-24
 
 ### Fixed

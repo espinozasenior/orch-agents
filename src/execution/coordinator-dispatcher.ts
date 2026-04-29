@@ -63,6 +63,13 @@ export interface CoordinatorDispatcherDeps {
   getGitHubToken?: (repo?: string) => Promise<string>;
   /** Optional ReviewGate for producing findings on PR diffs. */
   reviewGate?: ReviewGate;
+  /**
+   * When true (default), a ReviewGate verdict of `fail` blocks push and PR
+   * creation; the agent's local commit dies with the worktree. Set to false
+   * to fall back to advisory mode (current legacy behavior — push regardless,
+   * findings posted as inline comments only).
+   */
+  reviewGateEnforce?: boolean;
   /** Optional WorkspaceProvisioner for lifecycle scripts. Falls back to worktreeManager when absent. */
   workspaceProvisioner?: WorkspaceProvisioner;
   /** Optional SecretStore for injecting resolved secrets into agent environment. */
@@ -330,6 +337,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
 
           // 7. Run ReviewGate for findings (when available and PR context exists)
           let findings: Finding[] = [];
+          let reviewVerdictStatus: 'pass' | 'conditional' | 'fail' | undefined;
           if (deps.reviewGate && applyResult.commitSha && intakeEvent.entities.prNumber && intakeEvent.entities.repo) {
             try {
               const verdict = await deps.reviewGate.review({
@@ -343,7 +351,11 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
                 context: { attempt: 1, commitSha: applyResult.commitSha },
               });
               findings = verdict.findings;
+              reviewVerdictStatus = verdict.status;
             } catch (reviewErr) {
+              // Infrastructure failure in the review gate is NOT treated as a
+              // verdict — fail-open here is intentional. Fail-closed would
+              // turn a flaky test runner into a permanent block.
               deps.logger.warn('ReviewGate failed, continuing without findings', {
                 planId: plan.id,
                 error: reviewErr instanceof Error ? reviewErr.message : String(reviewErr),
@@ -351,7 +363,24 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             }
           }
 
-          // 8. Run post-execution actions (push, PR creation, review, comments)
+          // 7b. Enforce verdict — block push/PR when verdict is `fail` and
+          // enforcement is on. Default-on; opt out via reviewGateEnforce=false.
+          const enforce = deps.reviewGateEnforce ?? true;
+          const blocked = enforce && reviewVerdictStatus === 'fail';
+          if (blocked) {
+            deps.logger.warn('ReviewGate verdict=fail; blocking push and PR creation', {
+              planId: plan.id, commitSha: applyResult.commitSha, findingCount: findings.length,
+            });
+          }
+
+          const blockReason = blocked
+            ? buildBlockReason(findings)
+            : undefined;
+
+          // 8. Run post-execution actions (push, PR creation, review, comments).
+          // When `blockedByReview` is set, push and PR creation are skipped;
+          // inline comments and the Linear/PR summary still post so a human
+          // sees what happened.
           await runPostExecutionActions(
             {
               githubClient: deps.githubClient,
@@ -368,19 +397,20 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
               intake: intakeEvent,
               worktree: { path: handle.path, branch: handle.branch, baseBranch: lastCommitRef },
               findings,
+              ...(blocked && blockReason ? { blockedByReview: { reason: blockReason } } : {}),
             },
           );
 
-          // P6: Transition task to completed
+          // P6: Transition task — failed when blocked, completed otherwise
           if (deps.taskRegistry && task && taskId) {
-            const completed = transition(task, TaskStatus.completed);
-            deps.taskRegistry.update(taskId, completed);
+            const next = transition(task, blocked ? TaskStatus.failed : TaskStatus.completed);
+            deps.taskRegistry.update(taskId, next);
           }
 
           agentResults.push({
             agentRole: agent.role,
             agentType: agent.type,
-            status: 'completed',
+            status: blocked ? 'failed' : 'completed',
             commitSha: applyResult.commitSha,
             findings,
             duration: Date.now() - agentStart,
@@ -392,7 +422,7 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
             taskId,
           });
 
-          emitPhaseCompleted(plan.id, 'completed', agentStart);
+          emitPhaseCompleted(plan.id, blocked ? 'failed' : 'completed', agentStart);
 
           // 10. Cleanup worktree
           await disposeHandle(handle);
@@ -447,6 +477,20 @@ export function createCoordinatorDispatcher(deps: CoordinatorDispatcherDeps): Co
       };
     },
   };
+}
+
+/**
+ * Build the human-readable block reason from blocking findings.
+ * Picks the first 3 critical/error findings and joins their messages.
+ */
+function buildBlockReason(findings: Finding[]): string {
+  const blocking = findings.filter((f) => f.severity === 'critical' || f.severity === 'error');
+  if (blocking.length === 0) {
+    return 'ReviewGate verdict was `fail` (no specific blocking findings reported).';
+  }
+  const sample = blocking.slice(0, 3).map((f) => `[${f.severity}] ${f.category}: ${f.message}`);
+  const overflow = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
+  return `ReviewGate blocked: ${sample.join('; ')}${overflow}`;
 }
 
 // Post-execution formatting has been extracted to src/execution/post-execution-actions.ts

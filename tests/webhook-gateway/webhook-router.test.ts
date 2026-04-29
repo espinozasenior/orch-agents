@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { webhookRouter, type WebhookRouterDeps } from '../../src/webhook-gateway/webhook-router';
+import { webhookRouter, statusRoute, type WebhookRouterDeps } from '../../src/webhook-gateway/webhook-router';
 import { createEventBuffer, type EventBuffer } from '../../src/webhook-gateway/event-buffer';
 import { loadConfig } from '../../src/shared/config';
 import { createLogger } from '../../src/shared/logger';
@@ -692,18 +692,8 @@ describe('webhookRouter (integration)', () => {
     buffer.dispose();
     buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
 
-    const config = loadConfig({
-      PORT: '3999',
-      NODE_ENV: 'test',
-      LOG_LEVEL: 'fatal',
-      WEBHOOK_SECRET: TEST_SECRET,
-    });
     server = Fastify({ logger: false });
-    await server.register(webhookRouter, {
-      config,
-      logger: createLogger({ level: 'fatal' }),
-      eventBus,
-      eventBuffer: buffer,
+    await server.register(statusRoute, {
       workflowConfig: makeTestWorkflowConfig(),
       getStatusSnapshot: () => ({
         workflow: { valid: false, error: 'unsupported placeholders' },
@@ -744,7 +734,7 @@ describe('webhookRouter (integration)', () => {
           dashboardUrl: 'https://example.com/dashboard',
         },
       }),
-    } satisfies WebhookRouterDeps);
+    });
     await server.ready();
 
     const response = await server.inject({
@@ -768,18 +758,8 @@ describe('webhookRouter (integration)', () => {
     buffer.dispose();
     buffer = createEventBuffer({ cleanupIntervalMs: 60_000 });
 
-    const config = loadConfig({
-      PORT: '3999',
-      NODE_ENV: 'test',
-      LOG_LEVEL: 'fatal',
-      WEBHOOK_SECRET: TEST_SECRET,
-    });
     server = Fastify({ logger: false });
-    await server.register(webhookRouter, {
-      config,
-      logger: createLogger({ level: 'fatal' }),
-      eventBus,
-      eventBuffer: buffer,
+    await server.register(statusRoute, {
       workflowConfig: makeTestWorkflowConfig(),
       getStatusSnapshot: () => ({
         workflow: { valid: true },
@@ -793,7 +773,7 @@ describe('webhookRouter (integration)', () => {
           startup: { cleanedWorkspaces: [], checkedAt: 50 },
         } satisfies OrchestratorSnapshot,
       }),
-    } satisfies WebhookRouterDeps);
+    });
     await server.ready();
 
     const response = await server.inject({
