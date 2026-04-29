@@ -1,0 +1,10 @@
+{
+  "name": "@orch-agents/shared",
+  "version": "0.1.0",
+  "description": "Shared DTOs + Zod schemas for the orch-agents web frontend",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "type": "commonjs",
+  "license": "MIT",
+  "private": true
+}

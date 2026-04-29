@@ -1,7 +1,10 @@
 {
   "name": "orch-agents",
-  "version": "0.1.1.0",
+  "version": "0.2.0.0",
   "description": "Autonomous Development Agency System - orchestrates AI agent swarms for software development workflows",
+  "workspaces": [
+    "packages/*"
+  ],
   "type": "commonjs",
   "main": "dist/lib/index.js",
   "types": "dist/lib/index.d.ts",
@@ -39,6 +42,10 @@
   "scripts": {
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
+    "dev": "concurrently --names api,web --prefix-colors cyan,magenta --kill-others-on-fail \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "node --env-file=.env --import tsx --watch src/index.ts",
+    "dev:web": "npm -w @orch-agents/web run dev",
+    "dev:setup": "node --import tsx scripts/dev-setup.ts",
     "test": "find tests -name '*.test.ts' -not -path 'tests/staging/*' -print0 | xargs -0 node --import tsx --experimental-test-module-mocks --test",
     "test:ts": "find tests -name '*.test.ts' -not -path 'tests/staging/*' -print0 | xargs -0 node --import tsx --experimental-test-module-mocks --test",
     "test:cjs": "node --test tests/**/*.test.cjs",
@@ -66,6 +73,7 @@
   "devDependencies": {
     "@eslint/js": "^9.22.0",
     "@types/node": "^22.19.15",
+    "concurrently": "^9.2.1",
     "eslint": "^9.22.0",
     "tsx": "^4.21.0",
     "typescript": "^5.7.0",
@@ -73,6 +81,9 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.86",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/rate-limit": "^10.3.0",
     "cloudflared": "^0.7.1",
     "commander": "^14.0.3",
     "fastify": "^5.8.2",

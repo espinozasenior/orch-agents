@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0.0] - 2026-04-29 — Web Frontend
+
+orch-agents is no longer headless. A Next.js operational dashboard ships in `packages/web`, talking to a new bearer-protected `/v1/*` API surface on the orchestrator.
+
+### Added
+
+- **Web operational dashboard** (`packages/web`) — Next.js 15 + React 18 + Tailwind app on port 3200. Lists runs, drills into one with a live SSE timeline of phases and agent activity, browses secrets and automations, mints/revokes API tokens. BFF pattern: bearer token lives server-side in Next API routes; the browser never sees it.
+- **Third Fastify surface (`web`)** on port 3002 — bearer-auth `/v1/*` API consumed by the BFF. Joins existing `public` (3000, tunneled webhooks) and `admin` (127.0.0.1:3001) surfaces. Refuses to start unless `ORCH_API_TOKEN` is set and ≥ 32 chars.
+- **`/v1/*` REST API** — `GET /v1/runs`, `GET /v1/runs/:planId`, `GET /v1/runs/:planId/artifacts`, `GET/POST /v1/automations*`, `GET/PUT/DELETE /v1/secrets*`, `GET /v1/workflow`, `GET /v1/status`. Five scopes (`runs:read`, `automations:write`, `secrets:read`, `secrets:write`, `workflow:read`) enforced per route.
+- **SSE event stream** — `GET /v1/events` and `GET /v1/runs/:planId/events`. Persistent monotonic seq counter survives restarts; `event: gap` and `event: dropped` frames make data loss honest instead of silent. Backpressure-aware, max 50 concurrent connections, three close-listener cleanup paths.
+- **Bearer token system** (`POST /admin/web-tokens`, `GET`, `DELETE /:id`) — Argon2-grade entropy via `orch_<48 random bytes>`, SHA-256 hashed at rest in `data/web-tokens.db`. Per-token scopes, label, last-used timestamp.
+- **`orch-setup mint-token` CLI** — bootstrap path. `orch-setup mint-token --label dev --scopes ... [--to-env .env]` mints once and prints plaintext to stdout (or appends to a dotenv file).
+- **Append-only secret audit log** — `secret_audit` SQLite table, hashes only (never plaintext). Triggers enforce no-update-no-delete at the storage layer. Every `/v1/secrets/*` mutation writes a row with `tokenId`, `action`, `key`, `scope`, `beforeHash`, `afterHash`.
+- **Rate limiting + CORS + Helmet** on `/v1/*` — 60 req/min per token (configurable). Production CORS deny-by-default; dev allows `http://localhost:3200`.
+- **Run history ring buffer** — 500-entry in-memory `RunHistory` subscribed to the EventBus. Folds `IntakeCompleted`, `PlanCreated`, `Phase*`, `Agent*`, and `Work*` events into per-run summaries with phase + agent activity.
+- **Multi-tenant safety warning** at startup — logs a WARN if `NEXTAUTH_ALLOWED_EMAILS` spans more than one email domain (orch-agents has no per-tenant isolation).
+- **`packages/shared`** workspace — pure DTO contract (`RunSummaryDto`, `RunPhaseDto`, `RunAgentActivityDto`, `SecretMetaDto`, `WebTokenSummaryDto`, `AutomationRunDto`, SSE frame types). Consumed by both API and web.
+- **`npm run dev`** — boots both API (`tsx --watch` hot reload) and Next.js dev server in one terminal with tagged `[api]` / `[web]` output. Ctrl+C kills both.
+- **`npm run dev:setup`** — idempotent bootstrap. Mints a token if missing, syncs `.env` and `packages/web/.env.local`, detects under-scoped existing tokens and re-mints. Warns (does not auto-write) if `SECRETS_MASTER_KEY` isn't set.
+- **`useRunStream` React hook** — EventSource consumer with gap/dropped frame surfacing. Renders "history truncated, refresh to resync" banner on missed events instead of silently dropping them.
+- **Friction layer on secret mutations** in the UI — confirm modal with diff preview (key/scope/hash-only), 5-second cooldown countdown, modal lists the `tokenId` that will be recorded in the audit row.
+
+### Changed
+
+- **`buildServer.surface`** enum extended to `'public' | 'admin' | 'web' | 'all'`. Previous deployments are unaffected — the `web` surface only boots when `ORCH_API_TOKEN` is set.
+- **Repo is now an npm workspaces monorepo** — root remains `@orch-agents/api`; new sibling workspaces `@orch-agents/web` and `@orch-agents/shared` under `packages/`. Existing `src/` and `tests/` stay at root for migration safety.
+- **`bin/orch-setup`** gains the `mint-token` subcommand alongside `github`, `linear`, `slack`, `repo`, `tunnel`.
+
+### Fixed
+
+- **Graceful UI degradation** when optional API features aren't configured — `/v1/secrets` 404s become friendly "secret store not configured" banners with config hints, not 502 errors.
+
+### Notes
+
+- 1918 backend tests pass (added ~50 across `web-auth`, `middleware`, `mint-token`, `run-history`, `secret-audit`, `v1-router`, `sse-stream`, web surface).
+- Web app has no automated tests in v1 — it is operationally smoke-tested.
+- v1.5 backlog: GitHub org membership check on web auth (currently email allowlist only).
+
 ## [0.1.1.0] - 2026-04-28 — Security Hardening
 
 ### Added

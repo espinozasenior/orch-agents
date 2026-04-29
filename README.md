@@ -38,6 +38,64 @@ npm start
 npx cloudflared tunnel --url http://localhost:3000
 ```
 
+## Web Frontend (Optional)
+
+orch-agents ships a Next.js operational dashboard at `packages/web` that
+talks to the API over a bearer-protected `/v1/*` surface. Three Fastify
+servers run side-by-side:
+
+| Surface | Port (default) | Bound to | Purpose |
+|---------|----------------|----------|---------|
+| `public` | 3000 | tunneled / `BIND_HOST` | webhooks (HMAC-protected) + OAuth callbacks |
+| `admin`  | 3001 | `127.0.0.1` only | `/status`, `/secrets`, `/automations`, `/admin/web-tokens`, `/children` |
+| `web`    | 3002 | `WEB_BIND_HOST` (default 127.0.0.1) | bearer-auth `/v1/*` for the BFF + SSE event stream |
+
+### Bring up the web UI
+
+```bash
+npm run dev:setup    # one-time: mint token, write .env files (idempotent — safe to re-run)
+npm run dev          # both API and web in one terminal (Ctrl+C kills both)
+```
+
+That's it. `npm run dev` boots:
+- API (with TypeScript hot-reload via `tsx --watch`) on the three Fastify ports above
+- Next.js dev server on port **3200** (open http://localhost:3200 in your browser)
+
+Output is tagged `[api]` / `[web]` so you can tell who's logging.
+
+If you only want one side running:
+
+```bash
+npm run dev:api    # API only
+npm run dev:web    # Next.js only
+```
+
+**Port 3000 already in use?** orch-agents' public surface defaults to 3000. If something else owns it on your machine, override via `.env`:
+
+```bash
+PORT=3010   # or any free port
+```
+
+`ADMIN_PORT` (3001) and `WEB_PORT` (3002) can be moved the same way. The Next dev server stays on 3200 and is unaffected.
+
+Open http://localhost:3000 and you'll see the runs list, automations,
+secrets editor, and token-management tabs. Trigger a webhook and the run
+will appear within a couple of seconds; click in to watch live thoughts and
+actions stream in via SSE.
+
+The `/v1/*` API is a bearer-protected REST surface — see
+`src/web-api/v1-router.ts` for the full route catalog. Per-route guards
+enforce one of: `runs:read`, `automations:write`, `secrets:read`,
+`secrets:write`, `workflow:read`.
+
+### Authentication note
+
+The web BFF holds the bearer token server-side; the browser never sees
+it. There's no NextAuth login flow in v1 — deploy the web app behind
+your existing SSO/VPN. Multi-domain `NEXTAUTH_ALLOWED_EMAILS` will trigger
+a startup warning since orch-agents has no per-tenant isolation (see
+ADR-004 if you need a multi-tenant story).
+
 ## WORKFLOW.md Configuration
 
 `WORKFLOW.md` is the single source of truth. It uses YAML frontmatter to define repos, events, automations, and tracker config. The server watches the file and hot-reloads on save.
