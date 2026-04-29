@@ -17,6 +17,7 @@ import { runRepoEdit } from './commands/repo-edit';
 import { runRepoRemove } from './commands/repo-remove';
 import { runLinearSetup } from './commands/linear';
 import { runSlackSetup } from './commands/slack';
+import { runMintToken } from './commands/mint-token';
 
 const program = new Command();
 
@@ -132,6 +133,18 @@ program
     } finally {
       io.close();
     }
+  });
+
+// -- mint-token --------------------------------------------------------------
+
+program
+  .command('mint-token')
+  .description('Mint a bearer token for the /v1/* web API (printed once)')
+  .requiredOption('--label <label>', 'human-readable label for this token')
+  .requiredOption('--scopes <list>', 'comma-separated scopes (runs:read, automations:write, secrets:read, secrets:write, workflow:read)')
+  .option('--to-env <path>', 'append ORCH_API_TOKEN=<value> to the given .env file')
+  .action(async (opts: { label: string; scopes: string; toEnv?: string }) => {
+    await runMintToken({ label: opts.label, scopes: opts.scopes, toEnv: opts.toEnv });
   });
 
 // -- parse -------------------------------------------------------------------

@@ -254,17 +254,49 @@ async function main(): Promise<void> {
 
   // ── Encrypted secrets store ──────────────────────────────────
   let secretStore: SecretStore | undefined;
+  let secretAudit: import('./security/secret-audit').SecretAuditLog | undefined;
   if (config.secretsMasterKey) {
     const { createSecretPersistence } = await import('./security/secret-persistence');
     const { createSecretStore: makeSecretStore } = await import('./security/secret-store');
-    const secretPersistence = createSecretPersistence(
-      process.env.SECRETS_DB_PATH ?? './data/secrets.db',
-    );
+    const { createSecretAuditLog } = await import('./security/secret-audit');
+    const secretsDbPath = process.env.SECRETS_DB_PATH ?? './data/secrets.db';
+    const secretPersistence = createSecretPersistence(secretsDbPath);
     secretStore = makeSecretStore({
       persistence: secretPersistence,
       masterKey: config.secretsMasterKey,
     });
+    secretAudit = createSecretAuditLog(secretsDbPath);
     logger.info('Encrypted secrets store initialized');
+  }
+
+  // ── Web-API building blocks (web surface) ────────────────────
+  const { createWebTokenStore } = await import('./web-api/web-auth');
+  const { createSeqCounter, createReplayBuffer } = await import('./web-api/sse-stream');
+  const { createRunHistory } = await import('./kernel/run-history');
+  const webTokenStore = createWebTokenStore(
+    process.env.WEB_TOKENS_DB_PATH ?? './data/web-tokens.db',
+  );
+  const sseSeqCounter = createSeqCounter(
+    process.env.SSE_SEQ_STATE_PATH ?? './data/sse-state.json',
+  );
+  const sseReplayBuffer = createReplayBuffer();
+  const runHistory = createRunHistory(eventBus);
+
+  // Multi-tenant safety check (ADR-004): warn on cross-domain allowlists.
+  if (config.nextauthAllowedEmails) {
+    const domains = new Set(
+      config.nextauthAllowedEmails
+        .split(',')
+        .map((e) => e.trim().split('@')[1])
+        .filter(Boolean),
+    );
+    if (domains.size > 1) {
+      logger.warn(
+        `NEXTAUTH_ALLOWED_EMAILS spans ${domains.size} email domains (${[...domains].join(', ')}). ` +
+        'orch-agents has no per-tenant isolation. All authenticated users see all runs and can ' +
+        'mutate all secrets. See ADR-004.',
+      );
+    }
   }
 
   // Interactive agent execution (opt-in via ENABLE_INTERACTIVE_AGENTS)
@@ -564,6 +596,12 @@ async function main(): Promise<void> {
     directSpawnStrategy,
     cronScheduler,
     secretStore,
+    secretAudit,
+    runHistory,
+    webTokenStore,
+    sseSeqCounter,
+    sseReplayBuffer,
+    automationRunPersistence: automationPersistence,
   };
 
   // Public surface: webhooks (HMAC-protected), oauth callbacks, /health.
@@ -574,6 +612,26 @@ async function main(): Promise<void> {
   // ALWAYS bound to 127.0.0.1; never tunneled. Reach it via SSH tunnel.
   const adminServer = await buildServer({ ...sharedServerDeps, surface: 'admin' });
 
+  // Web surface: /v1/* bearer-auth API for the Next.js BFF.
+  // Boots only when ORCH_API_TOKEN is configured. ORCH_API_TOKEN must not
+  // collide with any existing secret in the secret store (catches accidental
+  // reuse of e.g. GITHUB_TOKEN as the web bearer).
+  let webServer: typeof publicServer | undefined;
+  if (config.orchApiToken) {
+    const store = secretStore;
+    if (store) {
+      const conflict = store
+        .listSecrets()
+        .some((entry) => store.getSecret(entry.key, entry.scope, entry.repo) === config.orchApiToken);
+      if (conflict) {
+        throw new Error(
+          'ORCH_API_TOKEN must be unique — it matches an existing value in the secret store. Mint a fresh one with `orch-setup mint-token`.',
+        );
+      }
+    }
+    webServer = await buildServer({ ...sharedServerDeps, surface: 'web' });
+  }
+
   try {
     const publicHost = process.env.BIND_HOST ?? '127.0.0.1';
     await publicServer.listen({ port: config.port, host: publicHost });
@@ -582,6 +640,12 @@ async function main(): Promise<void> {
     // Admin server is always 127.0.0.1 — do not respect BIND_HOST.
     await adminServer.listen({ port: config.adminPort, host: '127.0.0.1' });
     logger.info('Admin server listening (127.0.0.1 only)', { port: config.adminPort });
+
+    if (webServer) {
+      const webHost = process.env.WEB_BIND_HOST ?? process.env.BIND_HOST ?? '127.0.0.1';
+      await webServer.listen({ port: config.webPort, host: webHost });
+      logger.info('Web server listening', { port: config.webPort, host: webHost });
+    }
   } catch (err) {
     logger.fatal('Failed to start server', {
       error: err instanceof Error ? err.message : String(err),
@@ -687,6 +751,19 @@ async function main(): Promise<void> {
 
       logger.info('Shutdown step: closing admin HTTP server');
       await adminServer.close();
+
+      if (webServer) {
+        logger.info('Shutdown step: closing web HTTP server');
+        await webServer.close();
+      }
+
+      logger.info('Shutdown step: persisting SSE seq counter');
+      sseSeqCounter.flush();
+
+      logger.info('Shutdown step: closing run history + web-api stores');
+      runHistory.close();
+      webTokenStore.close();
+      secretAudit?.close();
 
       logger.info('Shutdown step: cleaning up agent sandboxes');
       cleanupAllSandboxes();

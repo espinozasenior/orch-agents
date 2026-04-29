@@ -25,6 +25,13 @@ import type { OAuthTokenPersistence } from './integration/linear/oauth-token-per
 import type { CronScheduler } from './scheduling/cron-scheduler';
 import type { SecretStore } from './security/secret-store';
 import { secretApi } from './security/secret-api';
+import type { SecretAuditLog } from './security/secret-audit';
+import type { RunHistory } from './kernel/run-history';
+import type { WebTokenStore } from './web-api/web-auth';
+import { webTokenAdminRoutes } from './web-api/web-auth';
+import { v1Router } from './web-api/v1-router';
+import { registerSseStream, type ReplayBuffer, type SeqCounter } from './web-api/sse-stream';
+import type { AutomationRunPersistence } from './scheduling/automation-run-persistence';
 
 export interface ServerDependencies {
   config: AppConfig;
@@ -47,18 +54,38 @@ export interface ServerDependencies {
   cronScheduler?: CronScheduler;
   /** Secret store for the secrets management API (optional). */
   secretStore?: SecretStore;
+  /** Append-only audit log for secret mutations performed via /v1/secrets/* (optional, web surface). */
+  secretAudit?: SecretAuditLog;
+  /** Run history ring buffer (optional, web surface). */
+  runHistory?: RunHistory;
+  /** Web token store backing /v1/* bearer auth (optional, web surface). */
+  webTokenStore?: WebTokenStore;
+  /** SSE seq counter (optional, web surface). */
+  sseSeqCounter?: SeqCounter;
+  /** SSE replay buffer (optional, web surface). */
+  sseReplayBuffer?: ReplayBuffer;
+  /** Persistence backing GET /v1/automations/runs (optional, web surface). */
+  automationRunPersistence?: AutomationRunPersistence;
+  /** Allowed CORS origins for the web surface. */
+  webCorsOrigins?: string[];
+  /** Per-token rate limit (req/min). Default 60. */
+  webRateLimitPerMinute?: number;
   /**
    * Which set of routes to register. Defaults to 'all' for backward
    * compatibility (single-server deployments and tests).
    *
    * - 'public': webhooks (HMAC-protected), oauth callbacks, /health
    * - 'admin':  /status, /secrets, /automations, /children, /health
+   *             (must be 127.0.0.1-only — never internet-exposed)
+   * - 'web':    /v1/*  bearer-auth API for the Next.js BFF, plus /health
+   *             (designed for internet exposure behind the BFF)
    * - 'all':    everything (legacy single-server mode)
    *
-   * Production deployments should run two servers — one with surface 'public'
-   * bound to the tunneled port, one with surface 'admin' bound to 127.0.0.1.
+   * Production deployments should run three servers — 'public' bound to the
+   * tunneled port, 'admin' bound to 127.0.0.1, and 'web' bound to whatever
+   * the operator chooses to expose to the BFF.
    */
-  surface?: 'public' | 'admin' | 'all';
+  surface?: 'public' | 'admin' | 'web' | 'all';
 }
 
 /**
@@ -72,6 +99,18 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
   const surface = deps.surface ?? 'all';
   const includePublic = surface === 'public' || surface === 'all';
   const includeAdmin = surface === 'admin' || surface === 'all';
+  const includeWeb = surface === 'web' || surface === 'all';
+
+  // The web surface ('web' | 'all') exposes a bearer-auth `/v1/*` API
+  // intended to sit behind the Next.js BFF. It MUST NOT register any
+  // admin routes. The 'all' fallback keeps single-server dev working
+  // but is not recommended for production. v1 routes themselves are
+  // wired up in Phase 1c (`src/web-api/v1-router.ts`).
+  if (surface === 'web' && !config.orchApiToken) {
+    throw new Error(
+      "Cannot start 'web' surface: ORCH_API_TOKEN is empty. Mint one with `orch-setup mint-token`.",
+    );
+  }
 
   if (config.botUsername) {
     setBotUsername(config.botUsername);
@@ -83,15 +122,67 @@ export async function buildServer(deps: ServerDependencies): Promise<FastifyInst
     disableRequestLogging: true,
   });
 
-  // ── Health check (both surfaces — local probe and external LB) ─
+  // ── Health check (all surfaces — local probe and external LB) ─
   server.get('/health', async (_request, _reply) => {
     return {
       status: 'ok',
       version: '0.1.0',
+      surface,
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
     };
   });
+
+  // ── Web surface (/v1/* bearer-auth API + SSE) ────────────────
+  if (includeWeb && deps.webTokenStore && deps.runHistory) {
+    const productionMode = config.nodeEnv === 'production';
+    const corsOrigins = deps.webCorsOrigins ?? (productionMode ? [] : ['http://localhost:3000']);
+
+    await server.register(
+      async (instance) => {
+        await instance.register((sub) =>
+          v1Router(sub, {
+            tokenStore: deps.webTokenStore!,
+            runHistory: deps.runHistory!,
+            secretStore: deps.secretStore,
+            secretAudit: deps.secretAudit,
+            cronScheduler: deps.cronScheduler,
+            automationRunPersistence: deps.automationRunPersistence,
+            workflowConfig: deps.workflowConfig,
+            getStatusSnapshot: deps.getStatusSnapshot,
+            productionMode,
+            corsOrigins,
+            rateLimitPerMinute: deps.webRateLimitPerMinute,
+          }),
+        );
+
+        if (deps.sseSeqCounter && deps.sseReplayBuffer) {
+          await instance.register((sub) =>
+            registerSseStream(sub, {
+              eventBus: deps.eventBus,
+              seq: deps.sseSeqCounter!,
+              replay: deps.sseReplayBuffer!,
+            }),
+          );
+        }
+      },
+      // Empty options to mark this as a sibling encapsulated context so
+      // bearerAuth + middleware hooks attach only to /v1/* routes.
+      {},
+    );
+
+    logger.info('Web surface routes registered', {
+      hasSse: Boolean(deps.sseSeqCounter && deps.sseReplayBuffer),
+      hasSecrets: Boolean(deps.secretStore),
+      hasAutomations: Boolean(deps.cronScheduler),
+    });
+  }
+
+  // Admin surface — /admin/web-tokens (token mint/list/revoke).
+  if (includeAdmin && deps.webTokenStore) {
+    await server.register(webTokenAdminRoutes, { tokenStore: deps.webTokenStore });
+    logger.info('Admin web-token routes registered', { routes: ['/admin/web-tokens'] });
+  }
 
   // ── Status (admin only — leaks orchestrator state) ───────────
   if (includeAdmin) {

@@ -14,6 +14,19 @@ export interface AppConfig {
   readonly port: number;
   /** Admin server port — bound to 127.0.0.1 only, never tunneled */
   readonly adminPort: number;
+  /**
+   * Web server port (web surface: bearer-auth `/v1/*` for the Next.js BFF).
+   * Boots only when {@link orchApiToken} is set and ≥ 32 chars.
+   */
+  readonly webPort: number;
+  /**
+   * Bearer token required on every `/v1/*` request from the Next.js BFF.
+   * Mint with `orch-setup mint-token`. Must be ≥ 32 chars when set.
+   * Empty string disables the web surface entirely.
+   */
+  readonly orchApiToken: string;
+  /** CSV email allowlist for NextAuth (consumed by the web app, surfaced here for multi-domain warning). */
+  readonly nextauthAllowedEmails: string;
   /** Node environment */
   readonly nodeEnv: NodeEnv;
   /** Structured log level */
@@ -101,6 +114,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (adminPort === port) {
     throw new Error(`ADMIN_PORT (${adminPort}) must differ from PORT (${port})`);
   }
+  const webPort = parsePort(env.WEB_PORT, 3002, 'WEB_PORT');
+  if (webPort === port || webPort === adminPort) {
+    throw new Error(`WEB_PORT (${webPort}) must differ from PORT (${port}) and ADMIN_PORT (${adminPort})`);
+  }
+
+  const orchApiToken = env.ORCH_API_TOKEN ?? '';
+  if (orchApiToken && orchApiToken.length < 32) {
+    throw new Error(`ORCH_API_TOKEN must be at least 32 characters (got ${orchApiToken.length}). Mint a stronger one with 'orch-setup mint-token'.`);
+  }
+  const nextauthAllowedEmails = env.NEXTAUTH_ALLOWED_EMAILS ?? '';
+
   const logLevel = parseLogLevel(env.LOG_LEVEL);
 
   const webhookSecret = env.GITHUB_WEBHOOK_SECRET ?? env.WEBHOOK_SECRET ?? '';
@@ -155,6 +179,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   return Object.freeze({
     port,
     adminPort,
+    webPort,
+    orchApiToken,
+    nextauthAllowedEmails,
     nodeEnv,
     logLevel,
     webhookSecret,
