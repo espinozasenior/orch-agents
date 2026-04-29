@@ -26,6 +26,7 @@ Thumbs.db
 vectors.db
 data/
 .gstack
+.claude
 
 # Logs
 *.log
